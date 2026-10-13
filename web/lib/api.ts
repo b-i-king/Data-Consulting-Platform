@@ -8,6 +8,8 @@
 
 import type {
   AnalyzeResponse,
+  SkillInfo,
+  SkillResult,
   AuthResponse,
   IntakeOptions,
   MissingStrategy,
@@ -76,6 +78,38 @@ export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
 export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
 
 export const signin = (email: string) => postJson<AuthResponse>("/api/accounts/signin", { email });
+
+export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
+
+/**
+ * Run a data skill (data_skills/<id>/skill.py) on the files kept in memory.
+ * `groupId` picks which cleaned table to use when there are several.
+ */
+export async function runSkill(
+  skillId: string,
+  files: File[],
+  params: Record<string, unknown>,
+  groupId = 0,
+): Promise<SkillResult> {
+  const res = await fetch(`${API_URL}/api/skills/${encodeURIComponent(skillId)}/run`, {
+    method: "POST",
+    body: filesForm(files, { params: JSON.stringify(params), group_id: String(groupId) }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Save text (a report, SQL, an HTML dashboard) as a file in the browser. */
+export function saveText(filename: string, text: string, type = "text/plain") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 /** Guest step: upload files and get the cleaning report + preview. */
 export async function analyzeFiles(files: File[], strategy: MissingStrategy): Promise<AnalyzeResponse> {

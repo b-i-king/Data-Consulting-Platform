@@ -23,10 +23,14 @@ higher-impact projects.
    matching), automatic cleaning, a
    missing-value report per column, an "is there enough data?" check, and a full
    preview
-5. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
+5. **Explore your data** — a Copilot Money-style **dashboard** when the data has
+   dates (last 4 weeks, 3 months, 1 year, month to date, year to date; day over
+   day, week over week, month over month), plus all **30 data skills** runnable
+   on the cleaned data
+6. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
    Visualization, Data Science & ML, Data Engineering, and AI (early access),
    with a price estimate
-6. **Download** — create an account (only now), download CSV or Excel; billed by
+7. **Download** — create an account (only now), download CSV or Excel; billed by
    processing minute
 
 Client files are **processed in memory and never stored**. Light and dark
@@ -56,6 +60,9 @@ cd web && npm install && cp .env.example .env.local && npm run dev   # http://lo
 
 # Tests
 pytest -q
+
+# Try a skill on the sample data
+python -m data_skills run build-dashboard samples/sales.csv   # opens as outputs/build-dashboard/html_dashboard.html
 ```
 
 No database is needed for local development. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
@@ -73,7 +80,9 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Run it locally |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Supabase + Render + Vercel |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
-| [.claude/skills/README.md](.claude/skills/README.md) | 30 skills, organized by service category |
+| [docs/TESTING.md](docs/TESTING.md) | **Try it yourself** with the sample data (web, command line, API) |
+| [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | How date ranges and DoD/WoW/MoM comparisons are calculated |
+| [data_skills/README.md](data_skills/README.md) | 30 skills (SKILL.md + skill.py), organized by service category |
 
 ## Project layout
 
@@ -81,11 +90,12 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 api/            FastAPI backend (core, models, routers, services)
 db/schema.sql   platform tables (accounts, teams, usage)
 db/warehouse.sql client-data star schema (Data Engineering, opt-in)
-scripts/        reference-data builders (NAICS)
+scripts/        reference-data builders (NAICS), sample-data generator
+samples/        fictional bakery data for trying everything (docs/TESTING.md)
 tests/          pytest suite
 web/            Next.js frontend
 docs/           documentation
-.claude/skills/ 30 skills by category (catalog.json) — project, Rosehill (MIT), Anthropic data (Apache-2.0)
+data_skills/    30 skills: SKILL.md + runnable skill.py each (python -m data_skills)
 licenses/       third-party license texts
 ```
 

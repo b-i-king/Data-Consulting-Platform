@@ -16,15 +16,17 @@ coding, so **understanding the code matters as much as the code itself**.
   what it does and why. Non-obvious lines get a short comment. Write comments
   for a reader who knows pandas and data work well but is not a web developer.
 - **Keep docs and skills in sync with code.** A change to
-  - `api/services/cleaning.py` → update `.claude/skills/data-cleaning/SKILL.md` and `docs/DATA_CLEANING.md`
-  - `api/services/categorizer.py` → update `.claude/skills/flat-file-intake/SKILL.md` and `docs/DATA_CLEANING.md`
-  - `api/services/sample_size.py` → update `.claude/skills/sample-size/SKILL.md`
+  - `api/services/cleaning.py` → update `data_skills/data-cleaning/SKILL.md` and `docs/DATA_CLEANING.md`
+  - `api/services/categorizer.py` → update `data_skills/flat-file-intake/SKILL.md` and `docs/DATA_CLEANING.md`
+  - `api/services/sample_size.py` → update `data_skills/sample-size/SKILL.md`
   - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)
   - any API response → update `web/lib/types.ts`
   - any table → update `db/schema.sql` and `api/services/account_store.py`
   - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
   - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
+  - `data_skills/<id>/skill.py` → keep its `SKILL.md` in step (procedure and the "Run it" options table)
+  - `data_skills/_time.py` or `data_skills/build-dashboard/` → update `docs/DASHBOARDS.md`
 - **Never read pickle or HDF5 uploads** — they can run code. Untrusted files only
   go through the readers in `file_reader.py`.
 - **pandas is the data engine.** Prefer clear pandas over clever pandas.
@@ -48,15 +50,22 @@ uvicorn api.main:app --reload      # backend dev server (:8000)
 cd web && npm run dev              # frontend dev server (:3000)
 cd web && npm run typecheck        # TypeScript
 cd web && npm run build            # production build
+python -m data_skills list         # skills by category
+python -m data_skills run build-dashboard samples/sales.csv   # run a skill -> outputs/
+python scripts/make_sample_data.py # regenerate samples/ (fictional bakery)
 ```
 
 ## Skills
 
-- 30 skills in `.claude/skills/` (project-written, Daniel Rosehill's plugin, and
+- 30 skills in `data_skills/` (project-written, Daniel Rosehill's plugin, and
   the Anthropic data plugin v1.1.0), each in exactly ONE of the seven service
-  categories listed in `.claude/skills/catalog.json`. See
-  `.claude/skills/README.md` for the categorized list and when to use each.
-- A new skill must be added to `catalog.json`; `pytest` enforces it.
+  categories listed in `data_skills/catalog.json`. See
+  `data_skills/README.md` for the categorized list and when to use each.
+- Each skill folder has `SKILL.md` (the procedure) **and** `skill.py` (the
+  same procedure as code, run by the CLI, `POST /api/skills/{id}/run` and the
+  web Explore panel). `.claude/skills` is a symlink to `data_skills/`.
+- A new skill needs `SKILL.md`, `skill.py`, a `catalog.json` entry, and a
+  case in `tests/test_data_skills.py`; `pytest` enforces it.
 
 ## Design
 

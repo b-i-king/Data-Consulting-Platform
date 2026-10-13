@@ -15,9 +15,11 @@ import { fmtInt, fmtPct } from "@/lib/format";
 import type { AnalyzeResponse, GroupOutput } from "@/lib/types";
 import { Button, Card, ConsultantCta, NavRow, Stat, StepHeader } from "./ui";
 import DataPreview from "./DataPreview";
+import ExplorePanel from "@/components/explore/ExplorePanel";
 
 export default function StepResults(props: {
   analysis: AnalyzeResponse;
+  files: File[]; // kept in memory so the dashboard and skills can re-send them
   bookingUrl: string;
   onBack: () => void;
   onNext: () => void;
@@ -79,6 +81,9 @@ export default function StepResults(props: {
       )}
 
       <GroupDetails key={group.group_id} group={group} />
+
+      {/* Dashboard (when there are dates) and the 30 data skills, on this table. */}
+      <ExplorePanel key={`explore-${group.group_id}`} files={props.files} group={group} />
 
       <ConsultantCta bookingUrl={props.bookingUrl}>
         <strong>Not sure what these numbers mean for your business?</strong> Talk it through with a consultant.

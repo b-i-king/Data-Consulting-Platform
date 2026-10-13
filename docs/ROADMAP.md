@@ -30,7 +30,7 @@ Stripe Checkout (or Stripe usage-based billing) charging from `usage_events`.
 Decide the open questions in [PRICING.md](PRICING.md) first.
 
 ### 3. AI — ask your data
-Build the AI service following `.claude/skills/ask-your-data/SKILL.md`:
+Build the AI service following `data_skills/ask-your-data/SKILL.md`:
 schema-only prompts, a whitelisted pandas plan executor, and answers that show
 their calculation. Flip `available=True` for `ai` in `api/services/pricing.py`.
 

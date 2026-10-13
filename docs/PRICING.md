@@ -18,7 +18,7 @@ Code: `api/services/pricing.py`. Rates: environment variables (see `.env.example
 | AI | Early access | No charge yet | No — shown with an "Early access" badge |
 
 Each service is also a **skill category**: the skills behind it
-(`.claude/skills/catalog.json`) appear as "What's included" chips on its card.
+(`data_skills/catalog.json`) appear as "What's included" chips on its card.
 
 Clients can pick several. If any selected service needs a consultant, the quote
 includes your `BOOKING_URL`.

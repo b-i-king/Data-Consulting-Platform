@@ -1,0 +1,121 @@
+expense_date,category,vendor,amount
+2024-11-01,Rent,Peachtree Properties,6814.05
+2024-11-01,Payroll,Gusto,20623.36
+2024-11-01,Ingredients,Southern Flour Co.,9151.11
+2024-11-01,Utilities,Georgia Power,1433.13
+2024-11-01,Marketing,Local Ads LLC,2223.53
+2024-12-01,Rent,Peachtree Properties,6803.85
+2024-12-01,Payroll,Gusto,21786.28
+2024-12-01,Ingredients,Southern Flour Co.,9064.43
+2024-12-01,Utilities,Georgia Power,1433.31
+2024-12-01,Marketing,Local Ads LLC,2120.38
+2025-01-01,Rent,Peachtree Properties,6672.8
+2025-01-01,Payroll,Gusto,21902.8
+2025-01-01,Ingredients,Southern Flour Co.,9353.85
+2025-01-01,Utilities,Georgia Power,1444.97
+2025-01-01,Marketing,Local Ads LLC,793.55
+2025-02-01,Rent,Peachtree Properties,6238.22
+2025-02-01,Payroll,Gusto,22052.22
+2025-02-01,Ingredients,Southern Flour Co.,9620.99
+2025-02-01,Utilities,Georgia Power,1421.22
+2025-02-01,Marketing,Local Ads LLC,775.34
+2025-03-01,Rent,Peachtree Properties,6816.19
+2025-03-01,Payroll,Gusto,21447.85
+2025-03-01,Ingredients,Southern Flour Co.,9436.57
+2025-03-01,Utilities,Georgia Power,1444.01
+2025-03-01,Marketing,Local Ads LLC,790.89
+2025-04-01,Rent,Peachtree Properties,6534.17
+2025-04-01,Payroll,Gusto,22366.88
+2025-04-01,Ingredients,Southern Flour Co.,9149.06
+2025-04-01,Utilities,Georgia Power,1360.11
+2025-04-01,Marketing,Local Ads LLC,787.69
+2025-05-01,Rent,Peachtree Properties,6732.74
+2025-05-01,Payroll,Gusto,21165.17
+2025-05-01,Ingredients,Southern Flour Co.,9569.1
+2025-05-01,Utilities,Georgia Power,1394.68
+2025-05-01,Marketing,Local Ads LLC,769.35
+2025-06-01,Rent,Peachtree Properties,6761.73
+2025-06-01,Payroll,Gusto,23070.07
+2025-06-01,Ingredients,Southern Flour Co.,9697.64
+2025-06-01,Utilities,Georgia Power,1402.9
+2025-06-01,Marketing,Local Ads LLC,835.32
+2025-07-01,Rent,Peachtree Properties,6677.02
+2025-07-01,Payroll,Gusto,23319.89
+2025-07-01,Ingredients,Southern Flour Co.,9513.28
+2025-07-01,Utilities,Georgia Power,1429.99
+2025-07-01,Marketing,Local Ads LLC,800.92
+2025-08-01,Rent,Peachtree Properties,6498.24
+2025-08-01,Payroll,Gusto,21464.31
+2025-08-01,Ingredients,Southern Flour Co.,9387.52
+2025-08-01,Utilities,Georgia Power,1410.35
+2025-08-01,Marketing,Local Ads LLC,787.46
+2025-09-01,Rent,Peachtree Properties,6303.06
+2025-09-01,Payroll,Gusto,22430.95
+2025-09-01,Ingredients,Southern Flour Co.,9432.95
+2025-09-01,Utilities,Georgia Power,1378.49
+2025-09-01,Marketing,Local Ads LLC,774.52
+2025-10-01,Rent,Peachtree Properties,6815.53
+2025-10-01,Payroll,Gusto,21955.26
+2025-10-01,Ingredients,Southern Flour Co.,10053.29
+2025-10-01,Utilities,Georgia Power,1353.6
+2025-10-01,Marketing,Local Ads LLC,831.74
+2025-11-01,Rent,Peachtree Properties,6817.61
+2025-11-01,Payroll,Gusto,23655.28
+2025-11-01,Ingredients,Southern Flour Co.,9806.98
+2025-11-01,Utilities,Georgia Power,1437.52
+2025-11-01,Marketing,Local Ads LLC,2170.99
+2025-12-01,Rent,Peachtree Properties,6350.11
+2025-12-01,Payroll,Gusto,23585.76
+2025-12-01,Ingredients,Southern Flour Co.,9676.86
+2025-12-01,Utilities,Georgia Power,1420.42
+2025-12-01,Marketing,Local Ads LLC,2206.35
+2026-01-01,Rent,Peachtree Properties,6810.06
+2026-01-01,Payroll,Gusto,24486.82
+2026-01-01,Ingredients,Southern Flour Co.,10224.68
+2026-01-01,Utilities,Georgia Power,1370.2
+2026-01-01,Marketing,Local Ads LLC,795.04
+2026-02-01,Rent,Peachtree Properties,6513.19
+2026-02-01,Payroll,Gusto,23058.55
+2026-02-01,Ingredients,Southern Flour Co.,10248.21
+2026-02-01,Utilities,Georgia Power,1354.55
+2026-02-01,Marketing,Local Ads LLC,800.37
+2026-03-01,Rent,Peachtree Properties,6547.35
+2026-03-01,Payroll,Gusto,23120.82
+2026-03-01,Ingredients,Southern Flour Co.,9942.25
+2026-03-01,Utilities,Georgia Power,1462.44
+2026-03-01,Marketing,Local Ads LLC,826.79
+2026-04-01,Rent,Peachtree Properties,6276.35
+2026-04-01,Payroll,Gusto,23635.1
+2026-04-01,Ingredients,Southern Flour Co.,10581.7
+2026-04-01,Utilities,Georgia Power,1338.79
+2026-04-01,Marketing,Local Ads LLC,836.08
+2026-05-01,Rent,Peachtree Properties,6617.09
+2026-05-01,Payroll,Gusto,23178.66
+2026-05-01,Ingredients,Southern Flour Co.,10835.59
+2026-05-01,Utilities,Georgia Power,1374.89
+2026-05-01,Marketing,Local Ads LLC,817.06
+2026-06-01,Rent,Peachtree Properties,6295.29
+2026-06-01,Payroll,Gusto,23593.76
+2026-06-01,Ingredients,Southern Flour Co.,10813.42
+2026-06-01,Utilities,Georgia Power,1437.37
+2026-06-01,Marketing,Local Ads LLC,786.58
+2026-07-01,Rent,Peachtree Properties,6175.69
+2026-07-01,Payroll,Gusto,23582.38
+2026-07-01,Ingredients,Southern Flour Co.,10856.14
+2026-07-01,Utilities,Georgia Power,1469.18
+2026-07-01,Marketing,Local Ads LLC,772.81
+2026-08-01,Rent,Peachtree Properties,6430.11
+2026-08-01,Payroll,Gusto,25487.96
+2026-08-01,Ingredients,Southern Flour Co.,10790.49
+2026-08-01,Utilities,Georgia Power,1337.96
+2026-08-01,Marketing,Local Ads LLC,825.0
+2026-09-01,Rent,Peachtree Properties,6462.05
+2026-09-01,Payroll,Gusto,24469.09
+2026-09-01,Ingredients,Southern Flour Co.,10565.27
+2026-09-01,Utilities,Georgia Power,1371.91
+2026-09-01,Marketing,Local Ads LLC,802.15
+2026-10-01,Rent,Peachtree Properties,6760.42
+2026-10-01,Payroll,Gusto,23968.63
+2026-10-01,Ingredients,Southern Flour Co.,10869.3
+2026-10-01,Utilities,Georgia Power,1420.82
+2026-10-01,Marketing,Local Ads LLC,810.81

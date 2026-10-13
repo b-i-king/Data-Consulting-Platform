@@ -1,7 +1,7 @@
 """
 Keeps the skills catalog honest.
 
-Every folder in .claude/skills must appear in catalog.json EXACTLY ONCE (that
+Every folder in data_skills must appear in catalog.json EXACTLY ONCE (that
 is what makes the categories mutually exclusive), every category must be a
 real service, and every service must have at least one skill behind it.
 """

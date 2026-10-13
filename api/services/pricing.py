@@ -22,7 +22,7 @@ PRICING MODELS
 * "consultation" — needs a human; the client is sent to your booking link.
 * "early_access" — not sold yet (e.g. AI); shown as "Early access", never charged.
 
-Each service id is also a skill CATEGORY: `.claude/skills/catalog.json` lists the
+Each service id is also a skill CATEGORY: `data_skills/catalog.json` lists the
 skills behind each service, and `catalog()` attaches their client-friendly
 labels as "capabilities" for the service cards.
 """
@@ -38,7 +38,7 @@ from api.services.skills_catalog import capability_labels
 
 @dataclass(frozen=True)
 class Service:
-    id: str                         # also the category id in .claude/skills/catalog.json
+    id: str                         # also the category id in data_skills/catalog.json
     name: str
     description: str
     pricing_model: str              # "runtime", "package", "consultation" or "early_access"
