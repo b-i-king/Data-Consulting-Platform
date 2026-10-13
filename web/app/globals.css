@@ -1,0 +1,140 @@
+/*
+  Global styles and the light/dark theme.
+
+  THEME RULES
+  -----------
+  * By default the site follows the visitor's computer setting
+    (prefers-color-scheme), so a laptop in dark mode gets the dark theme.
+  * The theme switch in the header can force "light" or "dark"; it sets
+    <html data-theme="light|dark">. "System" removes the attribute again.
+  * Every color is a CSS variable below. Components only use the Tailwind
+    classes these create (bg-surface, text-ink-muted, border-line, ...), so a
+    color changes in ONE place for the whole site.
+
+  LOOK AND FEEL
+  -------------
+  * Palette from VGST (vgst.app): deep navy-black, gold accent, Fira Code.
+  * Layout polish inspired by Copilot Money: rounded cards, soft depth,
+    a gentle glow behind the hero, and a distinct color per service category.
+*/
+@import "tailwindcss";
+
+/* ── Light theme values (also the fallback) ───────────────────────────────── */
+@theme {
+  --color-canvas: #f0f2f5;        /* page background */
+  --color-surface: #ffffff;       /* cards */
+  --color-surface-2: #f6f7f9;     /* raised / hovered areas, table headers */
+  --color-line: #d9dde3;          /* borders and dividers */
+  --color-ink: #111827;           /* main text */
+  --color-ink-muted: #5f6675;     /* secondary text */
+  --color-brand: #a07c1e;         /* gold accent: buttons, highlights */
+  --color-brand-strong: #8a6a16;  /* hover */
+  --color-brand-soft: #f7f0dc;    /* selected cards, badges */
+  --color-on-brand: #111111;      /* text on gold buttons */
+  --color-good: #2b8a3e;
+  --color-warn: #b7791f;
+  --color-bad: #c92a2a;
+
+  /* One color per service category (chips, card accents). */
+  --color-cat-cleaning: #0f8a7e;
+  --color-cat-strategy: #7048e8;
+  --color-cat-analysis: #1c7ed6;
+  --color-cat-viz: #d6336c;
+  --color-cat-ml: #e8590c;
+  --color-cat-engineering: #2f9e44;
+  --color-cat-ai: #a07c1e;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+
+  /* Fonts are loaded in app/layout.tsx with next/font. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-fira-code), "Fira Code", ui-monospace, monospace;
+}
+
+/* ── Dark theme values (VGST palette) ─────────────────────────────────────── */
+/* Applied when the visitor picks "Dark". The same values are repeated in the
+   media query below for "System" mode on a dark-mode computer — keep the two
+   blocks identical when changing a color. */
+@layer base {
+  :root[data-theme="dark"] {
+    --color-canvas: #0e1117;
+    --color-surface: #1a1d26;
+    --color-surface-2: #222634;
+    --color-line: #2e3244;
+    --color-ink: #e8e8e8;
+    --color-ink-muted: #9aa0ae;
+    --color-brand: #c8ac44;
+    --color-brand-strong: #dcc25e;
+    --color-brand-soft: #2a2717;
+    --color-on-brand: #0e1117;
+    --color-good: #69db7c;
+    --color-warn: #ffd43b;
+    --color-bad: #ff8787;
+    --color-cat-cleaning: #38d9c4;
+    --color-cat-strategy: #9775fa;
+    --color-cat-analysis: #4dabf7;
+    --color-cat-viz: #f06595;
+    --color-cat-ml: #ff922b;
+    --color-cat-engineering: #69db7c;
+    --color-cat-ai: #c8ac44;
+    --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
+    color-scheme: dark;
+  }
+
+  /* "System" mode: follow the computer when no choice has been saved. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-canvas: #0e1117;
+      --color-surface: #1a1d26;
+      --color-surface-2: #222634;
+      --color-line: #2e3244;
+      --color-ink: #e8e8e8;
+      --color-ink-muted: #9aa0ae;
+      --color-brand: #c8ac44;
+      --color-brand-strong: #dcc25e;
+      --color-brand-soft: #2a2717;
+      --color-on-brand: #0e1117;
+      --color-good: #69db7c;
+      --color-warn: #ffd43b;
+      --color-bad: #ff8787;
+      --color-cat-cleaning: #38d9c4;
+      --color-cat-strategy: #9775fa;
+      --color-cat-analysis: #4dabf7;
+      --color-cat-viz: #f06595;
+      --color-cat-ml: #ff922b;
+      --color-cat-engineering: #69db7c;
+      --color-cat-ai: #c8ac44;
+      --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
+      color-scheme: dark;
+    }
+  }
+
+  :root {
+    color-scheme: light;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* Headings and numbers use Fira Code — the VGST signature font. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+}
+
+/* Soft gold glow behind the landing-page hero (Copilot-style depth). */
+@utility hero-glow {
+  background:
+    radial-gradient(60% 80% at 15% 0%, color-mix(in srgb, var(--color-brand) 18%, transparent), transparent 70%),
+    radial-gradient(50% 60% at 90% 10%, color-mix(in srgb, var(--color-cat-strategy) 14%, transparent), transparent 70%);
+}

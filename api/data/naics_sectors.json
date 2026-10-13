@@ -1,0 +1,500 @@
+{
+  "source": "U.S. SBA Table of Size Standards (sba_table_of_size_standards_2023-03-17.xlsx)",
+  "supersectors": [
+    {
+      "id": "goods_producing",
+      "label": "Goods-producing",
+      "description": "You make, grow, build, or extract physical products."
+    },
+    {
+      "id": "service_providing",
+      "label": "Service-providing",
+      "description": "You sell services, or buy and resell goods (retail, wholesale, transportation...)."
+    }
+  ],
+  "sectors": [
+    {
+      "code": "11",
+      "name": "Agriculture, Forestry, Fishing and Hunting",
+      "supersector": "goods_producing",
+      "subsectors": [
+        {
+          "code": "111",
+          "name": "Crop Production"
+        },
+        {
+          "code": "112",
+          "name": "Animal Production and Aquaculture"
+        },
+        {
+          "code": "113",
+          "name": "Forestry and Logging"
+        },
+        {
+          "code": "114",
+          "name": "Fishing, Hunting and Trapping"
+        },
+        {
+          "code": "115",
+          "name": "Support Activities for Agriculture and Forestry"
+        }
+      ]
+    },
+    {
+      "code": "21",
+      "name": "Mining, Quarrying, and Oil and Gas Extraction",
+      "supersector": "goods_producing",
+      "subsectors": [
+        {
+          "code": "211",
+          "name": "Oil and Gas Extraction"
+        },
+        {
+          "code": "212",
+          "name": "Mining (except Oil and Gas)"
+        },
+        {
+          "code": "213",
+          "name": "Support Activities for Mining"
+        }
+      ]
+    },
+    {
+      "code": "22",
+      "name": "Utilities",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "221",
+          "name": "Utilities"
+        }
+      ]
+    },
+    {
+      "code": "23",
+      "name": "Construction",
+      "supersector": "goods_producing",
+      "subsectors": [
+        {
+          "code": "236",
+          "name": "Construction of Buildings"
+        },
+        {
+          "code": "237",
+          "name": "Heavy and Civil Engineering Construction"
+        },
+        {
+          "code": "238",
+          "name": "Specialty Trade Contractors"
+        }
+      ]
+    },
+    {
+      "code": "31-33",
+      "name": "Manufacturing",
+      "supersector": "goods_producing",
+      "subsectors": [
+        {
+          "code": "311",
+          "name": "Food Manufacturing"
+        },
+        {
+          "code": "312",
+          "name": "Beverage and Tobacco Product Manufacturing"
+        },
+        {
+          "code": "313",
+          "name": "Textile Mills"
+        },
+        {
+          "code": "314",
+          "name": "Textile Product Mills"
+        },
+        {
+          "code": "315",
+          "name": "Apparel Manufacturing"
+        },
+        {
+          "code": "316",
+          "name": "Leather and Allied Product Manufacturing"
+        },
+        {
+          "code": "321",
+          "name": "Wood Product Manufacturing"
+        },
+        {
+          "code": "322",
+          "name": "Paper Manufacturing"
+        },
+        {
+          "code": "323",
+          "name": "Printing and Related Support Activities"
+        },
+        {
+          "code": "324",
+          "name": "Petroleum and Coal Products Manufacturing"
+        },
+        {
+          "code": "325",
+          "name": "Chemical Manufacturing"
+        },
+        {
+          "code": "326",
+          "name": "Plastics and Rubber Products Manufacturing"
+        },
+        {
+          "code": "327",
+          "name": "Nonmetallic Mineral Product Manufacturing"
+        },
+        {
+          "code": "331",
+          "name": "Primary Metal Manufacturing"
+        },
+        {
+          "code": "332",
+          "name": "Fabricated Metal Product Manufacturing"
+        },
+        {
+          "code": "333",
+          "name": "Machinery Manufacturing6"
+        },
+        {
+          "code": "334",
+          "name": "Computer and Electronic Product Manufacturing6"
+        },
+        {
+          "code": "335",
+          "name": "Electrical Equipment, Appliance and Component Manufacturing6"
+        },
+        {
+          "code": "336",
+          "name": "Transportation Equipment Manufacturing6"
+        },
+        {
+          "code": "337",
+          "name": "Furniture and Related Product Manufacturing"
+        },
+        {
+          "code": "339",
+          "name": "Miscellaneous Manufacturing"
+        }
+      ]
+    },
+    {
+      "code": "42",
+      "name": "Wholesale Trade",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "423",
+          "name": "Merchant Wholesalers, Durable Goods"
+        },
+        {
+          "code": "424",
+          "name": "Merchant Wholesalers, Nondurable Goods"
+        },
+        {
+          "code": "425",
+          "name": "Wholesale Trade Agents and Brokers"
+        }
+      ]
+    },
+    {
+      "code": "44-45",
+      "name": "Retail Trade",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "441",
+          "name": "Motor Vehicle and Parts Dealers"
+        },
+        {
+          "code": "444",
+          "name": "Building Material and Garden Equipment and Supplies Dealers"
+        },
+        {
+          "code": "445",
+          "name": "Food and Beverage Stores"
+        },
+        {
+          "code": "449",
+          "name": "Furniture, Home Furnishings, Electronics, and Appliance Retailers"
+        },
+        {
+          "code": "455",
+          "name": "General Merchandise Retailers"
+        },
+        {
+          "code": "456",
+          "name": "Health and Personal Care Retailers"
+        },
+        {
+          "code": "457",
+          "name": "Gasoline Stations and Fuel Dealers"
+        },
+        {
+          "code": "458",
+          "name": "Clothing, Clothing Accessories, Shoe, and Jewelry Retailers"
+        },
+        {
+          "code": "459",
+          "name": "Sporting Goods, Hobby, Musical Instrument, Book, and Miscellaneous Retailers"
+        }
+      ]
+    },
+    {
+      "code": "48-49",
+      "name": "Transportation and Warehousing",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "481",
+          "name": "Air Transportation"
+        },
+        {
+          "code": "482",
+          "name": "Rail Transportation"
+        },
+        {
+          "code": "483",
+          "name": "Water Transportation"
+        },
+        {
+          "code": "484",
+          "name": "Truck Transportation"
+        },
+        {
+          "code": "485",
+          "name": "Transit and Ground Passenger Transportation"
+        },
+        {
+          "code": "486",
+          "name": "Pipeline Transportation"
+        },
+        {
+          "code": "487",
+          "name": "Scenic and Sightseeing Transportation"
+        },
+        {
+          "code": "488",
+          "name": "Support Activities for Transportation"
+        },
+        {
+          "code": "491",
+          "name": "Postal Service"
+        },
+        {
+          "code": "492",
+          "name": "Couriers and Messengers"
+        },
+        {
+          "code": "493",
+          "name": "Warehousing and Storage"
+        }
+      ]
+    },
+    {
+      "code": "51",
+      "name": "Information",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "512",
+          "name": "Motion Picture and Sound Recording Industries"
+        },
+        {
+          "code": "513",
+          "name": "Publishing Industries"
+        },
+        {
+          "code": "516",
+          "name": "Broadcasting and Content Providers"
+        },
+        {
+          "code": "517",
+          "name": "Telecommunications"
+        },
+        {
+          "code": "518",
+          "name": "Computing Infrastructure Providers, Data Processing, Web Hosting, and Related Services"
+        },
+        {
+          "code": "519",
+          "name": "Web Search Portals, Libraries, Archives, and Other Information Services"
+        }
+      ]
+    },
+    {
+      "code": "52",
+      "name": "Finance and Insurance",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "522",
+          "name": "Credit Intermediation and Related Activities"
+        },
+        {
+          "code": "523",
+          "name": "Securities, Commodity Contracts, and Other Financial Investments and Related Activities"
+        },
+        {
+          "code": "524",
+          "name": "Insurance Carriers and Related Activities"
+        },
+        {
+          "code": "525",
+          "name": "Funds, Trusts and Other Financial Vehicles"
+        }
+      ]
+    },
+    {
+      "code": "53",
+      "name": "Real Estate and Rental and Leasing",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "531",
+          "name": "Real Estate"
+        },
+        {
+          "code": "532",
+          "name": "Rental and Leasing Services"
+        },
+        {
+          "code": "533",
+          "name": "Lessors of Nonfinancial Intangible Assets (except Copyrighted Works)"
+        }
+      ]
+    },
+    {
+      "code": "54",
+      "name": "Professional, Scientific and Technical Services",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "541",
+          "name": "Professional, Scientific and Technical Services"
+        }
+      ]
+    },
+    {
+      "code": "55",
+      "name": "Management of Companies and Enterprises",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "551",
+          "name": "Management of Companies and Enterprises"
+        }
+      ]
+    },
+    {
+      "code": "56",
+      "name": "Administrative and Support and Waste Management and Remediation Services",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "561",
+          "name": "Administrative and Support Services"
+        },
+        {
+          "code": "562",
+          "name": "Waste Management and Remediation Services"
+        }
+      ]
+    },
+    {
+      "code": "61",
+      "name": "Educational Services",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "611",
+          "name": "Educational Services"
+        }
+      ]
+    },
+    {
+      "code": "62",
+      "name": "Health Care and Social Assistance",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "621",
+          "name": "Ambulatory Health Care Services"
+        },
+        {
+          "code": "622",
+          "name": "Hospitals"
+        },
+        {
+          "code": "623",
+          "name": "Nursing and Residential Care Facilities"
+        },
+        {
+          "code": "624",
+          "name": "Social Assistance"
+        }
+      ]
+    },
+    {
+      "code": "71",
+      "name": "Arts, Entertainment and Recreation",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "711",
+          "name": "Performing Arts, Spectator Sports and Related Industries"
+        },
+        {
+          "code": "712",
+          "name": "Museums, Historical Sites and Similar Institutions"
+        },
+        {
+          "code": "713",
+          "name": "Amusement, Gambling and Recreation Industries"
+        }
+      ]
+    },
+    {
+      "code": "72",
+      "name": "Accommodation and Food Services",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "721",
+          "name": "Accommodation"
+        },
+        {
+          "code": "722",
+          "name": "Food Services and Drinking Places"
+        }
+      ]
+    },
+    {
+      "code": "81",
+      "name": "Other Services (except Public Administration)",
+      "supersector": "service_providing",
+      "subsectors": [
+        {
+          "code": "811",
+          "name": "Repair and Maintenance"
+        },
+        {
+          "code": "812",
+          "name": "Personal and Laundry Services"
+        },
+        {
+          "code": "813",
+          "name": "Religious, Grantmaking, Civic, Professional and Similar Organizations"
+        }
+      ]
+    },
+    {
+      "code": "92",
+      "name": "Public Administration",
+      "supersector": "service_providing",
+      "subsectors": []
+    }
+  ]
+}

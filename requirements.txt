@@ -1,0 +1,33 @@
+# Backend (FastAPI) dependencies. Install with:  pip install -r requirements.txt
+# Versions are minimums known to work together (tested on Python 3.12/3.13).
+
+# Web framework + server
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=23.0.0            # production process manager (Render start command)
+python-multipart>=0.0.9     # needed by FastAPI to accept file uploads
+
+# Settings, validation, auth
+pydantic-settings>=2.0.0
+email-validator>=2.0.0
+PyJWT>=2.8.0
+
+# Database (Supabase / PostgreSQL)
+asyncpg>=0.30.0
+
+# Data processing
+pandas>=2.2.0
+numpy>=1.26.0
+openpyxl>=3.1.0             # .xlsx / .xlsm read + write
+xlrd>=2.0.1                 # legacy .xls read
+python-calamine>=0.2.0      # .xlsb and .ods (OpenDocument) read
+pyarrow>=15.0.0             # .parquet, .feather, .orc read (>=14.0.1 has a security fix)
+lxml>=5.0.0                 # .html tables
+beautifulsoup4>=4.12.0      # .html tables (fallback parser)
+html5lib>=1.1               # .html tables (fallback parser)
+pyreadstat>=1.2.0           # .sav / .zsav (SPSS)
+rapidfuzz>=3.0.0            # fuzzy name matching (api/services/entity_matching.py)
+
+# Tests
+pytest>=8.0.0
+httpx>=0.27.0               # used by FastAPI's TestClient

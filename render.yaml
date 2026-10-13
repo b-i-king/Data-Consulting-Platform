@@ -1,0 +1,27 @@
+# Render "Blueprint" for the FastAPI backend (same host as the template repo).
+# Render dashboard -> New -> Blueprint -> pick this repo. Then fill in the
+# environment variables marked `sync: false` in the dashboard (they are secret).
+services:
+  - type: web
+    name: data-consulting-api
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # gunicorn manages uvicorn workers; 120 s timeout leaves room for big files.
+    startCommand: gunicorn api.main:app -w ${WEB_CONCURRENCY:-1} -k uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:$PORT
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    branch: main
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false        # e.g. https://your-site.vercel.app
+      - key: BOOKING_URL
+        sync: false
+      - key: PRICE_PER_RUNTIME_MINUTE_USD
+        value: "0.50"
