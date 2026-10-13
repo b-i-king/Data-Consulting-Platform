@@ -49,7 +49,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run correlation-analysis samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → What moves together (correlations)** · API: `POST /api/skills/correlation-analysis/run`.
+Web: **Explore your data → Run a skill → What moves together (correlations)** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/correlation-analysis/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

@@ -3,23 +3,25 @@
 // step to show. Each step is its own component that receives just the values
 // and callbacks it needs. Flow:
 //
-//   0. Who are you?            individual / business (+ industry for businesses)
+//   0. Who are you?            individual / business (+ size and industry for businesses)
 //   1. Where is your data?     flat files (live) · cloud · business apps (coming soon)
 //   2. Upload files            one or many; choose how to treat missing values
-//   3. Clean & preview         categorization, cleaning report, full preview
+//   3. Clean & preview         categorization, cleaning report, fill/remove gaps,
+//                              first-rows preview, Explore (dashboard + skills)
 //   4. What do you need?       pick services, see a price estimate
 //   5. Account & download      sign up (only now!) and download the clean file
 //
 // IMPORTANT: the uploaded File objects stay in this component's memory. They
-// are re-sent at download time so the server never has to store client data.
+// are re-sent (with the missing-value choices) whenever the server needs the
+// data again — fills, dashboard, skills, download — so it never stores client data.
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { getIntakeOptions } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { analyzeFiles, getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
@@ -42,12 +44,15 @@ export default function Wizard() {
     industry_supersector: null,
     naics_sector: null,
     naics_subsector: null,
+    company_size: null,
   });
   const [location, setLocation] = useState<string | null>(null);
   const [locationOption, setLocationOption] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [strategy, setStrategy] = useState<MissingStrategy>("keep");
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
+  // Per-column missing-value choices, by table: {"0": {"amount": "median"}}.
+  const [columnActions, setColumnActions] = useState<ColumnActions>({});
   const [serviceIds, setServiceIds] = useState<string[]>(["data_cleaning"]);
   const [session, setSession] = useState<Session | null>(null);
 
@@ -64,6 +69,18 @@ export default function Wizard() {
   }, []);
 
   const bookingUrl = options?.booking_url ?? FALLBACK_BOOKING_URL;
+  // Memoized so the dashboard and skills only re-run when the data really changes.
+  const input: CleaningInput = useMemo(() => ({ files, strategy, columnActions }), [files, strategy, columnActions]);
+
+  // Re-run the cleaning with new fill/remove choices for one table. The new
+  // report replaces the old one only if the server accepts the choices.
+  async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
+    const next = { ...columnActions, [String(groupId)]: actions };
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions: next }));
+    setColumnActions(next);
+  }
+  // A service picked from a locked badge in Explore is added to the order.
+  const addService = (id: string) => setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
   const go = (n: number) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -91,6 +108,7 @@ export default function Wizard() {
           value={accountType}
           onChange={setAccountType}
           industries={options.industries}
+          companySizes={options.company_sizes}
           industry={industry}
           onIndustryChange={setIndustry}
           onNext={() => go(1)}
@@ -120,10 +138,12 @@ export default function Wizard() {
           onFilesChange={(f) => {
             setFiles(f);
             setAnalysis(null); // new files invalidate the old results
+            setColumnActions({});
           }}
           onStrategyChange={(s) => {
             setStrategy(s);
             setAnalysis(null);
+            setColumnActions({});
           }}
           onAnalyzed={(result) => {
             setAnalysis(result);
@@ -134,7 +154,17 @@ export default function Wizard() {
       )}
 
       {step === 3 && analysis && (
-        <StepResults analysis={analysis} files={files} bookingUrl={bookingUrl} onBack={() => go(2)} onNext={() => go(4)} />
+        <StepResults
+          analysis={analysis}
+          input={input}
+          onApplyActions={applyActions}
+          services={options.services}
+          selectedServices={serviceIds}
+          onAddService={addService}
+          bookingUrl={bookingUrl}
+          onBack={() => go(2)}
+          onNext={() => go(4)}
+        />
       )}
 
       {step === 4 && analysis && (
@@ -156,8 +186,7 @@ export default function Wizard() {
           session={session}
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}
-          files={files}
-          strategy={strategy}
+          input={input}
           analysis={analysis}
           onBack={() => go(4)}
         />

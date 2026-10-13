@@ -70,6 +70,7 @@ async def create_account(
     industry_supersector: str | None = None,
     naics_sector: str | None = None,
     naics_subsector: str | None = None,
+    company_size: str | None = None,
 ) -> dict:
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
@@ -96,7 +97,7 @@ async def create_account(
         "team_id": team_id, "team_role": team_role, "status": status, "created_at": _now(),
         "last_login_at": _now() if status == "active" else None,
         "industry_supersector": industry_supersector, "naics_sector": naics_sector,
-        "naics_subsector": naics_subsector,
+        "naics_subsector": naics_subsector, "company_size": company_size,
     }
 
     if database.pool is None:
@@ -112,11 +113,13 @@ async def create_account(
             await conn.execute(
                 """INSERT INTO accounts (id, account_type, first_name, last_name, email,
                                          company_name, team_id, team_role, status, last_login_at,
-                                         industry_supersector, naics_sector, naics_subsector)
-                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12)""",
+                                         industry_supersector, naics_sector, naics_subsector,
+                                         company_size)
+                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
                 company_name, team_role, status, account["last_login_at"],
                 industry_supersector, naics_sector, naics_subsector,
+                company_size,
             )
             if team:
                 await conn.execute(

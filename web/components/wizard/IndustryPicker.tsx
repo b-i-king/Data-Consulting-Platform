@@ -44,7 +44,7 @@ export default function IndustryPicker({
               description={s.description}
               selected={value.industry_supersector === s.id}
               onClick={() =>
-                onChange({ industry_supersector: s.id as Supersector, naics_sector: null, naics_subsector: null })
+                onChange({ ...value, industry_supersector: s.id as Supersector, naics_sector: null, naics_subsector: null })
               }
             />
           ))}

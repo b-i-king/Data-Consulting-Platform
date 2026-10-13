@@ -77,5 +77,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run er-diagram samples/sales.csv samples/customers.csv
 ```
 
-Web: **Explore your data → Run a skill → ER diagrams** · API: `POST /api/skills/er-diagram/run`.
+Web: **Explore your data → Run a skill → ER diagrams** (unlocked when the client chooses **Data Engineering**) · API: `POST /api/skills/er-diagram/run`.
 Input: several tables (every file you pass).

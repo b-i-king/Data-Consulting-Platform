@@ -88,10 +88,10 @@ End with a `[NEEDS REVIEW]` section listing columns the user should clarify.
 This procedure is also runnable code: [`skill.py`](skill.py) in this folder (category: **Data Engineering**).
 
 ```bash
-python -m data_skills run data-dictionary-creator samples/customers.csv --param KEY=VALUE
+python -m data_skills run data-dictionary-creator samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Data dictionaries** · API: `POST /api/skills/data-dictionary-creator/run`.
+Web: **Explore your data → Run a skill → Data dictionaries** (unlocked when the client chooses **Data Engineering**) · API: `POST /api/skills/data-dictionary-creator/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

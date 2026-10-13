@@ -58,8 +58,8 @@ End the report with:
 This procedure is also runnable code: [`skill.py`](skill.py) in this folder (category: **Data Cleaning**).
 
 ```bash
-python -m data_skills run pii-flag samples/customers.csv
+python -m data_skills run pii-flag samples/sales.csv
 ```
 
-Web: **Explore your data → Run a skill → Personal-information (PII) scan** · API: `POST /api/skills/pii-flag/run`.
+Web: **Explore your data → Run a skill → Personal-information (PII) scan** (always included) · API: `POST /api/skills/pii-flag/run`.
 Input: one table.

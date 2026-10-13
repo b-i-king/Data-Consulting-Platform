@@ -65,3 +65,28 @@ def test_individual_cannot_set_industry():
 def test_options_include_industries():
     body = client.get("/api/intake/options").json()
     assert body["industries"]["supersectors"][0]["id"] == "goods_producing"
+
+
+def test_company_size_uses_linkedin_codes_and_team_inherits_it():
+    sizes = client.get("/api/intake/options").json()["company_sizes"]
+    assert [s["id"] for s in sizes] == list("ABCDEFGHI")
+    assert sizes[2]["employees"] == "11-50"
+    res = client.post("/api/accounts/signup", json={
+        "account_type": "business", "first_name": "Kim", "last_name": "Lo",
+        "email": "kim-size@example.com", "company_name": "Lo Bakery", "company_size": "C",
+        "team_members": [{"first_name": "Jo", "last_name": "Ma", "email": "jo-size@example.com"}],
+    })
+    assert res.status_code == 201, res.text
+    assert res.json()["account"]["company_size"] == "C"
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    members = client.get("/api/accounts/team", headers=headers).json()["members"]
+    assert {m["company_size"] for m in members} == {"C"}
+
+
+def test_company_size_rejected_when_unknown_or_individual():
+    base = {"first_name": "A", "last_name": "B"}
+    bad_code = client.post("/api/accounts/signup", json={
+        **base, "account_type": "business", "email": "size-z@example.com", "company_size": "Z"})
+    individual = client.post("/api/accounts/signup", json={
+        **base, "account_type": "individual", "email": "size-ind@example.com", "company_size": "B"})
+    assert bad_code.status_code == 422 and individual.status_code == 422

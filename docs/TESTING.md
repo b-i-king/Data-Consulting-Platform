@@ -11,15 +11,18 @@ identical files):
 
 | File | What's in it | Good for trying |
 |---|---|---|
-| `sales.csv` | ~18,000 order lines: date, product, category, store, quantity, price, amount, payment | Dashboard, trends, analysis, models |
-| `customers.csv` | 400 customers with names, emails, phones, cities | PII scan, data dictionary, enrichment |
+| `sales.csv` | ~18,000 order lines: date, product, category, store, quantity, price, amount, payment, **order type** (in-store / online pickup / delivery / catering), **customer type** and **age group** | Dashboard KPIs + filters, missing-value fills, trends, models |
+| `customers.csv` | 400 customers with names, emails, phones, cities, customer type, age group | PII scan, data dictionary, enrichment |
 | `feedback.csv` | 900 satisfaction (CSAT 1–5) and NPS (0–10) responses | Averages dashboard, hypothesis tests |
 | `expenses.csv` | Monthly rent, payroll, ingredients, utilities, marketing | Expense trends |
 | `quickbooks_customers.csv` | The same customers as a QuickBooks export — **no customer_id**, names spelled differently | Fuzzy matching |
 
 There's a real story to find: growth over two years, busier weekends,
-a November–December holiday bump, a price increase on June 1, 2025, and some
-deliberately messy rows (duplicates, a blank row, stray spaces).
+a November–December holiday bump, a price increase on June 1, 2025, online
+orders growing from about 12% to 28%, delivery launching March 1, 2025, and some
+deliberately messy rows (duplicates, a blank row, stray spaces). Walk-ins have
+no `customer_id` or `age_group` (about 31% missing each) — good for trying the
+missing-value advice.
 
 Regenerate (e.g. to move the dates so "month to date" is current):
 
@@ -31,18 +34,31 @@ python scripts/make_sample_data.py --end 2026-10-31
 
 1. Start both servers ([GETTING_STARTED.md](GETTING_STARTED.md)):
    `uvicorn api.main:app --reload` and, in `web/`, `npm run dev`.
-2. Open http://localhost:3000 → **Start as a guest** → Business → (pick an industry) →
+2. Open http://localhost:3000 → **Start as a guest** → **Business** → pick a
+   **company size** (LinkedIn's bands, e.g. 11–50 employees) and an industry →
    **Files on my computer** → upload `samples/sales.csv` → **Clean my data**.
-3. Scroll to **Explore your data**:
-   - **Dashboard** — switch **Last 4 weeks / Last 3 months / Last year / Month to
-     date / Year to date / All time**, then **Day over day / Week over week /
-     Month over month**. Hover the chart. Click a KPI card to chart that metric.
-     **Download dashboard (HTML)** saves a stand-alone copy you can email.
-   - **Run a skill** — pick any of the 30 skills on the left, set options, **Run skill**.
-     Try *Key trends* (value column = amount), *Ask questions in plain English*
-     ("top 3 product by amount in 2026"), *Forecasts & predictive models*
-     (target = amount), *Warehouse-ready SQL*.
-4. Upload `samples/sales.csv` + `samples/customers.csv` + `samples/quickbooks_customers.csv`
+3. On **Your data, cleaned**:
+   - The tiles show rows, **fields (13)**, duplicates removed and % missing; the
+     preview shows the first 5 rows.
+   - **Missing values by column:** `customer_id` and `age_group` are flagged
+     **Review** (31% missing). `customer_id` has no fill options (it's an ID — a
+     blank means a walk-in). For `age_group`, choose **Fill with mode** →
+     **Apply changes**: the tile now says "5,584 filled". Try **Remove this column**
+     too. **Use our suggestions** only fills small gaps (under 20%) and removes 90%+
+     columns, so on this file it changes nothing — by design.
+4. Scroll to **Explore your data**. Only Data Cleaning is included at first:
+   - **Dashboard** is locked → **Add Data Visualization**. You'll see Total amount
+     and Transactions, then one card + chart per top **order type** (In-store,
+     Online pickup, Delivery, Catering). Use the **time bar floating at the bottom**:
+     Last 4 weeks / Last 3 months / Last year / Month to date / Year to date /
+     All time, and Day / Week / Month over month. Filter by **Customer Type**,
+     **Age Group** or **Store** (e.g. Wholesale). **Download dashboard (HTML)**
+     saves a stand-alone copy you can email.
+   - **Run a skill** — the dropdown lists only unlocked services' skills; the others
+     are 🔒 badges with their price. Click **Data Exploration & Analysis · Add**, then
+     try *Key trends* (value column = amount) or *Forecasts & predictive models*
+     after adding Data Science & ML.
+5. Upload `samples/sales.csv` + `samples/customers.csv` + `samples/quickbooks_customers.csv`
    together to see multi-file grouping, a shared-ID link (🔗) and a fuzzy link (≈).
 
 ## 2. From the command line
@@ -51,6 +67,8 @@ python scripts/make_sample_data.py --end 2026-10-31
 python -m data_skills list                                   # all 30 skills by category
 python -m data_skills describe build-dashboard               # a skill's options
 python -m data_skills run build-dashboard samples/sales.csv  # -> outputs/build-dashboard/html_dashboard.html
+python -m data_skills run build-dashboard samples/sales.csv --param 'filters={"customer_type": "Wholesale"}'
+python -m data_skills run data-cleaning samples/sales.csv --raw --param 'column_actions={"age_group": "mode"}'
 python -m data_skills run trend-analysis samples/sales.csv --param value_column=amount --param segment_column=category
 python -m data_skills run ask-your-data samples/sales.csv --param "question=total amount by store"
 python -m data_skills run er-diagram samples/sales.csv samples/customers.csv samples/feedback.csv

@@ -128,3 +128,35 @@ def test_skill_errors_are_friendly():
     res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", CSV)),
                       data={"params": '{"db_path": "/tmp/evil.db"}'})
     assert res.status_code == 400 and "command line" in res.json()["detail"]
+
+
+GAPS = b"order_date,qty,city,notes\n2026-01-01,1,A,\n2026-01-02,2,A,\n2026-01-03,,,\n2026-01-04,4,B,x\n" + \
+       b"".join(f"2026-02-{d:02d},{d},A,\n".encode() for d in range(1, 11))
+
+
+def test_analyze_applies_column_actions_and_previews_first_rows():
+    actions = '{"0": {"qty": "median", "notes": "drop"}}'
+    res = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)), data={"column_actions": actions})
+    assert res.status_code == 200, res.text
+    g = res.json()["groups"][0]
+    assert g["report"]["columns_dropped"] == ["notes"] and g["report"]["columns"] == 3
+    assert g["report"]["cells_filled"] == 1
+    assert g["preview"]["columns"] == ["order_date", "qty", "city"]
+    assert len(g["preview"]["rows"]) == 5 and g["preview"]["total_rows"] == 14 and g["preview"]["truncated"]
+    notes = next(c for c in g["report"]["column_reports"] if c["column"] == "notes")
+    assert notes["missing_level"] == "remove"
+
+
+def test_bad_column_actions_are_friendly_errors():
+    bad_json = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)), data={"column_actions": "nope"})
+    bad_method = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)),
+                             data={"column_actions": '{"0": {"qty": "average"}}'})
+    assert bad_json.status_code == 400 and bad_method.status_code == 400
+    assert "average" in bad_method.json()["detail"]
+
+
+def test_skills_see_the_same_cleaning_choices():
+    res = client.post("/api/skills/explore-data/run", files=_files(("gaps.csv", GAPS)),
+                      data={"column_actions": '{"0": {"notes": "drop"}}'})
+    assert res.status_code == 200, res.text
+    assert '"notes"' not in res.text

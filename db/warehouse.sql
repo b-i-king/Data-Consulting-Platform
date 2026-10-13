@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS dim_client (
     industry_supersector TEXT,
     naics_sector         TEXT,
     naics_subsector      TEXT,
+    company_size         TEXT,               -- LinkedIn size code A-I (benchmarks by size)
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((account_id IS NULL) <> (team_id IS NULL)),            -- exactly one owner
     CHECK ((client_type = 'business') = (team_id IS NOT NULL))
 );
+ALTER TABLE dim_client ADD COLUMN IF NOT EXISTS company_size TEXT;   -- added after v0.1
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_client_account ON dim_client (account_id) WHERE account_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_client_team    ON dim_client (team_id)    WHERE team_id IS NOT NULL;
 

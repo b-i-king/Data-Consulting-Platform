@@ -161,7 +161,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run create-viz samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Charts from your data** · API: `POST /api/skills/create-viz/run`.
+Web: **Explore your data → Run a skill → Charts from your data** (unlocked when the client chooses **Data Visualization**) · API: `POST /api/skills/create-viz/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

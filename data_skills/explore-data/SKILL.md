@@ -332,5 +332,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run explore-data samples/sales.csv
 ```
 
-Web: **Explore your data → Run a skill → Dataset profiling** · API: `POST /api/skills/explore-data/run`.
+Web: **Explore your data → Run a skill → Dataset profiling** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/explore-data/run`.
 Input: one table.

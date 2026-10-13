@@ -923,6 +923,27 @@ function renderTablePage(data, page, pageSize = 50) {
 - Request "dark mode" or "presentation mode" for different styling
 - You can request a specific color scheme to match your brand
 
+## On this platform: KPIs from transaction types
+
+The platform's dashboard (`skill.py`, shown in **Explore your data → Dashboard**)
+follows the workflow above with these choices — see `docs/DASHBOARDS.md` for every
+calculation:
+
+1. **KPIs are the most common transaction types**, not hand-picked metrics. A
+   "type" column (`event_type` / `transaction_type` in the platform warehouse,
+   `order_type` in a point-of-sale export, any `*_type` / `category` column) is
+   found automatically; its 3–4 values with the most rows become KPI cards, each
+   with its own line chart of the money column (or a count). No type column →
+   the best number columns (money first) are the KPIs.
+2. **Transactions over time:** an overview of total value and number of
+   transactions, charted with day/week/month-over-period comparisons.
+3. **Filters describe WHO:** customer type, segment, age group, gender, region,
+   store… whichever such columns exist (`filters` / `filter_columns`). KPIs and
+   filter choices are ranked on all rows, so they stay put when filtering.
+4. **Time controls float at the bottom** of the screen (Copilot Money style):
+   last 4 weeks · 3 months · year · month to date · year to date · all time, and
+   day / week / month over period.
+
 ## Run it (platform implementation)
 
 This procedure is also runnable code: [`skill.py`](skill.py) in this folder (category: **Data Visualization**).
@@ -931,16 +952,22 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run build-dashboard samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Interactive dashboards** · API: `POST /api/skills/build-dashboard/run`.
+Web: **Explore your data → Run a skill → Interactive dashboards** (unlocked when the client chooses **Data Visualization**) · API: `POST /api/skills/build-dashboard/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `date_column` | column | auto | Date column (auto-detected if empty) |
-| `value_columns` | columns | auto | Number columns to chart (default: up to 3 detected) |
-| `dimension_column` | column | auto | Category column for a breakdown (e.g. product, store) |
+| `kpi_column` | column | auto | Column whose most common values become the KPIs (e.g. transaction_type; auto-detected) |
+| `value_column` | column | auto | Number to total for each KPI (default: the money column; none = count transactions) |
+| `top_kpis` | int | 4 | How many KPIs (types) to show, 1–6 |
+| `filters` | json | auto | Only use matching rows, e.g. {"customer_type": "Wholesale"} or {"age_group": ["25–34", "35–44"]} |
+| `filter_columns` | columns | auto | Columns offered as filters (default: customer and demographic columns, auto-detected) |
+| `value_columns` | columns | auto | KPIs when there is no type column: number columns to chart (default: up to 3 detected) |
+| `dimension_column` | column | auto | Category column for a breakdown (e.g. product) |
 | `agg` | choice (sum, mean, count) | sum | How to combine values in a period |
 | `range` | choice (last_4_weeks, last_3_months, last_1_year, month_to_date, year_to_date, all) | last_3_months | Default range shown |
 | `comparison` | choice (auto, dod, wow, mom) | auto | Default comparison |
 | `as_of` | str | auto | End date for ranges, YYYY-MM-DD (default: latest date in the data) |
 | `title` | str | Dashboard | Dashboard title |
+| `include_html` | bool | yes | Also build the downloadable HTML dashboard (the web app asks for it only when you click Download) |

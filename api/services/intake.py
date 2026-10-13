@@ -82,6 +82,24 @@ DATA_LOCATIONS = [
 ]
 
 
+# ── Company size — asked of business accounts ────────────────────────────────
+# The same employee-count bands LinkedIn uses (company size codes A–I), so the
+# answers line up with LinkedIn data and are familiar to business owners:
+# https://learn.microsoft.com/en-us/linkedin/shared/references/reference-tables/company-size-codes
+COMPANY_SIZES = [
+    {"id": "A", "label": "Self-employed", "employees": "1"},
+    {"id": "B", "label": "1–10 employees", "employees": "1-10"},
+    {"id": "C", "label": "11–50 employees", "employees": "11-50"},
+    {"id": "D", "label": "51–200 employees", "employees": "51-200"},
+    {"id": "E", "label": "201–500 employees", "employees": "201-500"},
+    {"id": "F", "label": "501–1,000 employees", "employees": "501-1000"},
+    {"id": "G", "label": "1,001–5,000 employees", "employees": "1001-5000"},
+    {"id": "H", "label": "5,001–10,000 employees", "employees": "5001-10000"},
+    {"id": "I", "label": "10,001+ employees", "employees": "10001+"},
+]
+COMPANY_SIZE_CODES = {s["id"] for s in COMPANY_SIZES}
+
+
 # ── Industry (NAICS) — asked of business accounts ────────────────────────────
 # Three questions, each narrowing the previous one:
 #   1. Goods-producing or service-providing?   (BLS supersector)

@@ -5,8 +5,11 @@ WHAT IT MAKES (in samples/)
 ---------------------------
 A fictional two-location bakery, "Sunrise Bakery", over two years:
 
-    sales.csv                  ~18,000 order lines with dates, products, stores
-    customers.csv              400 customers (IDs, names, emails, phones, cities)
+    sales.csv                  ~18,000 order lines with dates, products, stores,
+                               order type (in-store / online / delivery / catering)
+                               and customer type + age group (for dashboard filters)
+    customers.csv              400 customers (IDs, names, emails, phones, cities,
+                               customer type, age group)
     feedback.csv               customer satisfaction (CSAT 1–5) and NPS (0–10) responses
     expenses.csv               rent, payroll, ingredients, utilities, marketing
     quickbooks_customers.csv   the SAME customers as exported from QuickBooks —
@@ -14,8 +17,11 @@ A fictional two-location bakery, "Sunrise Bakery", over two years:
                                for testing fuzzy matching
 
 The sales have a real story to find: steady growth, busier weekends, a holiday
-bump every November–December, a price increase on June 1, 2025, and a few
-messy rows (exact duplicates, blank lines, stray spaces) for the cleaning step.
+bump every November–December, a price increase on June 1, 2025, online orders
+growing from about 12% to 28% of orders, delivery launching on March 1, 2025,
+and a few messy rows (exact duplicates, blank lines, stray spaces) for the
+cleaning step. Walk-in customers have no age group, so that column is about
+30% missing — enough to trigger the "think about removing" advice.
 
 HOW TO RUN
 ----------
@@ -55,6 +61,35 @@ PRODUCTS = [  # name, category, price before / after the June 2025 price increas
 ]
 
 
+AGE_GROUPS = ["18–24", "25–34", "35–44", "45–54", "55–64", "65+"]
+DELIVERY_LAUNCH = pd.Timestamp("2025-03-01")
+
+
+def _add_order_type_and_demographics(sales: pd.DataFrame, customers: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """
+    Add order_type (one per order) and the customer's type and age group.
+    Uses its own random stream so the original columns are unchanged.
+      * order_type: online pickup grows from ~12% to ~28% of orders over the
+        two years; delivery only exists from March 1, 2025; catering is rare.
+      * walk-ins (no customer_id) are "Walk-in" with no age group (missing).
+    """
+    rng = np.random.default_rng(seed + 200)
+    orders = sales.drop_duplicates("order_id")[["order_id", "order_date"]].reset_index(drop=True)
+    dates = pd.to_datetime(orders["order_date"])
+    progress = ((dates - dates.min()) / (dates.max() - dates.min())).to_numpy()  # 0 -> 1 over the span
+    online = 0.12 + 0.16 * progress
+    delivery = np.where(dates >= DELIVERY_LAUNCH, 0.08, 0.0)
+    catering = np.full(len(orders), 0.03)
+    u = rng.random(len(orders))
+    kind = np.where(u < online, "Online pickup",
+           np.where(u < online + delivery, "Delivery",
+           np.where(u < online + delivery + catering, "Catering", "In-store")))
+    out = sales.merge(pd.DataFrame({"order_id": orders["order_id"], "order_type": kind}), on="order_id", how="left")
+    out = out.merge(customers[["customer_id", "customer_type", "age_group"]], on="customer_id", how="left")
+    out["customer_type"] = out["customer_type"].fillna("Walk-in")
+    return out
+
+
 def make(end: pd.Timestamp, seed: int = 7) -> dict[str, pd.DataFrame]:
     rng = np.random.default_rng(seed)
     start = end - pd.DateOffset(years=2) + pd.Timedelta(days=1)
@@ -77,6 +112,11 @@ def make(end: pd.Timestamp, seed: int = 7) -> dict[str, pd.DataFrame]:
     })
     # Some customers never gave an email (realistic missing values).
     customers.loc[rng.random(n_cust) < 0.12, "email"] = None
+    # Demographics for dashboard filters. A SEPARATE random stream, so adding
+    # these columns didn't change any of the numbers generated above or below.
+    rng_demo = np.random.default_rng(seed + 100)
+    customers["customer_type"] = rng_demo.choice(["Loyalty member", "Regular", "Wholesale"], n_cust, p=[0.45, 0.45, 0.10])
+    customers["age_group"] = rng_demo.choice(AGE_GROUPS, n_cust, p=[0.12, 0.27, 0.24, 0.17, 0.12, 0.08])
 
     # ── sales ────────────────────────────────────────────────────────────────
     t = np.arange(len(days))
@@ -113,6 +153,7 @@ def make(end: pd.Timestamp, seed: int = 7) -> dict[str, pd.DataFrame]:
                 })
             order_id += 1
     sales = pd.DataFrame(rows)
+    sales = _add_order_type_and_demographics(sales, customers, seed)
     # A little mess for the cleaning step: duplicates, a blank row, stray spaces.
     sales = pd.concat([sales, sales.sample(25, random_state=seed)], ignore_index=True)
     sales.loc[sales.sample(40, random_state=seed + 1).index, "store"] = " Midtown "

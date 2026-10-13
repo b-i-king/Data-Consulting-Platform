@@ -4,7 +4,7 @@ Flat-file endpoints: analyze (guest) and download (signed in).
     POST /api/files/analyze    GUEST — upload 1+ files, get back:
                                  * how the files relate (categorization)
                                  * a cleaning report per group
-                                 * a preview of the cleaned data
+                                 * a preview of the cleaned data (first rows)
                                  * a sample-size snapshot
                                  * the runtime-based price to download
     POST /api/files/download   SIGNED IN — upload the same files again and
@@ -35,7 +35,7 @@ from api.core.config import get_settings
 from api.core.security import get_current_account
 from api.services import account_store
 from api.services.cleaning import dataframe_to_records
-from api.services.pipeline import load_uploads, run_pipeline
+from api.services.pipeline import load_uploads, parse_column_actions, run_pipeline
 from api.services.pricing import runtime_cost
 
 router = APIRouter(prefix="/files")
@@ -47,10 +47,12 @@ Strategy = Literal["keep", "drop_any"]
 async def analyze_files(
     files: Annotated[list[UploadFile], File(description="One or more flat files")],
     missing_strategy: Annotated[Strategy, Form()] = "keep",
+    # Per-column choices, JSON: {"<group_id>": {"<column>": "keep|drop|mean|median|mode|auto"}}
+    column_actions: Annotated[str, Form()] = "{}",
 ):
     settings = get_settings()
     datasets = await load_uploads(files)
-    result = run_pipeline(datasets, missing_strategy)
+    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions))
 
     groups_out = []
     for g in result.groups:
@@ -86,9 +88,10 @@ async def download_cleaned(
     group_id: Annotated[int, Form()] = 0,
     missing_strategy: Annotated[Strategy, Form()] = "keep",
     file_format: Annotated[Literal["csv", "xlsx"], Form()] = "csv",
+    column_actions: Annotated[str, Form()] = "{}",
 ):
     datasets = await load_uploads(files)
-    result = run_pipeline(datasets, missing_strategy)
+    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions))
 
     group = next((g for g in result.groups if g.group_id == group_id), None)
     if group is None:

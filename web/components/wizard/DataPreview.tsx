@@ -1,6 +1,6 @@
-// Paginated table showing the cleaned data.
-// The backend sends every row (up to PREVIEW_MAX_ROWS), and this component
-// shows 50 at a time so the page stays fast even with tens of thousands of rows.
+// Table showing the first rows of the cleaned data (like pandas' df.head()).
+// The backend sends the first PREVIEW_MAX_ROWS rows (5 by default); if that
+// setting is raised, this component pages through them 50 at a time.
 
 "use client";
 
@@ -23,13 +23,14 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-semibold">Preview of your cleaned data</h3>
         <span className="text-sm text-ink-muted">
-          {preview.rows.length ? `Rows ${fmtInt(first)}–${fmtInt(last)} of ${fmtInt(preview.total_rows)}` : "No rows"}
+          {preview.rows.length
+            ? `Rows ${fmtInt(first)}–${fmtInt(last)} of ${fmtInt(preview.total_rows)} · ${fmtInt(preview.columns.length)} fields`
+            : "No rows"}
         </span>
       </div>
       {preview.truncated && (
-        <p className="mb-2 text-xs text-warn">
-          Showing the first {fmtInt(preview.rows.length)} rows on screen. Your download includes all{" "}
-          {fmtInt(preview.total_rows)} rows.
+        <p className="mb-2 text-xs text-ink-muted">
+          Showing the first {fmtInt(preview.rows.length)} rows. Your download includes all {fmtInt(preview.total_rows)} rows.
         </p>
       )}
       <div className="max-h-[32rem] overflow-auto rounded-2xl border border-line bg-surface shadow-[var(--shadow-card)]">

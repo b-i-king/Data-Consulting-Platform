@@ -53,20 +53,20 @@
       ]
     },
     {
-      "id": "data_science_ml",
-      "name": "Data Science & Machine Learning",
-      "skills": [
-        { "id": "predictive-modeling", "label": "Forecasts & predictive models", "source": "project" },
-        { "id": "multivariate-analysis", "label": "Multi-factor (multivariate) analysis", "source": "rosehill" }
-      ]
-    },
-    {
       "id": "data_engineering",
       "name": "Data Engineering",
       "skills": [
         { "id": "er-diagram", "label": "ER diagrams", "source": "project" },
         { "id": "data-dictionary-creator", "label": "Data dictionaries", "source": "rosehill" },
         { "id": "sql-queries", "label": "Warehouse-ready SQL", "source": "anthropic-data" }
+      ]
+    },
+    {
+      "id": "data_science_ml",
+      "name": "Data Science & Machine Learning",
+      "skills": [
+        { "id": "predictive-modeling", "label": "Forecasts & predictive models", "source": "project" },
+        { "id": "multivariate-analysis", "label": "Multi-factor (multivariate) analysis", "source": "rosehill" }
       ]
     },
     {

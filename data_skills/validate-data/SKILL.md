@@ -390,7 +390,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run validate-data samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Analysis quality check** · API: `POST /api/skills/validate-data/run`.
+Web: **Explore your data → Run a skill → Analysis quality check** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/validate-data/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

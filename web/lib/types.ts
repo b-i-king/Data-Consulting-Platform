@@ -53,11 +53,20 @@ export interface Sector {
 
 export type Supersector = "goods_producing" | "service_providing";
 
-/** Business industry answers (all optional; each narrows the previous). */
+/** Business profile answers (all optional; each industry answer narrows the previous). */
 export interface Industry {
   industry_supersector: Supersector | null;
   naics_sector: string | null;
   naics_subsector: string | null;
+  /** LinkedIn company size code "A"–"I" (e.g. "C" = 11–50 employees). */
+  company_size: string | null;
+}
+
+/** One employee-count band (LinkedIn company size codes). */
+export interface CompanySize {
+  id: string; // "A"–"I"
+  label: string; // "11–50 employees"
+  employees: string; // "11-50"
 }
 
 /** GET /api/intake/options */
@@ -74,6 +83,8 @@ export interface IntakeOptions {
     supersectors: { id: Supersector; label: string; description: string }[];
     sectors: Sector[];
   };
+  /** Business size bands, LinkedIn company size codes A–I. */
+  company_sizes: CompanySize[];
   limits: { max_upload_mb: number; max_files_per_upload: number };
   pricing: { price_per_runtime_minute_usd: number; billing_increment_seconds: number };
   booking_url: string;
@@ -120,6 +131,31 @@ export interface ColumnReport {
   missing_pct: number;
   unique_count: number;
   example_values: string[];
+  /** Missing-value advice: under 20% "low", 20%+ "review", 90%+ "remove". */
+  missing_level: "none" | "low" | "review" | "remove";
+  recommendation: string;
+  /** Suggested fill: mean (symmetric numbers), median (skewed numbers), mode (text). */
+  suggested_fill: FillMethod | null;
+  skewness: number | null;
+  /** method -> the value it would fill in, e.g. { mean: "12.4", median: "9" } */
+  fill_options: Partial<Record<FillMethod, string>>;
+  /** What was done: keep, dropped, or the fill method used. */
+  action: "keep" | "dropped" | FillMethod;
+  filled_count: number;
+  missing_after: number;
+}
+
+export type FillMethod = "mean" | "median" | "mode";
+/** A choice for one column's missing values ("auto" = our suggestion). */
+export type ColumnAction = "keep" | "drop" | "auto" | FillMethod;
+/** group id -> column -> choice; sent to analyze, download and skills alike. */
+export type ColumnActions = Record<string, Record<string, ColumnAction>>;
+
+/** Everything needed to re-create the cleaned data on the server. */
+export interface CleaningInput {
+  files: File[];
+  strategy: MissingStrategy;
+  columnActions: ColumnActions;
 }
 
 export interface CleaningReport {
@@ -138,6 +174,14 @@ export interface CleaningReport {
   column_reports: ColumnReport[];
   notes: string[];
   runtime_seconds: number;
+  columns_before: number;
+  columns_dropped: string[];
+  cells_filled: number;
+  missing_pct_before: number;
+  columns_to_review: string[];
+  columns_to_remove: string[];
+  /** 90%+ of all cells are missing: suggest a consultation. */
+  consultation_recommended: boolean;
 }
 
 export interface SampleSizeCheck {
@@ -269,9 +313,27 @@ export interface Kpi {
 export interface DashboardData {
   title: string;
   date_column: string;
+  /** "kpi_types": KPIs are the most common values of a type column; "metrics": number columns. */
+  mode: "kpi_types" | "metrics";
+  kpi_column: string | null;
+  kpi_column_label: string | null;
+  value_column: string | null;
+  value_label: string;
+  /** Metric ids of the KPI cards, one line chart each. */
+  kpis: string[];
+  /** Metric ids of the overview cards (total value, transactions). */
+  overview: string[];
   metrics: string[];
   metric_labels: Record<string, string>;
+  /** Customer / demographic columns offered as filters, and their values. */
+  filter_columns: string[];
+  filter_labels: Record<string, string>;
+  filter_options: Record<string, string[]>;
+  /** Filters that were applied to this result. */
+  filters: Record<string, string[]>;
+  rows: number;
   dimension_column: string | null;
+  breakdown_metric: string;
   as_of: string;
   first_date: string;
   default_range: string;
@@ -316,6 +378,7 @@ export interface Account {
   industry_supersector: Supersector | null;
   naics_sector: string | null;
   naics_subsector: string | null;
+  company_size: string | null;
 }
 
 export interface AuthResponse {

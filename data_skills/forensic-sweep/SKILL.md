@@ -112,5 +112,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run forensic-sweep samples/sales.csv
 ```
 
-Web: **Explore your data → Run a skill → Pre-processing ("too clean") check** · API: `POST /api/skills/forensic-sweep/run`.
+Web: **Explore your data → Run a skill → Pre-processing ("too clean") check** (always included) · API: `POST /api/skills/forensic-sweep/run`.
 Input: one table. Runs on the data as uploaded, before cleaning.

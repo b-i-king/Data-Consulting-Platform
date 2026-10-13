@@ -53,8 +53,8 @@ tests/                    pytest unit + API tests
 web/                      Next.js frontend (TypeScript + Tailwind CSS)
   app/page.tsx            landing page
   app/start/page.tsx      the guest wizard page
-  components/wizard/      one component per wizard step + shared UI
-  components/explore/     Explore your data: Dashboard + Run a skill
+  components/wizard/      one component per wizard step + shared UI (MissingValues: fill/remove choices)
+  components/explore/     Explore your data: Dashboard + Run a skill (+ locked service badges)
   components/charts/      SVG line and bar charts (hover tooltips)
   lib/api.ts              every call to the backend
   lib/types.ts            TypeScript shapes of API responses
@@ -62,7 +62,6 @@ web/                      Next.js frontend (TypeScript + Tailwind CSS)
 data_skills/              30 skills: SKILL.md (procedure) + skill.py (runnable code)
   _core.py, _time.py      shared result types; date ranges and DoD/WoW/MoM math
   registry.py, __main__.py  load/run skills; command line (python -m data_skills)
-.claude/skills            symlink to data_skills/ so Claude Code finds the skills
 samples/                  fictional bakery data for testing (scripts/make_sample_data.py)
 docs/                     you are here
 ```
@@ -82,6 +81,11 @@ files to disk or the database:
   memory — not localStorage, not our server). It uploads them again with the
   login token; the API re-runs the identical pipeline and streams the cleaned
   file straight back.
+- **Missing-value choices** (fill a column with the mean/median/mode, remove a
+  column) are just a small JSON field, `column_actions`, that the browser sends
+  with every request that needs the data — re-analyze, dashboard, skills and
+  download — so the server re-creates the same cleaned data each time without
+  keeping anything.
 
 | Pros | Cons |
 |---|---|

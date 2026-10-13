@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
-from api.services.intake import validate_industry
+from api.services.intake import COMPANY_SIZE_CODES, validate_industry
 
 
 class TeamMemberIn(BaseModel):
@@ -43,6 +43,9 @@ class SignupIn(BaseModel):
     industry_supersector: str | None = None
     naics_sector: str | None = None
     naics_subsector: str | None = None
+    # Company size (business accounts only): LinkedIn size code "A"–"I",
+    # e.g. "C" = 11–50 employees. See intake.COMPANY_SIZES.
+    company_size: str | None = None
 
     @model_validator(mode="after")
     def _business_rules(self) -> "SignupIn":
@@ -52,6 +55,10 @@ class SignupIn(BaseModel):
                 raise ValueError("Team members can only be added to a business account.")
             if self.industry_supersector or self.naics_sector or self.naics_subsector:
                 raise ValueError("Industry applies to business accounts only.")
+            if self.company_size:
+                raise ValueError("Company size applies to business accounts only.")
+        if self.company_size and self.company_size not in COMPANY_SIZE_CODES:
+            raise ValueError("Unknown company size.")
         error = validate_industry(self.industry_supersector, self.naics_sector, self.naics_subsector)
         if error:
             raise ValueError(error)
@@ -75,6 +82,7 @@ class AccountOut(BaseModel):
     industry_supersector: str | None = None
     naics_sector: str | None = None
     naics_subsector: str | None = None
+    company_size: str | None = None
 
 
 class AuthOut(BaseModel):

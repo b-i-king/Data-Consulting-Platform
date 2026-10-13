@@ -49,8 +49,9 @@ class Service:
     available: bool = True          # False = shown as "Early access" (not sold yet)
 
 
-# The order here is the order shown in the UI. Descriptions are the owner's
-# own service copy — edit them here, not in the frontend.
+# The order here is the order shown in the UI (AI last, right after Data
+# Science & ML). Descriptions are the owner's own service copy — edit them
+# here, not in the frontend. Keep data_skills/catalog.json in the same order.
 SERVICES: tuple[Service, ...] = (
     Service(
         id="data_cleaning",
@@ -63,7 +64,7 @@ SERVICES: tuple[Service, ...] = (
         automated=True,
         requires_consultant=False,
         includes=("Duplicate-row removal", "Missing-value report by column",
-                  "Full data preview", "CSV or Excel download"),
+                  "Fill or remove missing values", "First-rows preview", "CSV or Excel download"),
     ),
     Service(
         id="data_strategy_discovery",
@@ -102,18 +103,6 @@ SERVICES: tuple[Service, ...] = (
         includes=("KPI cards", "Trend and breakdown charts", "Filters", "One revision round"),
     ),
     Service(
-        id="data_science_ml",
-        name="Data Science & Machine Learning",
-        description="This service includes, but is not limited to, leveraging data science "
-                    "techniques and machine learning algorithms to provide advanced analytics, "
-                    "predictive modeling, and actionable insights.",
-        pricing_model="package",
-        starting_price_usd=1500.0,  # PLACEHOLDER
-        automated=False,
-        requires_consultant=True,
-        includes=("Sample-size check", "Model build and validation", "Plain-English results"),
-    ),
-    Service(
         id="data_engineering",
         name="Data Engineering",
         description="We focus on creating clear data structures (ER diagrams), comprehensive "
@@ -124,6 +113,18 @@ SERVICES: tuple[Service, ...] = (
         automated=False,
         requires_consultant=True,
         includes=("ER diagram", "Data dictionary", "Optional managed PostgreSQL storage"),
+    ),
+    Service(
+        id="data_science_ml",
+        name="Data Science & Machine Learning",
+        description="This service includes, but is not limited to, leveraging data science "
+                    "techniques and machine learning algorithms to provide advanced analytics, "
+                    "predictive modeling, and actionable insights.",
+        pricing_model="package",
+        starting_price_usd=1500.0,  # PLACEHOLDER
+        automated=False,
+        requires_consultant=True,
+        includes=("Sample-size check", "Model build and validation", "Plain-English results"),
     ),
     Service(
         id="ai",

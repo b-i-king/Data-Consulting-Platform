@@ -71,7 +71,8 @@ export default function StepUpload(props: {
     setBusy(true);
     setError(null);
     try {
-      props.onAnalyzed(await analyzeFiles(props.files, props.strategy));
+      // New files start with no per-column choices (they're made on the next step).
+      props.onAnalyzed(await analyzeFiles({ files: props.files, strategy: props.strategy, columnActions: {} }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong while reading your files.");
     } finally {

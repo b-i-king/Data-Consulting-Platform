@@ -25,7 +25,8 @@ coding, so **understanding the code matters as much as the code itself**.
   - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
   - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
-  - `data_skills/<id>/skill.py` → keep its `SKILL.md` in step (procedure and the "Run it" options table)
+  - `data_skills/<id>/skill.py` → keep its `SKILL.md` procedure in step, and run
+    `python scripts/sync_skill_docs.py` to regenerate the "Run it" options table (`pytest` checks it)
   - `data_skills/_time.py` or `data_skills/build-dashboard/` → update `docs/DASHBOARDS.md`
 - **Never read pickle or HDF5 uploads** — they can run code. Untrusted files only
   go through the readers in `file_reader.py`.
@@ -37,10 +38,9 @@ coding, so **understanding the code matters as much as the code itself**.
 
 ## Git
 
-- Commit finished, tested work to the current feature branch. A project hook
-  (`.claude/hooks/auto-push.sh`, wired in `.claude/settings.json`) pushes the
-  branch to GitHub automatically after every `git commit`. It never pushes
-  `main`/`master` and never force-pushes.
+- Commit finished, tested work to the current feature branch, then push it
+  (`git push -u origin <branch>`). Never push to `main`/`master` directly and
+  never force-push.
 
 ## Commands
 
@@ -53,6 +53,7 @@ cd web && npm run build            # production build
 python -m data_skills list         # skills by category
 python -m data_skills run build-dashboard samples/sales.csv   # run a skill -> outputs/
 python scripts/make_sample_data.py # regenerate samples/ (fictional bakery)
+python scripts/sync_skill_docs.py  # regenerate each SKILL.md "Run it" section from skill.py
 ```
 
 ## Skills
@@ -63,7 +64,8 @@ python scripts/make_sample_data.py # regenerate samples/ (fictional bakery)
   `data_skills/README.md` for the categorized list and when to use each.
 - Each skill folder has `SKILL.md` (the procedure) **and** `skill.py` (the
   same procedure as code, run by the CLI, `POST /api/skills/{id}/run` and the
-  web Explore panel). `.claude/skills` is a symlink to `data_skills/`.
+  web Explore panel). In the app, a skill is offered only when the client has
+  chosen its service (Data Cleaning is always included).
 - A new skill needs `SKILL.md`, `skill.py`, a `catalog.json` entry, and a
   case in `tests/test_data_skills.py`; `pytest` enforces it.
 

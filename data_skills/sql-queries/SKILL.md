@@ -435,7 +435,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run sql-queries samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Warehouse-ready SQL** · API: `POST /api/skills/sql-queries/run`.
+Web: **Explore your data → Run a skill → Warehouse-ready SQL** (unlocked when the client chooses **Data Engineering**) · API: `POST /api/skills/sql-queries/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

@@ -69,5 +69,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run flat-file-intake samples/sales.csv samples/customers.csv
 ```
 
-Web: **Explore your data → Run a skill → Multi-file sorting & stacking** · API: `POST /api/skills/flat-file-intake/run`.
+Web: **Explore your data → Run a skill → Multi-file sorting & stacking** (always included) · API: `POST /api/skills/flat-file-intake/run`.
 Input: several tables (every file you pass).
