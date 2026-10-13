@@ -6,7 +6,7 @@ WHERE THIS COMES FROM
 Adapted from the `sample-size` skill in Daniel Rosehill's
 Claude-Data-Analyst-plugin (MIT License):
 https://github.com/danielrosehill/Claude-Data-Analyst-plugin/tree/master/skills/sample-size
-The full adapted skill lives at `.claude/skills/sample-size/SKILL.md`.
+The full adapted skill lives at `data_skills/sample-size/SKILL.md`.
 
 The skill's core idea: ROW COUNT IS NOT SAMPLE SIZE. This module implements
 the parts of the skill that can run automatically on any uploaded table

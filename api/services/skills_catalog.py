@@ -3,7 +3,7 @@ Skills catalog: which skills power each service category.
 
 WHAT THIS FILE DOES
 -------------------
-Reads `.claude/skills/catalog.json` — the single list that assigns every skill
+Reads `data_skills/catalog.json` — the single list that assigns every skill
 in this repo to exactly ONE service category (Data Cleaning, Data Strategy &
 Discovery, ..., AI) — and exposes it to the rest of the backend.
 
@@ -22,7 +22,7 @@ from functools import lru_cache
 from pathlib import Path
 
 # api/services/skills_catalog.py -> repo root is three folders up.
-CATALOG_PATH = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "catalog.json"
+CATALOG_PATH = Path(__file__).resolve().parents[2] / "data_skills" / "catalog.json"
 
 
 @lru_cache

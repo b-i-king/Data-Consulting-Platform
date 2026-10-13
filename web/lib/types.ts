@@ -26,7 +26,7 @@ export interface Service {
   includes: string[];
   /** false = not sold yet; shown with an "Early access" badge. */
   available: boolean;
-  /** Client-friendly names of the skills behind this service (.claude/skills/catalog.json). */
+  /** Client-friendly names of the skills behind this service (data_skills/catalog.json). */
   capabilities: string[];
 }
 
@@ -197,6 +197,97 @@ export interface AnalyzeResponse {
 }
 
 export type MissingStrategy = "keep" | "drop_any";
+
+// ── /api/skills ───────────────────────────────────────────────────────────────
+
+export interface SkillParam {
+  type: "str" | "int" | "float" | "bool" | "column" | "columns" | "choice" | "json";
+  default: unknown;
+  help: string;
+  choices: string[];
+  api_allowed: boolean;
+}
+
+export interface SkillInfo {
+  id: string;
+  title: string;
+  description: string;
+  input: "table" | "tables";
+  wants_raw: boolean;
+  category: string;
+  category_name: string;
+  label: string;
+  params: Record<string, SkillParam>;
+}
+
+export interface LineChartSpec {
+  type: "line";
+  title: string;
+  x: string[];
+  series: { name: string; values: (number | null)[] }[];
+}
+
+export interface BarChartSpec {
+  type: "bar";
+  title: string;
+  categories: string[];
+  values: number[];
+  value_label: string;
+}
+
+export interface SkillResult {
+  skill: string;
+  summary: string;
+  findings: string[];
+  tables: Record<string, Record<string, Cell>[]>;
+  charts: (LineChartSpec | BarChartSpec)[];
+  artifacts: Record<string, string>;
+  data: Record<string, unknown>;
+  runtime_seconds: number;
+}
+
+// build-dashboard's `data` payload (see data_skills/build-dashboard/skill.py)
+export interface PeriodRow {
+  period: string; // YYYY-MM-DD (start of the day / week / month)
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  pct_change: number | null;
+  partial: boolean;
+  /** Matching period of the PREVIOUS range, by position (the comparison line). */
+  prior_range: number | null;
+  prior_period: string | null;
+}
+
+export interface Kpi {
+  current: number;
+  previous?: number;
+  change?: number;
+  pct_change?: number | null;
+}
+
+export interface DashboardData {
+  title: string;
+  date_column: string;
+  metrics: string[];
+  metric_labels: Record<string, string>;
+  dimension_column: string | null;
+  as_of: string;
+  first_date: string;
+  default_range: string;
+  default_comparison: string;
+  range_labels: Record<string, string>;
+  comparison_labels: Record<string, string>;
+  ranges: Record<
+    string,
+    {
+      window: { start: string; end: string; prev_start: string | null; prev_end: string | null };
+      kpis: Record<string, Kpi>;
+      series: Record<string, Record<string, PeriodRow[]>>;
+    }
+  >;
+  breakdown: Record<string, { category: string; current: number; previous: number | null; pct_change: number | null }[]>;
+}
 
 // ── /api/quote ────────────────────────────────────────────────────────────────
 

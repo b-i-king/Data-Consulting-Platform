@@ -90,3 +90,41 @@ def test_large_responses_are_gzip_compressed():
                       headers={"Accept-Encoding": "gzip"})
     assert res.status_code == 200
     assert res.headers.get("content-encoding") == "gzip"
+
+
+# ── Data skills API ──────────────────────────────────────────────────────────
+
+SALES = (__import__("pathlib").Path(__file__).resolve().parents[1] / "samples" / "sales.csv").read_bytes()
+
+
+def test_list_skills():
+    skills = client.get("/api/skills").json()
+    assert len(skills) == 30
+    assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
+
+
+def test_run_dashboard_skill_on_upload():
+    res = client.post("/api/skills/build-dashboard/run", files=_files(("sales.csv", SALES)),
+                      data={"params": '{"value_columns": ["amount"]}'})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert set(body["data"]["ranges"]) == {"last_4_weeks", "last_3_months", "last_1_year", "month_to_date", "year_to_date", "all"}
+    assert "html_dashboard" in body["artifacts"]
+
+
+def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not():
+    raw = client.post("/api/skills/data-cleaning/run", files=_files(("sales.csv", SALES))).json()
+    assert raw["data"]["report"]["duplicate_rows_removed"] > 0
+    cleaned = client.post("/api/skills/validate-data/run", files=_files(("sales.csv", SALES)),
+                          data={"params": '{"metric": "amount"}'}).json()
+    dup_check = next(c for c in cleaned["tables"]["checks"] if c["check"] == "duplicate rows")
+    assert dup_check["status"] == "pass"
+
+
+def test_skill_errors_are_friendly():
+    assert client.post("/api/skills/nope/run", files=_files(("s.csv", CSV))).status_code == 404
+    res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", CSV)), data={"params": "{}"})
+    assert res.status_code == 400 and "outcome" in res.json()["detail"]
+    res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", CSV)),
+                      data={"params": '{"db_path": "/tmp/evil.db"}'})
+    assert res.status_code == 400 and "command line" in res.json()["detail"]

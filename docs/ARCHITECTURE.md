@@ -33,12 +33,14 @@ api/                      FastAPI backend (Python)
   routers/intake.py       GET questions, GET services, POST quote
   routers/files.py        POST analyze (guest), POST download (signed in)
   routers/accounts.py     signup, signin, me, team
+  routers/skills.py       GET skills, POST run a skill on uploaded files
   services/file_reader.py   file -> DataFrames: every safe pandas format (CSV/Excel recommended)
   services/entity_matching.py  fuzzy-link records with no shared ID (names/emails/phones)
   services/categorizer.py   how multiple files relate
   services/cleaning.py      the cleaning pipeline + report
   services/sample_size.py   "is there enough data?" snapshot
   services/pipeline.py      glues the above together in order
+  services/skills_runner.py cleans uploads, then hands them to a data skill
   services/pricing.py       service catalog, runtime billing, quotes
   services/intake.py        questionnaire answer choices
   services/account_store.py accounts/teams/usage (Postgres or in-memory)
@@ -52,10 +54,16 @@ web/                      Next.js frontend (TypeScript + Tailwind CSS)
   app/page.tsx            landing page
   app/start/page.tsx      the guest wizard page
   components/wizard/      one component per wizard step + shared UI
+  components/explore/     Explore your data: Dashboard + Run a skill
+  components/charts/      SVG line and bar charts (hover tooltips)
   lib/api.ts              every call to the backend
   lib/types.ts            TypeScript shapes of API responses
   lib/session.ts          keeps the login token for the browser tab
-.claude/skills/           project skills (procedures Claude and consultants follow)
+data_skills/              30 skills: SKILL.md (procedure) + skill.py (runnable code)
+  _core.py, _time.py      shared result types; date ranges and DoD/WoW/MoM math
+  registry.py, __main__.py  load/run skills; command line (python -m data_skills)
+.claude/skills            symlink to data_skills/ so Claude Code finds the skills
+samples/                  fictional bakery data for testing (scripts/make_sample_data.py)
 docs/                     you are here
 ```
 

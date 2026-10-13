@@ -39,6 +39,22 @@ Each source file also starts with a header comment explaining itself.
    rejects missing/expired tokens; re-runs the pipeline; records usage; streams
    CSV or Excel.
 
+### 3. Follow a skill run: the dashboard
+
+1. **`web/components/explore/Dashboard.tsx`** — calls `runSkill("build-dashboard", files)`
+   once; range and comparison buttons just switch between precomputed series.
+2. **`api/routers/skills.py` → `run_skill_endpoint()`** → **`api/services/skills_runner.py`**
+   — cleans the uploads with the same pipeline, then calls the registry.
+3. **`data_skills/registry.py` → `run_skill()`** — checks the options and calls
+   **`data_skills/build-dashboard/skill.py` → `run()`**.
+4. **`data_skills/_time.py`** — `window()` (which dates each range covers and
+   what it's compared with) and `period_series()` (one row per day/week/month
+   with the previous period and % change).
+5. Back in the browser: **`components/charts/LineChart.tsx`** draws it.
+
+Every other skill follows the same path; **`SkillsPanel.tsx`** shows any
+skill's summary, findings, tables, charts and downloads.
+
 ## File reference
 
 | File | One-line purpose | Change it when… |
@@ -61,6 +77,12 @@ Each source file also starts with a header comment explaining itself.
 | `db/schema.sql` | Database tables | Any table change (also update `account_store.py`) |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
+| `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its SKILL.md in step) |
+| `data_skills/_time.py` | Date ranges, DoD/WoW/MoM | Adding a range or comparison (update DASHBOARDS.md) |
+| `data_skills/registry.py` | Load, validate, run skills | Changing how options are checked |
+| `api/services/skills_runner.py` | Uploads → cleaned tables → skill | Changing which data a skill receives |
+| `web/components/explore/*.tsx` | Dashboard + skills panel | Changing the Explore UI |
+| `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
 
 ## Patterns worth knowing
 
@@ -77,5 +99,6 @@ Each source file also starts with a header comment explaining itself.
 
 `tests/test_services.py` has one small, readable test per promise the services
 make (e.g. "exact duplicates are removed", "whole numbers lose their .0").
-`tests/test_api.py` walks the full guest → signup → download path.
+`tests/test_data_skills.py` runs every skill on the sample data and checks
+dashboard math against plain pandas. `tests/test_api.py` walks the full guest → signup → download path.
 Run `pytest -q` after every change.

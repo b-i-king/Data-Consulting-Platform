@@ -2,7 +2,7 @@
 
 This page explains what the platform does to a client's files, in the order it
 happens. Code: `api/services/file_reader.py`, `categorizer.py`, `cleaning.py`.
-Procedures: `.claude/skills/flat-file-intake` and `.claude/skills/data-cleaning`.
+Procedures: `data_skills/flat-file-intake` and `data_skills/data-cleaning`.
 
 ## 1. Reading files
 
@@ -88,4 +88,4 @@ the consultant-assisted services.
 
 After cleaning, a sample-size snapshot (adapted from Daniel Rosehill's
 `sample-size` skill) reports complete rows and green/yellow/red checks for common
-questions. See `.claude/skills/sample-size/SKILL.md`.
+questions. See `data_skills/sample-size/SKILL.md`.

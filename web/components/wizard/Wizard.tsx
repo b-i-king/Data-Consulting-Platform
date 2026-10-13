@@ -134,7 +134,7 @@ export default function Wizard() {
       )}
 
       {step === 3 && analysis && (
-        <StepResults analysis={analysis} bookingUrl={bookingUrl} onBack={() => go(2)} onNext={() => go(4)} />
+        <StepResults analysis={analysis} files={files} bookingUrl={bookingUrl} onBack={() => go(2)} onNext={() => go(4)} />
       )}
 
       {step === 4 && analysis && (

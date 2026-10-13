@@ -28,7 +28,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from api.core import database
 from api.core.config import get_settings
-from api.routers import accounts, files, intake
+from api.routers import accounts, files, intake, skills
 
 
 @asynccontextmanager
@@ -62,6 +62,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(intake.router, prefix="/api", tags=["intake"])
 app.include_router(files.router, prefix="/api", tags=["files"])
 app.include_router(accounts.router, prefix="/api", tags=["accounts"])
+app.include_router(skills.router, prefix="/api", tags=["skills"])
 
 
 @app.get("/health", tags=["health"])
