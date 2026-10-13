@@ -19,11 +19,15 @@ export interface Service {
   id: string;
   name: string;
   description: string;
-  pricing_model: "runtime" | "package" | "consultation";
+  pricing_model: "runtime" | "package" | "consultation" | "early_access";
   starting_price_usd: number;
   automated: boolean;
   requires_consultant: boolean;
   includes: string[];
+  /** false = not sold yet; shown with an "Early access" badge. */
+  available: boolean;
+  /** Client-friendly names of the skills behind this service (.claude/skills/catalog.json). */
+  capabilities: string[];
 }
 
 /** GET /api/intake/options */

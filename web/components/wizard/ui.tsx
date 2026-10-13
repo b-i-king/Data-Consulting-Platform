@@ -16,7 +16,9 @@ export function StepHeader({ title, subtitle }: { title: string; subtitle?: stri
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-lg border border-line bg-surface p-5 ${className}`}>{children}</div>;
+  return (
+    <div className={`rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-card)] ${className}`}>{children}</div>
+  );
 }
 
 /** A large clickable answer option (used for the questionnaire choices). */
@@ -32,7 +34,7 @@ export function ChoiceCard(props: {
       type="button"
       onClick={props.onClick}
       aria-pressed={props.selected}
-      className={`w-full rounded-lg border p-4 text-left transition-colors ${
+      className={`w-full rounded-2xl border p-4 text-left shadow-[var(--shadow-card)] transition-colors ${
         props.selected ? "border-brand bg-brand-soft" : "border-line bg-surface hover:border-brand"
       }`}
     >
@@ -56,13 +58,13 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
   const styles =
     variant === "primary"
-      ? "bg-brand text-white hover:bg-brand-strong disabled:opacity-50"
-      : "border border-line bg-surface hover:border-brand disabled:opacity-50";
+      ? "bg-brand text-on-brand hover:bg-brand-strong disabled:opacity-50"
+      : "border border-line bg-surface hover:border-brand hover:text-brand disabled:opacity-50";
   return (
     <button
       type="button"
       {...rest}
-      className={`rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed ${styles} ${className}`}
+      className={`rounded-full px-5 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed ${styles} ${className}`}
     />
   );
 }
@@ -86,7 +88,7 @@ export function NavRow({ onBack, children }: { onBack?: () => void; children?: R
 export function ErrorBox({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <div role="alert" className="mt-4 rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm text-bad">
+    <div role="alert" className="mt-4 rounded-xl border border-bad/40 bg-bad/10 px-4 py-3 text-sm text-bad">
       {message}
     </div>
   );
@@ -96,9 +98,9 @@ export function ErrorBox({ message }: { message: string | null }) {
 export function Stat({ label, value, tone }: { label: string; value: string; tone?: "good" | "warn" | "bad" }) {
   const color = tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : tone === "bad" ? "text-bad" : "";
   return (
-    <div className="rounded-lg border border-line bg-surface p-4">
+    <div className="rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]">
       <div className="text-xs uppercase tracking-wide text-ink-muted">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${color}`}>{value}</div>
+      <div className={`mt-1 font-mono text-2xl font-semibold tabular-nums ${color}`}>{value}</div>
     </div>
   );
 }
@@ -127,14 +129,14 @@ export function Progress({ step, total, labels }: { step: number; total: number;
 /** Call-to-action box that sends people to the consultant's booking page. */
 export function ConsultantCta({ bookingUrl, children }: { bookingUrl: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-brand/40 bg-brand-soft p-5">
+    <div className="rounded-2xl border border-brand/40 bg-brand-soft p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm">{children}</div>
         <a
           href={bookingUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 rounded-md bg-brand px-4 py-2 text-center text-sm font-medium text-white hover:bg-brand-strong"
+          className="shrink-0 rounded-full bg-brand px-5 py-2 text-center text-sm font-semibold text-on-brand hover:bg-brand-strong"
         >
           Book a free consultation
         </a>

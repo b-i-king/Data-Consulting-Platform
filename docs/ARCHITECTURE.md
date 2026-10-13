@@ -93,7 +93,15 @@ Question choices (data locations, services, prices) come from
 `GET /api/intake/options`. Changing a choice or launching a connector is a
 backend edit — the web app and a future phone app both pick it up.
 
-### 4. Database optional in development
+### 4. Light and dark themes
+
+Default follows the visitor's computer (`prefers-color-scheme`). The header
+switch offers Light, Dark, and "Match my computer"; a choice is saved in the
+browser and applied by a tiny inline script before the page paints (no flash).
+Colors are CSS variables in `web/app/globals.css`: VGST's palette (navy-black,
+gold, Fira Code) with Copilot Money-inspired rounded cards and category colors.
+
+### 5. Database optional in development
 
 Without `DATABASE_URL`, accounts live in memory so you can run everything
 locally in two commands. In production, always set `DATABASE_URL`.

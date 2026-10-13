@@ -19,7 +19,7 @@ coding, so **understanding the code matters as much as the code itself**.
   - `api/services/cleaning.py` → update `.claude/skills/data-cleaning/SKILL.md` and `docs/DATA_CLEANING.md`
   - `api/services/categorizer.py` → update `.claude/skills/flat-file-intake/SKILL.md` and `docs/DATA_CLEANING.md`
   - `api/services/sample_size.py` → update `.claude/skills/sample-size/SKILL.md`
-  - `api/services/pricing.py` → update `docs/PRICING.md`
+  - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)
   - any API response → update `web/lib/types.ts`
   - any table → update `db/schema.sql` and `api/services/account_store.py`
 - **pandas is the data engine.** Prefer clear pandas over clever pandas.
@@ -40,10 +40,20 @@ cd web && npm run build            # production build
 
 ## Skills
 
-- Project skills: `.claude/skills/` (`flat-file-intake`, `data-cleaning`, `sample-size`).
-- Anthropic data plugin v1.1.0 (`data:*` skills) for exploration, analysis,
-  statistics, visualization, dashboards, SQL, and validation. See
-  `.claude/skills/README.md` for when to use which.
+- 30 skills in `.claude/skills/` (project-written, Daniel Rosehill's plugin, and
+  the Anthropic data plugin v1.1.0), each in exactly ONE of the seven service
+  categories listed in `.claude/skills/catalog.json`. See
+  `.claude/skills/README.md` for the categorized list and when to use each.
+- A new skill must be added to `catalog.json`; `pytest` enforces it.
+
+## Design
+
+- Light and dark themes; default follows the visitor's computer, with a
+  Light / Dark / System switch in the header. All colors are CSS variables in
+  `web/app/globals.css` — never hard-code colors in components.
+- Look: VGST palette (navy-black, gold `#c8ac44`, Fira Code headings/numbers)
+  with Copilot Money-style rounded cards and one color per service category
+  (`web/lib/categories.ts`).
 
 ## Tech stack (from the Video_Game_Stats_Tracker template)
 

@@ -119,9 +119,9 @@ function GroupDetails({ group }: { group: GroupOutput }) {
       {/* b. Missing values by column */}
       <div>
         <h3 className="mb-2 font-semibold">Missing values by column</h3>
-        <div className="overflow-x-auto rounded-lg border border-line bg-surface">
+        <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-[var(--shadow-card)]">
           <table className="w-full text-sm">
-            <thead className="border-b border-line text-left text-xs uppercase tracking-wide text-ink-muted">
+            <thead className="border-b border-line bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted">
               <tr>
                 <th className="px-3 py-2">Column</th>
                 <th className="px-3 py-2">Type</th>

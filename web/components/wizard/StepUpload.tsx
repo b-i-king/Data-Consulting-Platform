@@ -87,7 +87,7 @@ export default function StepUpload(props: {
         role="button"
         tabIndex={0}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && inputRef.current?.click()}
-        className={`cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
+        className={`cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
           dragging ? "border-brand bg-brand-soft" : "border-line bg-surface hover:border-brand"
         }`}
       >

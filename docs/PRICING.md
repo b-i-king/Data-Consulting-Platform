@@ -12,9 +12,13 @@ Code: `api/services/pricing.py`. Rates: environment variables (see `.env.example
 | Data Cleaning | Runtime (per minute) | $0.50 / min | No — fully automated, always included |
 | Data Strategy & Discovery | Consultation | Free call, then quoted | Yes → booking link |
 | Data Exploration & Analysis | Package | from $250 | Optional |
-| Data Visualization & Dashboards | Package | from $500 | Optional |
+| Data Visualization | Package | from $500 | Optional |
 | Data Science & Machine Learning | Package | from $1,500 | Yes |
 | Data Engineering | Package | from $750 | Yes |
+| AI | Early access | No charge yet | No — shown with an "Early access" badge |
+
+Each service is also a **skill category**: the skills behind it
+(`.claude/skills/catalog.json`) appear as "What's included" chips on its card.
 
 Clients can pick several. If any selected service needs a consultant, the quote
 includes your `BOOKING_URL`.

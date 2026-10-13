@@ -32,9 +32,9 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
           {fmtInt(preview.total_rows)} rows.
         </p>
       )}
-      <div className="max-h-[32rem] overflow-auto rounded-lg border border-line bg-surface">
+      <div className="max-h-[32rem] overflow-auto rounded-2xl border border-line bg-surface shadow-[var(--shadow-card)]">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-surface text-left text-xs uppercase tracking-wide text-ink-muted shadow-[0_1px_0_var(--color-line)]">
+          <thead className="sticky top-0 bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted shadow-[0_1px_0_var(--color-line)]">
             <tr>
               <th className="px-3 py-2 text-right">#</th>
               {preview.columns.map((c) => (

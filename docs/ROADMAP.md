@@ -29,33 +29,38 @@ Email-only sign-in is a placeholder. Replace with **Supabase Auth magic links**:
 Stripe Checkout (or Stripe usage-based billing) charging from `usage_events`.
 Decide the open questions in [PRICING.md](PRICING.md) first.
 
-### 3. Intake analytics
+### 3. AI — ask your data
+Build the AI service following `.claude/skills/ask-your-data/SKILL.md`:
+schema-only prompts, a whitelisted pandas plan executor, and answers that show
+their calculation. Flip `available=True` for `ai` in `api/services/pricing.py`.
+
+### 4. Intake analytics
 Save guest answers to `intake_responses` (table already exists) to learn which
 data sources and services clients ask for → which connector to build next.
 
-### 4. Consultant workflow
+### 5. Consultant workflow
 - Pass questionnaire answers to the booking link (Calendly supports prefill).
 - Admin page listing new signups, selected services, and usage.
 - Automatic invoices (Stripe Invoicing) to cut manual invoicing.
 
-### 5. Connectors ("meet them where their data lives")
+### 6. Connectors ("meet them where their data lives")
 Start with the most-requested sources from step 3. Likely order:
 Google Sheets → QuickBooks → Shopify/Square → Snowflake/BigQuery → AWS S3 →
 Salesforce. Each connector returns DataFrames into the same pipeline.
 
-### 6. Self-serve analysis and dashboards
+### 7. Self-serve analysis and dashboards
 - Auto-generated summary (key trends) for Data Exploration
 - Starter dashboards for common small-business data (sales, customers, payroll)
 - Use the Anthropic data plugin skills (`build-dashboard`, `create-viz`) to
   prototype templates.
 
-### 7. Data engineering tier
+### 8. Data engineering tier
 Optional managed storage in Postgres for clients who want it (with explicit
 consent, per-client schema, and storage pricing).
 
-### 8. Mobile apps
+### 9. Mobile apps
 React Native + Expo app (iOS/Android) calling the same API, following the
 template repo's `mobile/` approach.
 
-### 9. Team growth
+### 10. Team growth
 Consultant accounts and assignment of client projects when you bring on help.

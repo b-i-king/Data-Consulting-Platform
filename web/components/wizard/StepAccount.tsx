@@ -18,7 +18,7 @@ import type { AccountType, AnalyzeResponse, MissingStrategy, TeamMemberInput } f
 import { Button, Card, ChoiceCard, ErrorBox, NavRow, StepHeader } from "./ui";
 
 const inputCls =
-  "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
+  "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
 
 export default function StepAccount(props: {
   defaultType: AccountType;

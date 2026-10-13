@@ -21,12 +21,13 @@ higher-impact projects.
    missing-value report per column, an "is there enough data?" check, and a full
    preview
 5. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
-   Visualization & Dashboards, Data Science & ML, Data Engineering, with a price
-   estimate
+   Visualization, Data Science & ML, Data Engineering, and AI (early access),
+   with a price estimate
 6. **Download** — create an account (only now), download CSV or Excel; billed by
    processing minute
 
-Client files are **processed in memory and never stored**.
+Client files are **processed in memory and never stored**. Light and dark
+themes follow the visitor's computer, with a switch in the header.
 
 ![Clean & preview step](docs/images/wizard-clean-preview.png)
 
@@ -67,7 +68,7 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Run it locally |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Supabase + Render + Vercel |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
-| [.claude/skills/README.md](.claude/skills/README.md) | Skills used on this project |
+| [.claude/skills/README.md](.claude/skills/README.md) | 30 skills, organized by service category |
 
 ## Project layout
 
@@ -77,10 +78,12 @@ db/schema.sql   Supabase tables
 tests/          pytest suite
 web/            Next.js frontend
 docs/           documentation
-.claude/skills/ project skills (data-cleaning, flat-file-intake, sample-size)
+.claude/skills/ 30 skills by category (catalog.json) — project, Rosehill (MIT), Anthropic data (Apache-2.0)
+licenses/       third-party license texts
 ```
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The `sample-size` skill is adapted from Daniel
-Rosehill's MIT-licensed work; see `.claude/skills/sample-size/LICENSE-NOTICE.md`.
+MIT — see [LICENSE](LICENSE). Vendored skills keep their own licenses: Daniel
+Rosehill's Claude-Data-Analyst-plugin (MIT) and Anthropic's data plugin
+(Apache-2.0); see [`licenses/`](licenses).
