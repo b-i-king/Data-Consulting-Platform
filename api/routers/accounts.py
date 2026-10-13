@@ -4,6 +4,8 @@ Account endpoints.
     POST /api/accounts/signup         create an individual or business account
     POST /api/accounts/signin         get a new token for an existing email
     GET  /api/accounts/me             who am I? (requires token)
+    GET  /api/accounts/services       services on my plan + the full catalog (requires token)
+    POST /api/accounts/services       add a service to my plan (requires token; see entitlements.py)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
 
@@ -27,8 +29,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import create_access_token, get_current_account
-from api.models.accounts import AccountOut, AuthOut, SigninIn, SignupIn, TeamMemberIn
-from api.services import account_store
+from api.models.accounts import AccountOut, AddServiceIn, AuthOut, SigninIn, SignupIn, TeamMemberIn
+from api.services import account_store, entitlements
+from api.services.pricing import catalog
 
 router = APIRouter(prefix="/accounts")
 
@@ -59,6 +62,9 @@ def _auth_response(acc: dict) -> AuthOut:
 
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(body: SignupIn):
+    unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown service id(s): {', '.join(unknown)}")
     try:
         owner = await account_store.create_account(
             account_type=body.account_type,
@@ -78,6 +84,10 @@ async def signup(body: SignupIn):
     # "invited" accounts attached to the owner's team.
     for member in body.team_members:
         await _add_member(owner, member)
+
+    # Services chosen in the questionnaire go on the plan (placeholder until payments).
+    if body.service_ids:
+        await entitlements.add_services(owner, body.service_ids, source="signup")
 
     return _auth_response(owner)
 
@@ -145,3 +155,36 @@ async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
             status.HTTP_409_CONFLICT,
             detail=f"{member.email} already has an account. Team transfers are not supported yet.",
         )
+
+
+async def _services_out(acc: dict) -> dict:
+    active = await entitlements.active_services(acc)
+    holder = await entitlements.plan_holder_id(acc)
+    return {
+        "active": active,
+        # True when this person may add services (individuals and team owners).
+        "can_add": holder == str(acc["id"]),
+        "services": [{**s, "active": s["id"] in active} for s in catalog()],
+    }
+
+
+@router.get("/services")
+async def my_services(token: Annotated[dict, Depends(get_current_account)]):
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Account not found.")
+    return await _services_out(acc)
+
+
+@router.post("/services")
+async def add_service(body: AddServiceIn, token: Annotated[dict, Depends(get_current_account)]):
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Account not found.")
+    try:
+        await entitlements.add_services(acc, [body.service_id])
+    except entitlements.NotPlanOwnerError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return await _services_out(acc)

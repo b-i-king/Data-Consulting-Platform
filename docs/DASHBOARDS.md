@@ -22,8 +22,23 @@ button. Without dates, **Explore your data** opens on **Run a skill** instead.
 3. **KPIs** — one card and one line chart per KPI (below).
 4. **Breakdown** — the top 8 values of a category column (e.g. product) vs. the
    previous period.
-5. **Time bar** — date range and comparison, floating at the bottom of the screen
-   while the dashboard is in view (on phones: two rows that scroll sideways).
+5. **Time bar** — two separate panels floating at the bottom of the screen
+   while the dashboard is in view: date ranges on top, comparisons below
+   (`web/components/explore/TimeBar.tsx`). When the full labels don't fit the
+   width available — a phone, a narrow window, a zoomed-in browser — both panels
+   switch to short labels. This is measured, not tied to a screen size:
+
+   | Full | Short | | Full | Short |
+   |---|---|---|---|---|
+   | Last 4 weeks | 4W | | Day over day | DoD |
+   | Last 3 months | 3M | | Week over week | WoW |
+   | Last year | 1Y | | Month over month | MoM |
+   | Month to date | MTD | | | |
+   | Year to date | YTD | | | |
+   | All time | All | | | |
+
+   Short labels come from `data_skills/_time.py` (`RANGE_SHORT`, `COMPARISON_SHORT`);
+   screen readers and hover tooltips always give the full label.
 
 ## KPIs come from transaction types
 

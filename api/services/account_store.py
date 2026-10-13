@@ -16,8 +16,9 @@ setting up Supabase first. Never rely on it in production.
 
 WHAT IS STORED (and what is NOT)
 --------------------------------
-Stored: name, email, account type, team membership, and a usage record per
-download (file name, row count, runtime, amount) for billing.
+Stored: name, email, account type, team membership, the services on each
+account's plan, and a usage record per download (file name, row count,
+runtime, amount) for billing.
 NOT stored: the client's uploaded data. Files are processed in memory only.
 """
 
@@ -32,6 +33,7 @@ from api.core import database
 _accounts: dict[str, dict] = {}         # account_id -> account
 _teams: dict[str, dict] = {}            # team_id -> team
 _usage: list[dict] = []                 # usage events
+_services: dict[str, dict[str, dict]] = {}   # account_id -> service_id -> row
 
 
 class AccountExistsError(ValueError):
@@ -178,3 +180,32 @@ async def record_usage(
            VALUES ($1, $2, $3, $4, $5, $6)""",
         uuid.UUID(account_id), dataset_name, rows, runtime_seconds, billable_minutes, amount_usd,
     )
+
+
+# ── Services on the plan (table account_services) ───────────────────────────
+
+async def list_services(account_id: str) -> list[str]:
+    """Active service ids stored for this account (no defaults added here)."""
+    if database.pool is None:
+        return [sid for sid, row in _services.get(account_id, {}).items() if row["status"] == "active"]
+    rows = await database.pool.fetch(
+        "SELECT service_id FROM account_services WHERE account_id = $1 AND status = 'active'",
+        uuid.UUID(account_id),
+    )
+    return [r["service_id"] for r in rows]
+
+
+async def add_services(account_id: str, service_ids: list[str], source: str) -> None:
+    """Add (or re-activate) services on an account's plan."""
+    if database.pool is None:
+        plan = _services.setdefault(account_id, {})
+        for sid in service_ids:
+            plan[sid] = {"status": "active", "source": source, "added_at": _now()}
+        return
+    for sid in service_ids:
+        await database.pool.execute(
+            """INSERT INTO account_services (account_id, service_id, status, source)
+               VALUES ($1, $2, 'active', $3)
+               ON CONFLICT (account_id, service_id) DO UPDATE SET status = 'active'""",
+            uuid.UUID(account_id), sid, source,
+        )

@@ -32,7 +32,7 @@ api/                      FastAPI backend (Python)
   models/accounts.py      request/response shapes (validation)
   routers/intake.py       GET questions, GET services, POST quote
   routers/files.py        POST analyze (guest), POST download (signed in)
-  routers/accounts.py     signup, signin, me, team
+  routers/accounts.py     signup, signin, me, team, services on my plan
   routers/skills.py       GET skills, POST run a skill on uploaded files
   services/file_reader.py   file -> DataFrames: every safe pandas format (CSV/Excel recommended)
   services/entity_matching.py  fuzzy-link records with no shared ID (names/emails/phones)
@@ -42,6 +42,7 @@ api/                      FastAPI backend (Python)
   services/pipeline.py      glues the above together in order
   services/skills_runner.py cleans uploads, then hands them to a data skill
   services/pricing.py       service catalog, runtime billing, quotes
+  services/entitlements.py  which services an account has (drives the workspace)
   services/intake.py        questionnaire answer choices
   services/account_store.py accounts/teams/usage (Postgres or in-memory)
 db/schema.sql             platform tables: accounts, teams, usage (run once in Supabase)
@@ -53,8 +54,12 @@ tests/                    pytest unit + API tests
 web/                      Next.js frontend (TypeScript + Tailwind CSS)
   app/page.tsx            landing page
   app/start/page.tsx      the guest wizard page
+  app/signin/page.tsx     sign in / create an account by email
+  app/app/page.tsx        the signed-in workspace (Copilot-style left pane)
+  components/auth/        sign-in form, header sign-in links
+  components/workspace/   the workspace: left pane of services + each service's page
   components/wizard/      one component per wizard step + shared UI (MissingValues: fill/remove choices)
-  components/explore/     Explore your data: Dashboard + Run a skill (+ locked service badges)
+  components/explore/     Explore your data: Dashboard (+ TimeBar) + Run a skill (+ locked service badges)
   components/charts/      SVG line and bar charts (hover tooltips)
   lib/api.ts              every call to the backend
   lib/types.ts            TypeScript shapes of API responses

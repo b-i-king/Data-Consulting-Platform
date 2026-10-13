@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS usage_events (
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_account ON usage_events (account_id, created_at DESC);
 
+-- ── Services on the plan ─────────────────────────────────────────────────────
+-- Which services an account (an individual, or a business team's OWNER) has.
+-- Team members share their owner's services. Drives the signed-in workspace:
+-- active services are open in the left pane, the rest are grayed out.
+-- PLACEHOLDER UNTIL PAYMENTS: services chosen at signup (source 'signup') or
+-- added in the workspace (source 'added') count as active. When Stripe is
+-- added, only rows with source 'payment' should unlock paid services.
+CREATE TABLE IF NOT EXISTS account_services (
+    account_id  UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    service_id  TEXT NOT NULL,                 -- ids from api/services/pricing.py
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'canceled')),
+    source      TEXT NOT NULL DEFAULT 'signup' CHECK (source IN ('signup', 'added', 'payment')),
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_id, service_id)
+);
+
 -- ── Intake responses (optional analytics, not used by the API yet) ─────────
 -- Anonymous answers to the guest questionnaire. Useful for deciding which
 -- connector (Snowflake? QuickBooks?) to build next.

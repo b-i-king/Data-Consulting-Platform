@@ -351,6 +351,9 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         "default_range": range, "default_comparison": default_cmp,
         "range_labels": _time.RANGES,
         "comparison_labels": {k: v[0] for k, v in _time.COMPARISONS.items()},
+        # Used when the time bar doesn't fit on one line (phones): 4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM.
+        "range_short_labels": _time.RANGE_SHORT,
+        "comparison_short_labels": _time.COMPARISON_SHORT,
         "ranges": ranges, "breakdown": breakdown,
     })
     artifacts = {}

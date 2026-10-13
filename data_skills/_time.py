@@ -50,6 +50,13 @@ RANGES: dict[str, str] = {
     "all": "All time",
 }
 
+# Short labels for narrow screens (phones), Copilot Money style.
+RANGE_SHORT: dict[str, str] = {
+    "last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
+    "month_to_date": "MTD", "year_to_date": "YTD", "all": "All",
+}
+COMPARISON_SHORT: dict[str, str] = {"dod": "DoD", "wow": "WoW", "mom": "MoM"}
+
 # comparison id -> (label, pandas resample rule, short name of the period)
 COMPARISONS: dict[str, tuple[str, str, str]] = {
     "dod": ("Day over day", "D", "day"),

@@ -8,8 +8,8 @@
 //              store...). Picking one asks the server again for just those rows.
 //
 // Every date range × comparison comes back in one response, so the time bar
-// is instant. The time bar floats at the bottom of the screen while the
-// dashboard is in view (CSS `sticky`), like Copilot Money:
+// is instant. The time bar (TimeBar.tsx) is two panels floating at the bottom
+// of the screen while the dashboard is in view (CSS `sticky`), like Copilot Money:
 //   Ranges:       Last 4 weeks · Last 3 months · Last year · Month to date · Year to date · All time
 //   Comparisons:  Day over day · Week over week · Month over month
 
@@ -20,6 +20,7 @@ import { runSkill, saveText } from "@/lib/api";
 import type { CleaningInput, DashboardData, PeriodRow } from "@/lib/types";
 import BarChart from "@/components/charts/BarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
+import TimeBar from "./TimeBar";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 
 const fmt = (v: number | null | undefined) =>
@@ -37,33 +38,6 @@ function Delta({ value }: { value: number | null | undefined }) {
       </span>{" "}
       vs. previous
     </span>
-  );
-}
-
-function Segmented<T extends string>(props: {
-  label: string;
-  options: Record<T, string>;
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    // Phones: one row that scrolls sideways; wider screens: wraps and centers.
-    <div role="radiogroup" aria-label={props.label} className="flex gap-1 overflow-x-auto sm:flex-wrap sm:justify-center">
-      {(Object.keys(props.options) as T[]).map((k) => (
-        <button
-          key={k}
-          type="button"
-          role="radio"
-          aria-checked={props.value === k}
-          onClick={() => props.onChange(k)}
-          className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors ${
-            props.value === k ? "bg-brand font-semibold text-on-brand" : "text-ink-muted hover:text-ink"
-          }`}
-        >
-          {props.options[k]}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -332,18 +306,18 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
         </Card>
       )}
 
-      {/* Time bar: floats at the bottom of the screen while the dashboard is in view. */}
-      <div className="sticky bottom-4 z-20 flex justify-center">
-        <div
-          role="group"
-          aria-label="Date range and comparison"
-          className="flex w-full flex-col gap-1 rounded-3xl border border-line bg-surface/95 p-1.5 shadow-[0_10px_30px_rgb(0_0_0/0.25)] backdrop-blur sm:w-auto sm:max-w-full sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-x-2 sm:rounded-full"
-        >
-          <Segmented label="Date range" options={data.range_labels} value={range} onChange={setRange} />
-          <span aria-hidden className="hidden h-5 w-px bg-line sm:block" />
-          <Segmented label="Comparison" options={cmpOptions} value={activeCmp} onChange={setCmp} />
-        </div>
-      </div>
+      {/* Time bar: two floating panels fixed at the bottom of the screen while the
+          dashboard is in view; short labels (4W, MTD, WoW…) when space is tight. */}
+      <TimeBar
+        ranges={data.range_labels}
+        rangeShort={data.range_short_labels}
+        range={range}
+        onRange={setRange}
+        comparisons={cmpOptions}
+        comparisonShort={data.comparison_short_labels}
+        comparison={activeCmp}
+        onComparison={setCmp}
+      />
     </div>
   );
 }

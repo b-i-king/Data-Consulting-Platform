@@ -1,5 +1,7 @@
-// Landing page ("/"). Explains the offer in plain language and sends visitors
-// to the guest questionnaire at /start. No sign-in needed.
+// Landing page ("/"). Explains the offer in plain language. The main button
+// starts the guest questionnaire (/start, no sign-in needed); under it,
+// "Sign in" and "Create an account" (by email) lead to /signin and then the
+// signed-in workspace (/app).
 //
 // The category list below is short marketing copy for this page only. Full
 // descriptions and prices live in the backend (api/services/pricing.py) and
@@ -39,19 +41,34 @@ export default function Home() {
           A data consultant&apos;s first questions, answered in minutes. Clean your spreadsheets automatically, pay only
           for the processing time you use, and bring in a consultant when you&apos;re ready.
         </p>
-        <div className="flex flex-wrap gap-3">
-          <Link
-            href="/start"
-            className="rounded-full bg-brand px-6 py-2.5 font-semibold text-on-brand hover:bg-brand-strong"
-          >
-            Start as a guest
-          </Link>
-          <a
-            href="#services"
-            className="rounded-full border border-line bg-surface px-6 py-2.5 font-semibold hover:border-brand hover:text-brand"
-          >
-            See services
-          </a>
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/start"
+              className="rounded-full bg-brand px-6 py-2.5 font-semibold text-on-brand hover:bg-brand-strong"
+            >
+              Start as a guest
+            </Link>
+            <a
+              href="#services"
+              className="rounded-full border border-line bg-surface px-6 py-2.5 font-semibold hover:border-brand hover:text-brand"
+            >
+              See services
+            </a>
+          </div>
+          {/* Returning visitors and people ready for an account: sign in by email. */}
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-ink-muted">Or, with your email address:</span>
+            <Link href="/signin" className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand">
+              Sign in
+            </Link>
+            <Link
+              href="/signin?mode=signup"
+              className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand"
+            >
+              Create an account
+            </Link>
+          </div>
         </div>
       </section>
 

@@ -27,7 +27,10 @@ Email-only sign-in is a placeholder. Replace with **Supabase Auth magic links**:
 
 ### 2. Payments
 Stripe Checkout (or Stripe usage-based billing) charging from `usage_events`.
-Decide the open questions in [PRICING.md](PRICING.md) first.
+Decide the open questions in [PRICING.md](PRICING.md) first. Then make paid
+services unlock only after payment: the workspace's "Add to my plan" button opens
+checkout, and the payment confirmation calls `entitlements.add_services(...,
+source="payment")` (today, choosing a service unlocks it right away).
 
 ### 3. AI — ask your data
 Build the AI service following `data_skills/ask-your-data/SKILL.md`:

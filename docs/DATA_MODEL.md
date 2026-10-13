@@ -41,6 +41,7 @@ explicit, opt-in service (see "Stateless processing" in ARCHITECTURE.md).
 | "Do they have a team, and who is on it?" | `accounts.team_id` + `team_role` → `public.teams` | Individuals have `team_id = NULL` |
 | Goods vs. services → NAICS sector → subsector | `accounts.industry_supersector`, `naics_sector`, `naics_subsector` | Asked on step 1 of the funnel; copied to `warehouse.dim_client` |
 | Business size | `accounts.company_size` | LinkedIn size codes: `A` self-employed, `B` 1–10, `C` 11–50, `D` 51–200, `E` 201–500, `F` 501–1,000, `G` 1,001–5,000, `H` 5,001–10,000, `I` 10,001+ employees. Asked on step 1; copied to `warehouse.dim_client` so benchmarks can compare similar-sized businesses |
+| Services the client has | `public.account_services` | One row per service on an account's plan (the team owner's, for businesses); drives the workspace's left pane. See `docs/PRICING.md` |
 | Fact table with ID, type, subtype, date | `warehouse.fact_event` + `dim_event_type` | Type/subtype are a lookup table, so a new kind of event is a new **row**, not a new column or table |
 | Expenses, income | `dim_event_type` rows `transaction/income`, `transaction/expense` | `direction` (+1 / −1) makes net cash a single `SUM(amount * direction)` |
 | CSAT score, rating | rows `feedback/csat`, `feedback/rating`, `feedback/nps` | Stored in `fact_event.score` |

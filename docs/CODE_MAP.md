@@ -69,6 +69,15 @@ services the client chose are offered; the rest are badges from
    **`api/services/cleaning.py` → `_missing_advice()`** (levels, skewness, fill
    suggestion) and **`_apply_column_actions()`** (drop / fill).
 
+### 5. Follow a sign-in to the workspace
+
+1. **`app/page.tsx`** — "Start as a guest", and under it **Sign in** / **Create an
+   account** → **`app/signin/page.tsx`** → **`components/auth/AuthForm.tsx`**.
+2. **`components/workspace/Workspace.tsx`** — loads the plan with `getMyServices()`
+   (**`api/routers/accounts.py` → `my_services()`** → **`api/services/entitlements.py`**),
+   orders the left pane (Dashboard or Data Cleaning first; services not on the plan
+   grayed out with an ⓘ), then asks for files and shows the chosen service.
+
 ## File reference
 
 | File | One-line purpose | Change it when… |
@@ -100,6 +109,9 @@ services the client chose are offered; the rest are badges from
 | `scripts/sync_skill_docs.py` | Regenerates each SKILL.md "Run it" section | After changing a skill's options |
 | `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |
 | `web/components/explore/LockedService.tsx` | Locked-service badges | Changing how services unlock skills |
+| `web/components/explore/TimeBar.tsx` | Floating range + comparison panels, short labels | Changing the time controls |
+| `web/components/workspace/Workspace.tsx` | Signed-in workspace and left pane | Changing the workspace |
+| `api/services/entitlements.py` | Services on an account's plan | Adding payments (unlock on payment) |
 
 ## Patterns worth knowing
 
