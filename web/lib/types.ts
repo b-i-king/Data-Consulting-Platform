@@ -340,6 +340,9 @@ export interface DashboardData {
   default_comparison: string;
   range_labels: Record<string, string>;
   comparison_labels: Record<string, string>;
+  /** Short labels for narrow screens: 4W, 3M, 1Y, MTD, YTD, All · DoD, WoW, MoM. */
+  range_short_labels: Record<string, string>;
+  comparison_short_labels: Record<string, string>;
   ranges: Record<
     string,
     {
@@ -403,4 +406,16 @@ export interface SignupInput {
   industry_supersector?: Supersector | null;
   naics_sector?: string | null;
   naics_subsector?: string | null;
+  company_size?: string | null;
+  /** Services chosen in the questionnaire; put on the new account's plan. */
+  service_ids?: string[];
+}
+
+/** GET /api/accounts/services — the plan behind the workspace's left pane. */
+export interface MyServices {
+  /** Service ids the account can use (Data Cleaning is always included). */
+  active: string[];
+  /** Individuals and team owners can add services; team members can't. */
+  can_add: boolean;
+  services: (Service & { active: boolean })[];
 }

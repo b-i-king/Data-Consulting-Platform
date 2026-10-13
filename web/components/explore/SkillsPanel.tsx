@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
-import { categoryColor } from "@/lib/categories";
+import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { Cell, CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
 import BarChart from "@/components/charts/BarChart";
 import LineChart from "@/components/charts/LineChart";
@@ -124,6 +124,8 @@ export default function SkillsPanel(props: {
   services: Service[];
   selectedServices: string[];
   onAddService: (id: string) => void;
+  /** Show only this service's skills (the workspace has one page per service). */
+  category?: string;
 }) {
   const { input, groupId, columns } = props;
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -141,10 +143,14 @@ export default function SkillsPanel(props: {
   const unlocked = useMemo(() => new Set([ALWAYS_INCLUDED, ...props.selectedServices]), [props.selectedServices]);
   const byCategory = useMemo(() => {
     const groups: Record<string, SkillInfo[]> = {};
-    skills.filter((s) => unlocked.has(s.category)).forEach((s) => (groups[s.category_name] ??= []).push(s));
+    skills
+      .filter((s) => unlocked.has(s.category) && (!props.category || s.category === props.category))
+      .forEach((s) => (groups[s.category_name] ??= []).push(s));
     return groups;
-  }, [skills, unlocked]);
-  const locked = props.services.filter((s) => !unlocked.has(s.id) && skills.some((k) => k.category === s.id));
+  }, [skills, unlocked, props.category]);
+  const locked = props.category
+    ? []
+    : props.services.filter((s) => !unlocked.has(s.id) && skills.some((k) => k.category === s.id));
   // Keep a valid selection: default to the first unlocked skill.
   const available = Object.values(byCategory).flat();
   const skill = available.find((s) => s.id === selected) ?? available[0];
@@ -184,7 +190,7 @@ export default function SkillsPanel(props: {
             onChange={(e) => pick(e.target.value)}
           >
             {Object.entries(byCategory).map(([cat, list]) => (
-              <optgroup key={cat} label={cat}>
+              <optgroup key={cat} label={`${categoryEmoji(list[0].category)} ${cat}`}>
                 {list.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.label}

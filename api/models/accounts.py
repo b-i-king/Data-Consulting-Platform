@@ -46,6 +46,9 @@ class SignupIn(BaseModel):
     # Company size (business accounts only): LinkedIn size code "A"–"I",
     # e.g. "C" = 11–50 employees. See intake.COMPANY_SIZES.
     company_size: str | None = None
+    # Services picked in the guest questionnaire ("Your needs"), put on the
+    # new account's plan. See api/services/entitlements.py.
+    service_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def _business_rules(self) -> "SignupIn":
@@ -96,3 +99,9 @@ class AuthOut(BaseModel):
 class QuoteIn(BaseModel):
     service_ids: list[str] = Field(default_factory=list)
     runtime_seconds: float | None = Field(default=None, ge=0)
+
+
+class AddServiceIn(BaseModel):
+    """Add one service to the plan (from the workspace's left pane)."""
+
+    service_id: str

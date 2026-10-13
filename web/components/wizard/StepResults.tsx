@@ -117,7 +117,8 @@ export default function StepResults(props: {
   );
 }
 
-function GroupDetails(props: {
+/** The cleaning report for one table (also used by the signed-in workspace). */
+export function GroupDetails(props: {
   group: GroupOutput;
   bookingUrl: string;
   applied: Record<string, ColumnAction>;

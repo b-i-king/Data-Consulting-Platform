@@ -183,6 +183,7 @@ export default function Wizard() {
         <StepAccount
           defaultType={accountType ?? "individual"}
           industry={industry}
+          serviceIds={serviceIds}
           session={session}
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}

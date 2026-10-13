@@ -13,6 +13,7 @@ import type {
   AuthResponse,
   IntakeOptions,
   CleaningInput,
+  MyServices,
   Quote,
   SignupInput,
 } from "./types";
@@ -80,6 +81,17 @@ export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accou
 export const signin = (email: string) => postJson<AuthResponse>("/api/accounts/signin", { email });
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
+
+/** Services on the signed-in account's plan (drives the workspace's left pane). */
+export async function getMyServices(token: string): Promise<MyServices> {
+  const res = await fetch(`${API_URL}/api/accounts/services`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Add a service to the plan (placeholder until payments — see api/services/entitlements.py). */
+export const addMyService = (token: string, serviceId: string) =>
+  postJson<MyServices>("/api/accounts/services", { service_id: serviceId }, token);
 
 /** The missing-value choices as form fields (same for analyze, download and skills). */
 const choiceFields = (c: CleaningInput) => ({

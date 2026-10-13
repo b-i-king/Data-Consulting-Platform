@@ -1,4 +1,4 @@
-// Root layout: wraps every page with the header (logo, theme switch, CTA) and footer.
+// Root layout: wraps every page with the header (logo, theme switch, sign-in links) and footer.
 //
 // Theme: THEME_INIT_SCRIPT runs before the page paints and applies a saved
 // Light/Dark choice; with no saved choice the CSS follows the computer's
@@ -10,6 +10,7 @@ import type { Metadata, Viewport } from "next";
 import { Fira_Code, Inter } from "next/font/google";
 import Link from "next/link";
 import ThemeToggle, { THEME_INIT_SCRIPT } from "@/components/ThemeToggle";
+import HeaderAuth from "@/components/auth/HeaderAuth";
 import { SITE_NAME } from "@/lib/format";
 
 // Fira Code = headings and numbers (VGST signature). Inter = body text.
@@ -54,12 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <div className="flex items-center gap-3">
               <ThemeToggle />
-              <Link
-                href="/start"
-                className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong"
-              >
-                Get started
-              </Link>
+              <HeaderAuth />
             </div>
           </div>
         </header>

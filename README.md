@@ -12,6 +12,14 @@ higher-impact projects.
 
 ## What it does today (v0.1)
 
+The home page offers **Start as a guest**, and under it **Sign in** /
+**Create an account** with an email address. Signed-in users get a
+**workspace** (`/app`) with a Copilot Money-style left pane: the services on
+their plan first (the dashboard on top when they have it), the rest grayed out
+with an ⓘ explaining what each adds and how to get it.
+
+The guest path:
+
 1. **About you** — individual or business; businesses pick their size
    (LinkedIn's employee bands), goods vs. services, then NAICS sector and subsector
 2. **Your data** — files on your computer (live), cloud storage / warehouses and

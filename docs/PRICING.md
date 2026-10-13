@@ -43,6 +43,22 @@ files finish in well under a second, so in practice the first minute is a flat
 fee — consider whether `MINIMUM_CHARGE_USD` or a free tier fits your goals of
 keeping costs low for small businesses.
 
+## Which services an account has (the workspace)
+
+The signed-in workspace (`/app`) opens the services on the account's **plan**
+(table `account_services`, code `api/services/entitlements.py`):
+
+- **Data Cleaning** is always included.
+- Services chosen in the guest questionnaire are put on the plan at signup.
+- Other services appear grayed out in the left pane, with an ⓘ explaining what
+  they add, the price, and how to get them; **Add to my plan** adds one.
+- In a business, the team **owner** holds the plan; team members share it but
+  can't change it.
+
+**Placeholder until payments:** adding a service unlocks it right away. When
+checkout exists, only a confirmed payment should unlock a paid service (see
+[ROADMAP.md](ROADMAP.md) → Payments).
+
 ## What is recorded
 
 Each download writes a row to `usage_events` (account, dataset name, row count,

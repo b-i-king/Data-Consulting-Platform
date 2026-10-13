@@ -61,6 +61,21 @@ python scripts/make_sample_data.py --end 2026-10-31
 5. Upload `samples/sales.csv` + `samples/customers.csv` + `samples/quickbooks_customers.csv`
    together to see multi-file grouping, a shared-ID link (🔗) and a fuzzy link (≈).
 
+### The signed-in workspace
+
+1. On the home page, click **Create an account** (under "Start as a guest"), sign up
+   with any email, and you land in **/app**.
+2. The left pane shows 🧹 Data Cleaning on top (always included) and every other
+   service grayed out with an **i** button — click one to see what it adds, its price,
+   and how to get it.
+3. Choose `samples/sales.csv`. Click the grayed **📊 Dashboard** → **Add Data
+   Visualization to my plan**: Dashboard moves to the top of the pane and opens.
+4. The time controls are two panels at the bottom: ranges above, comparisons
+   below. Make the window narrow (or open it on a phone): they switch to
+   **4W 3M 1Y MTD YTD All** and **DoD WoW MoM**.
+5. Services picked in the guest questionnaire ("Your needs") are already on the
+   plan if you create the account at the wizard's download step.
+
 ## 2. From the command line
 
 ```bash

@@ -940,9 +940,10 @@ calculation:
 3. **Filters describe WHO:** customer type, segment, age group, gender, region,
    store… whichever such columns exist (`filters` / `filter_columns`). KPIs and
    filter choices are ranked on all rows, so they stay put when filtering.
-4. **Time controls float at the bottom** of the screen (Copilot Money style):
-   last 4 weeks · 3 months · year · month to date · year to date · all time, and
-   day / week / month over period.
+4. **Time controls float at the bottom** of the screen (Copilot Money style), as
+   two panels — ranges (last 4 weeks · 3 months · year · month to date · year to
+   date · all time) above comparisons (day / week / month over period) — with
+   short labels (4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM) when the full ones don't fit.
 
 ## Run it (platform implementation)
 

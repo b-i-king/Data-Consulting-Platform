@@ -189,3 +189,11 @@ def test_skill_docs_match_the_code():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.sync(check=True) == [], "Run: python scripts/sync_skill_docs.py"
+
+
+def test_dashboard_sends_short_labels_for_narrow_screens(sales):
+    d = run_skill("build-dashboard", sales, {"include_html": False}).data
+    assert d["range_short_labels"] == {"last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
+                                       "month_to_date": "MTD", "year_to_date": "YTD", "all": "All"}
+    assert d["comparison_short_labels"] == {"dod": "DoD", "wow": "WoW", "mom": "MoM"}
+    assert set(d["range_short_labels"]) == set(d["range_labels"])

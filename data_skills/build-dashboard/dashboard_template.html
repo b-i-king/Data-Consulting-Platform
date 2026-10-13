@@ -7,7 +7,8 @@
   Layout: overview cards (total, transactions) and a "transactions over time"
   line chart; then one card + line chart per KPI (the most common transaction
   types); then a category breakdown. The date range and comparison live in a
-  bar fixed at the bottom of the screen (like Copilot Money). Filters applied
+  two panels fixed at the bottom of the screen (like Copilot Money), with
+  short labels (4W, MTD, WoW…) when the full ones don't fit. Filters applied
   when the file was made are listed at the top. Light/dark follows the computer.
   Chart colors were checked with the dataviz palette validator (both themes).
 -->
@@ -69,20 +70,15 @@
   .card.pick[aria-pressed="true"] { border-color: var(--brand); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
   .chip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
-  /* Copilot Money-style time bar: floats at the bottom of the screen while you scroll. */
-  .timebar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10;
-             display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: calc(100% - 24px);
-             background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px;
-             box-shadow: 0 10px 30px rgb(0 0 0 / .25); }
-  .timebar .seg { border: 0; padding: 0; }
-  main { padding-bottom: 120px; }
-  /* Phones: two rows (ranges, comparisons), each scrolls sideways instead of wrapping. */
-  @media (max-width: 760px) {
-    .timebar { left: 12px; right: 12px; transform: none; flex-direction: column; flex-wrap: nowrap;
-               align-items: stretch; border-radius: 20px; }
-    .timebar .seg { flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; }
-    .timebar .seg button { white-space: nowrap; padding: 6px 10px; }
-  }
+  /* Copilot Money-style time controls: two separate panels, one above the other,
+     fixed at the bottom of the screen while you scroll. */
+  .timebar { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 10; pointer-events: none;
+             display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .timebar .seg { pointer-events: auto; flex-wrap: nowrap; max-width: 100%; overflow-x: auto;
+                  box-shadow: 0 10px 30px rgb(0 0 0 / .25); }
+  .timebar .seg button { white-space: nowrap; }
+  .timebar.compact .seg button { padding: 6px 10px; }
+  main { padding-bottom: 150px; }
 </style>
 </head>
 <body>
@@ -111,9 +107,9 @@
 </main>
 
 <!-- Date range + comparison, fixed at the bottom of the screen. -->
-<div class="timebar" role="group" aria-label="Date range and comparison">
-  <div class="seg" id="ranges" aria-label="Date range"></div>
-  <div class="seg" id="comparisons" aria-label="Comparison"></div>
+<div class="timebar" id="timebar" role="group" aria-label="Date range and comparison">
+  <div class="seg" id="ranges" role="radiogroup" aria-label="Date range"></div>
+  <div class="seg" id="comparisons" role="radiogroup" aria-label="Comparison"></div>
 </div>
 <div class="tip" id="tip"></div>
 
@@ -135,23 +131,38 @@ function deltaNode(p) {
   return span;
 }
 
-function buttons(container, labels, key) {
+// Short labels (4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM) when the full ones don't fit.
+let compact = false;
+function buttons(container, labels, key, shortLabels) {
   container.replaceChildren();
   for (const [id, label] of Object.entries(labels)) {
-    const b = el("button", label); b.type = "button";
+    const b = el("button", compact && shortLabels ? (shortLabels[id] || label) : label); b.type = "button";
     b.setAttribute("aria-pressed", String(state[key] === id));
+    b.setAttribute("aria-label", label);   // screen readers always hear the full label
+    if (compact) b.title = label;
     b.onclick = () => { state[key] = id; render(); };
     container.append(b);
   }
 }
+
+// Measure, don't guess: draw the full labels; if a panel is wider than the
+// screen allows, switch both panels to short labels.
+function fitTimebar() {
+  compact = false; render();
+  const bar = $("timebar");
+  const tooWide = [...bar.children].some((seg) => seg.scrollWidth > bar.clientWidth);
+  bar.classList.toggle("compact", tooWide);
+  if (tooWide) { compact = true; render(); }
+}
+addEventListener("resize", fitTimebar);
 
 function render() {
   const R = D.ranges[state.range];
   // Day-over-day isn't available on very long ranges: fall back to week over week.
   if (!R.series[state.cmp]) state.cmp = R.series.wow ? "wow" : "mom";
   const cmpLabels = Object.fromEntries(Object.entries(D.comparison_labels).filter(([k]) => R.series[k]));
-  buttons($("ranges"), D.range_labels, "range");
-  buttons($("comparisons"), cmpLabels, "cmp");
+  buttons($("ranges"), D.range_labels, "range", D.range_short_labels);
+  buttons($("comparisons"), cmpLabels, "cmp", D.comparison_short_labels);
 
   const w = R.window;
   $("title").textContent = D.title;
@@ -277,7 +288,7 @@ function drawChart(svg, rows, H) {
   hit.addEventListener("blur", () => { tip.style.display = "none"; });
 }
 
-render();
+fitTimebar();
 </script>
 </body>
 </html>

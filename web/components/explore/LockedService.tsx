@@ -12,7 +12,7 @@
 "use client";
 
 import { fmtUsd } from "@/lib/format";
-import { categoryColor } from "@/lib/categories";
+import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { Service } from "@/lib/types";
 
 /** "from $500", "Free call", "Early access", "Included". */
@@ -33,7 +33,10 @@ export function LockedBadge({ service, onAdd }: { service: Service; onAdd: (id: 
     >
       <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: categoryColor(service.id) }} />
       <span aria-hidden>🔒</span>
-      <span className="font-medium">{service.name}</span>
+      <span className="font-medium">
+        <span aria-hidden>{categoryEmoji(service.id)} </span>
+        {service.name}
+      </span>
       <span className="text-xs text-ink-muted">· {priceLabel(service)}</span>
       <span className="text-xs font-semibold text-brand group-hover:underline">Add</span>
     </button>
