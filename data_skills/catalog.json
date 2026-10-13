@@ -10,7 +10,7 @@
       "id": "data_cleaning",
       "name": "Data Cleaning",
       "skills": [
-        { "id": "data-cleaning", "label": "Duplicate & missing-value cleanup", "source": "project" },
+        { "id": "data-cleaning", "label": "Duplicate & missing-value cleanup", "source": "project", "primary": true },
         { "id": "flat-file-intake", "label": "Multi-file sorting & stacking", "source": "project" },
         { "id": "type-consistency-sweep", "label": "Data-type consistency check", "source": "rosehill" },
         { "id": "anomaly-analysis", "label": "Outlier & impossible-value sweep", "source": "rosehill" },
@@ -22,7 +22,7 @@
       "id": "data_strategy_discovery",
       "name": "Data Strategy & Discovery",
       "skills": [
-        { "id": "discovery-call-prep", "label": "Data-source inventory & roadmap", "source": "project" },
+        { "id": "discovery-call-prep", "label": "Data-source inventory & roadmap", "source": "project", "primary": true },
         { "id": "sample-size", "label": "\"Is there enough data?\" assessment", "source": "project" },
         { "id": "data-enrichment", "label": "Data-gap & enrichment plan", "source": "rosehill" }
       ]
@@ -31,7 +31,7 @@
       "id": "data_exploration_analysis",
       "name": "Data Exploration & Analysis",
       "skills": [
-        { "id": "explore-data", "label": "Dataset profiling", "source": "anthropic-data" },
+        { "id": "explore-data", "label": "Dataset profiling", "source": "anthropic-data", "primary": true },
         { "id": "analyze", "label": "Answers to business questions", "source": "anthropic-data" },
         { "id": "trend-analysis", "label": "Key trends & growth rates", "source": "rosehill" },
         { "id": "correlation-analysis", "label": "What moves together (correlations)", "source": "rosehill" },
@@ -46,7 +46,7 @@
       "id": "data_visualization",
       "name": "Data Visualization",
       "skills": [
-        { "id": "build-dashboard", "label": "Interactive dashboards", "source": "anthropic-data" },
+        { "id": "build-dashboard", "label": "Interactive dashboards", "source": "anthropic-data", "primary": true },
         { "id": "create-viz", "label": "Charts from your data", "source": "anthropic-data" },
         { "id": "data-visualization", "label": "Chart design best practices", "source": "anthropic-data" },
         { "id": "data-reporting", "label": "Shareable PDF reports", "source": "rosehill" }
@@ -57,7 +57,7 @@
       "name": "Data Engineering",
       "skills": [
         { "id": "er-diagram", "label": "ER diagrams", "source": "project" },
-        { "id": "data-dictionary-creator", "label": "Data dictionaries", "source": "rosehill" },
+        { "id": "data-dictionary-creator", "label": "Data dictionaries", "source": "rosehill", "primary": true },
         { "id": "sql-queries", "label": "Warehouse-ready SQL", "source": "anthropic-data" }
       ]
     },
@@ -65,7 +65,7 @@
       "id": "data_science_ml",
       "name": "Data Science & Machine Learning",
       "skills": [
-        { "id": "predictive-modeling", "label": "Forecasts & predictive models", "source": "project" },
+        { "id": "predictive-modeling", "label": "Forecasts & predictive models", "source": "project", "primary": true },
         { "id": "multivariate-analysis", "label": "Multi-factor (multivariate) analysis", "source": "rosehill" }
       ]
     },
@@ -73,7 +73,7 @@
       "id": "ai",
       "name": "AI",
       "skills": [
-        { "id": "ask-your-data", "label": "Ask questions in plain English", "source": "project" },
+        { "id": "ask-your-data", "label": "Ask questions in plain English", "source": "project", "primary": true },
         { "id": "setup-data-workspace", "label": "\"Talk to your data\" workspace", "source": "rosehill" },
         { "id": "data-context-extractor", "label": "Learns your business vocabulary", "source": "anthropic-data" }
       ]

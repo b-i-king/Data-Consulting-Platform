@@ -76,7 +76,10 @@ services the client chose are offered; the rest are badges from
 2. **`components/workspace/Workspace.tsx`** — loads the plan with `getMyServices()`
    (**`api/routers/accounts.py` → `my_services()`** → **`api/services/entitlements.py`**),
    orders the left pane (Dashboard or Data Cleaning first; services not on the plan
-   grayed out with an ⓘ), then asks for files and shows the chosen service.
+   grayed out with an ⓘ), then asks for files and shows the chosen service, with a
+   **Skill** menu at the top. The default is the built-in view (cleaning report,
+   dashboard) or the skill marked `"primary": true` in `data_skills/catalog.json`,
+   run automatically by `SkillsPanel` (`fixedSkill`, `autoRun`).
 
 ## File reference
 

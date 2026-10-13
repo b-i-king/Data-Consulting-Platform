@@ -10,7 +10,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { Cell, CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
@@ -126,18 +126,27 @@ export default function SkillsPanel(props: {
   onAddService: (id: string) => void;
   /** Show only this service's skills (the workspace has one page per service). */
   category?: string;
+  /** Show just this one skill, with no skill menu (the workspace has its own menu). */
+  fixedSkill?: string;
+  /** Run the skill as soon as it opens. If it needs options first, show the form instead. */
+  autoRun?: boolean;
+  /** A result kept from earlier, so switching back to a skill doesn't re-run it. */
+  initialResult?: SkillResult | null;
+  onResult?: (r: SkillResult) => void;
 }) {
   const { input, groupId, columns } = props;
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [values, setValues] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<SkillResult | null>(null);
+  const [result, setResult] = useState<SkillResult | null>(props.initialResult ?? null);
+  const [hint, setHint] = useState<string | null>(null);   // "this skill needs an option first"
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getSkills().then(setSkills).catch((e) => setError(e.message));
   }, []);
+
 
   // Unlocked = Data Cleaning + every service the user chose.
   const unlocked = useMemo(() => new Set([ALWAYS_INCLUDED, ...props.selectedServices]), [props.selectedServices]);
@@ -148,12 +157,15 @@ export default function SkillsPanel(props: {
       .forEach((s) => (groups[s.category_name] ??= []).push(s));
     return groups;
   }, [skills, unlocked, props.category]);
-  const locked = props.category
+  // The workspace lists locked services in its own left pane, so no badges there.
+  const locked = props.category || props.fixedSkill
     ? []
     : props.services.filter((s) => !unlocked.has(s.id) && skills.some((k) => k.category === s.id));
   // Keep a valid selection: default to the first unlocked skill.
   const available = Object.values(byCategory).flat();
-  const skill = available.find((s) => s.id === selected) ?? available[0];
+  const skill = props.fixedSkill
+    ? skills.find((s) => s.id === props.fixedSkill)
+    : (available.find((s) => s.id === selected) ?? available[0]);
 
   function pick(id: string) {
     setSelected(id);
@@ -162,24 +174,42 @@ export default function SkillsPanel(props: {
     setError(null);
   }
 
-  async function run() {
+  async function run(auto = false) {
     if (!skill) return;
     setBusy(true);
     setError(null);
+    setHint(null);
     try {
       // Send only options the user filled in; empty = the skill's default.
       const params = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== ""));
-      setResult(await runSkill(skill.id, input, params, groupId));
+      const r = await runSkill(skill.id, input, params, groupId);
+      setResult(r);
+      props.onResult?.(r);
     } catch (e) {
       setResult(null);
-      setError(e instanceof Error ? e.message : "The skill could not run.");
+      const msg = e instanceof Error ? e.message : "The skill could not run.";
+      // An automatic run that needs an option (e.g. which column to predict) isn't
+      // an error: show the form with a hint instead.
+      if (auto) setHint(`${msg} Fill in the options below, then run it.`);
+      else setError(msg);
     } finally {
       setBusy(false);
     }
   }
 
+  // Run once as soon as the skill is known (workspace pages open on a result).
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (props.autoRun && skill && !result && !autoRan.current) {
+      autoRan.current = true;
+      run(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.autoRun, skill?.id]);
+
   return (
     <div className="space-y-4">
+      {!props.fixedSkill && (
       <div className="flex flex-wrap items-end gap-3">
         <label className="block min-w-64 flex-1 space-y-1 text-sm">
           <span className="font-medium">Skill</span>
@@ -207,6 +237,7 @@ export default function SkillsPanel(props: {
           </span>
         )}
       </div>
+      )}
 
       {locked.length > 0 && (
         <div>
@@ -220,6 +251,7 @@ export default function SkillsPanel(props: {
       )}
 
       <div className="space-y-4">
+        {hint && <p className="rounded-xl border border-line bg-surface-2 p-3 text-sm">{hint}</p>}
         {skill && (
           <Card>
             <div className="mb-3">
@@ -245,7 +277,7 @@ export default function SkillsPanel(props: {
                 ))}
             </div>
             <div className="mt-4">
-              <Button onClick={run} disabled={busy}>
+              <Button onClick={() => run()} disabled={busy}>
                 {busy ? "Running…" : "Run skill"}
               </Button>
             </div>

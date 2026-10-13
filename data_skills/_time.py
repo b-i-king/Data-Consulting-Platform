@@ -5,6 +5,7 @@ Used by the dashboard (build-dashboard) and trend skills. It answers two
 Copilot Money-style questions for any table with a date column:
 
 1. "Show me a time window."  — RANGES
+       last_1_week     the 7 days ending on the "as of" date
        last_4_weeks    the 28 days ending on the "as of" date
        last_3_months   3 calendar months back from the "as of" date
        last_1_year     12 months back from the "as of" date
@@ -13,6 +14,7 @@ Copilot Money-style questions for any table with a date column:
        all             everything
 
    Each window is compared with the PREVIOUS window of the same kind:
+       last week     vs. the 7 days before that
        last 4 weeks  vs. the 4 weeks before that
        last 3 months vs. the 3 months before that
        last 1 year   vs. the year before that
@@ -42,6 +44,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 RANGES: dict[str, str] = {
+    "last_1_week": "Last week",
     "last_4_weeks": "Last 4 weeks",
     "last_3_months": "Last 3 months",
     "last_1_year": "Last year",
@@ -52,7 +55,7 @@ RANGES: dict[str, str] = {
 
 # Short labels for narrow screens (phones), Copilot Money style.
 RANGE_SHORT: dict[str, str] = {
-    "last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
+    "last_1_week": "1W", "last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
     "month_to_date": "MTD", "year_to_date": "YTD", "all": "All",
 }
 COMPARISON_SHORT: dict[str, str] = {"dod": "DoD", "wow": "WoW", "mom": "MoM"}
@@ -92,6 +95,9 @@ def window(range_key: str, as_of: pd.Timestamp, first_date: pd.Timestamp) -> Win
 
     if range_key == "all":
         return Window(range_key, label, first_date.normalize(), end, None, None)
+    if range_key == "last_1_week":
+        start = end - pd.Timedelta(days=6)
+        return Window(range_key, label, start, end, start - pd.Timedelta(days=7), start - day)
     if range_key == "last_4_weeks":
         start = end - pd.Timedelta(days=27)
         return Window(range_key, label, start, end, start - pd.Timedelta(days=28), start - day)
@@ -184,3 +190,49 @@ def best_comparison(first: pd.Timestamp, last: pd.Timestamp) -> str:
     """Pick a sensible default granularity for the span of the data."""
     days = (last - first).days
     return "dod" if days <= 45 else "wow" if days <= 200 else "mom"
+
+
+# ── What the data can support ────────────────────────────────────────────────
+# Ranges and comparisons are offered only when there is enough history, so a
+# brand-new export doesn't show "Last year" with one week of data in it:
+#
+#   last week / 4 weeks / 3 months / year   the data covers the whole window
+#   month to date, year to date             the data also covers the SAME DAYS
+#                                           last month / last year (they exist
+#                                           to be compared, so that must be fair)
+#   all time                                more than a year of data
+#
+#   day over day     at least 2 days      (in the data and in the range)
+#   week over week   at least 2 weeks
+#   month over month at least 2 months
+
+COMPARISON_MIN_DAYS = {"dod": 2, "wow": 14, "mom": 59}
+
+
+def available_ranges(first_date: pd.Timestamp, as_of: pd.Timestamp) -> list[str]:
+    """Range ids the data supports, in RANGES order (may be empty)."""
+    first = first_date.normalize()
+    out = []
+    for key in RANGES:
+        w = window(key, as_of, first_date)
+        if key == "all":
+            ok = (as_of.normalize() - first).days + 1 > 365
+        elif key in ("month_to_date", "year_to_date"):
+            ok = first <= w.prev_start
+        else:
+            ok = first <= w.start
+        if ok:
+            out.append(key)
+    return out
+
+
+def available_comparisons(first_date: pd.Timestamp, last_date: pd.Timestamp,
+                          start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> list[str]:
+    """
+    Comparison ids that make sense for the data (and, if given, for one range):
+    each needs at least two periods' worth of days.
+    """
+    days = (last_date.normalize() - first_date.normalize()).days + 1
+    if start is not None and end is not None:
+        days = min(days, (end - start).days + 1)
+    return [k for k, need in COMPARISON_MIN_DAYS.items() if days >= need]

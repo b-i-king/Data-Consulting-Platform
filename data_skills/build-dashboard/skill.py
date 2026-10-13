@@ -269,10 +269,20 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
     # ── Time windows ────────────────────────────────────────────────────────
     first, last = data[date_col].min(), data[date_col].max()
     anchor = pd.Timestamp(as_of) if as_of else last
-    if comparison == "auto":
+    # Only offer what the data can support (see _time.available_ranges): a
+    # week of data gets "Last week" + day over day; "All time" needs > 1 year.
+    offered_ranges = _time.available_ranges(first, anchor)
+    offered_cmps = _time.available_comparisons(first, anchor)
+    if range not in offered_ranges:
+        # Fall back to the longest rolling window available, else everything.
+        fallback = [k for k in ("last_3_months", "last_1_year", "last_4_weeks", "last_1_week") if k in offered_ranges]
+        range = fallback[0] if fallback else (offered_ranges[0] if offered_ranges else "all")
+    dw = _time.window(range, anchor, first)
+    range_cmps = _time.available_comparisons(first, anchor, dw.start, dw.end)
+    if comparison == "auto" or comparison not in range_cmps:
         # Granularity suited to the range on screen: 3 months -> weekly points, 1 year -> monthly.
-        dw = _time.window(range, anchor, first)
-        default_cmp = _time.best_comparison(dw.start, dw.end)
+        best = _time.best_comparison(dw.start, dw.end)
+        default_cmp = best if best in range_cmps else (range_cmps[-1] if range_cmps else best)
     else:
         default_cmp = comparison
 
@@ -289,7 +299,8 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         kpi_numbers = {m: _time.window_totals(data, date_col, [m], w, metric_agg[m])[m] for m in metrics}
         span_days = (w.end - w.start).days + 1
         series = {}
-        for cmp_key in _time.COMPARISONS:
+        # Comparisons with at least two periods in this range (and in the data).
+        for cmp_key in _time.available_comparisons(first, anchor, w.start, w.end):
             if cmp_key == "dod" and span_days > MAX_DAILY_POINTS:
                 continue
             series[cmp_key] = {m: _range_series(data, date_col, m, cmp_key, w, metric_agg[m]) for m in metrics}
@@ -318,6 +329,8 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
                             f"{fmt_pct(kk['pct_change'])} vs. the previous {_time.RANGES[range].lower()}.")
     overall = overview[0]
     for key in ("month_to_date", "year_to_date"):
+        if key not in offered_ranges:
+            continue   # not enough history for a fair comparison
         kk = ranges[key]["kpis"][overall]
         if kk.get("pct_change") is not None:
             same = "the same days last month" if key == "month_to_date" else "the same days last year"
@@ -353,6 +366,11 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         "comparison_labels": {k: v[0] for k, v in _time.COMPARISONS.items()},
         # Used when the time bar doesn't fit on one line (phones): 4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM.
         "range_short_labels": _time.RANGE_SHORT,
+        # What the data supports: the time bar offers only these (may be empty —
+        # then it's hidden). "days_of_data" counts first to last date.
+        "available_ranges": offered_ranges,
+        "available_comparisons": offered_cmps,
+        "days_of_data": int((anchor.normalize() - first.normalize()).days + 1),
         "comparison_short_labels": _time.COMPARISON_SHORT,
         "ranges": ranges, "breakdown": breakdown,
     })

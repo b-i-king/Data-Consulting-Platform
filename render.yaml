@@ -8,7 +8,10 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     # gunicorn manages uvicorn workers; 120 s timeout leaves room for big files.
     startCommand: gunicorn api.main:app -w ${WEB_CONCURRENCY:-1} -k uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:$PORT
-    plan: starter
+    # free = $0 for test runs: sleeps after 15 idle minutes (about a minute to
+    # wake up) and has 512 MB of memory (the API uses about 270 MB). Switch to
+    # `starter` (paid) before real clients use it, so it never sleeps.
+    plan: free
     healthCheckPath: /health
     autoDeploy: true
     branch: main
@@ -16,7 +19,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: DATABASE_URL
-        sync: false
+        sync: false        # optional for a test run: leave empty to keep accounts in memory
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: ALLOWED_ORIGINS

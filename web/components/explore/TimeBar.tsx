@@ -4,6 +4,10 @@
 //   [ Last 4 weeks | Last 3 months | Last year | Month to date | Year to date | All time ]
 //                [ Day over day | Week over week | Month over month ]
 //
+// The panels are slightly see-through (frosted), so the chart behind them stays
+// visible. Only the ranges and comparisons the data supports are passed in; a
+// panel with nothing to offer is left out, and with neither the bar is hidden.
+//
 // When the full labels don't fit the width available — a phone, a narrow
 // window, a zoomed-in browser — both panels switch to short labels:
 //
@@ -31,7 +35,7 @@ function Panel(props: {
     <div
       role="radiogroup"
       aria-label={props.label}
-      className="flex max-w-full gap-1 rounded-full border border-line bg-surface/95 p-1 shadow-[0_10px_30px_rgb(0_0_0/0.25)] backdrop-blur"
+      className="flex max-w-full gap-1 rounded-full border border-line/70 bg-surface/60 p-1 shadow-[0_10px_30px_rgb(0_0_0/0.18)] backdrop-blur-md"
     >
       {Object.keys(props.options).map((k) => (
         <button
@@ -79,6 +83,10 @@ export default function TimeBar(props: {
     return () => ro.disconnect();
   }, [props.ranges, props.comparisons]);
 
+  const hasRanges = Object.keys(props.ranges).length > 0;
+  const hasComparisons = Object.keys(props.comparisons).length > 0;
+  if (!hasRanges && !hasComparisons) return null;   // not enough data for any time view
+
   return (
     <div ref={wrap} className="pointer-events-none sticky bottom-4 z-20 flex flex-col items-center gap-2">
       {/* Invisible full-label copy, only used to measure the width needed. It sits
@@ -93,9 +101,12 @@ export default function TimeBar(props: {
           ))}
         </div>
       </div>
+      {hasRanges && (
       <div className="pointer-events-auto max-w-full">
         <Panel label="Date range" options={props.ranges} short={props.rangeShort} compact={compact} value={props.range} onChange={props.onRange} />
       </div>
+      )}
+      {hasComparisons && (
       <div className="pointer-events-auto max-w-full">
         <Panel
           label="Comparison"
@@ -106,6 +117,7 @@ export default function TimeBar(props: {
           onChange={props.onComparison}
         />
       </div>
+      )}
     </div>
   );
 }

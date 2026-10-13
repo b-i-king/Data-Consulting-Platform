@@ -40,7 +40,8 @@ def _catalog_categories() -> dict[str, dict]:
     out = {}
     for cat in catalog["categories"]:
         for s in cat["skills"]:
-            out[s["id"]] = {"category": cat["id"], "category_name": cat["name"], "label": s["label"]}
+            out[s["id"]] = {"category": cat["id"], "category_name": cat["name"], "label": s["label"],
+                            "primary": bool(s.get("primary"))}
     return out
 
 
@@ -77,6 +78,8 @@ def describe(skill_id: str) -> dict:
         "category": meta.get("category"),
         "category_name": meta.get("category_name"),
         "label": meta.get("label", spec.title),
+        # The skill a service's workspace page opens on (one per category).
+        "primary": meta.get("primary", False),
         "params": {
             name: {"type": p.type, "default": p.default, "help": p.help,
                    "choices": list(p.choices), "api_allowed": p.api_allowed}

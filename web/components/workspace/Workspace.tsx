@@ -14,8 +14,14 @@
 // RIGHT SIDE
 //   Client data is never stored (docs/ARCHITECTURE.md), so each visit starts
 //   by picking files; they stay in this browser tab's memory and are re-sent
-//   when needed. Then: the cleaning report + download (Data Cleaning), the
-//   dashboard (Data Visualization), or that service's skills (everything else).
+//   when needed. Each service's page has a SKILL MENU at the top and opens on
+//   its primary view:
+//       Data Cleaning       the cleaning report + download
+//       Data Visualization  the dashboard
+//       everything else     the service's primary skill (data_skills/catalog.json
+//                           "primary"), run automatically when it needs no options
+//   Picking another skill from the menu shows that skill instead. Results are
+//   kept while the files stay the same, so switching back is instant.
 //
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
 // Until payments exist, "Add to my plan" unlocks a service right away.
@@ -25,11 +31,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { addMyService, analyzeFiles, downloadCleaned, getIntakeOptions, getMyServices } from "@/lib/api";
+import { addMyService, analyzeFiles, downloadCleaned, getIntakeOptions, getMyServices, getSkills } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, MyServices, Service } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
@@ -38,6 +44,12 @@ import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
+const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard)
+// The skill each built-in view already shows, so it isn't listed twice in the menu.
+const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
+  [CLEANING]: { skill: "data-cleaning", label: "Cleaning report" },
+  [DASHBOARD]: { skill: "build-dashboard", label: "Dashboard" },
+};
 
 /** The name shown in the left pane: the visualization service IS the dashboard. */
 const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
@@ -85,6 +97,11 @@ export default function Workspace() {
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
+  // Skill menu: every skill, the choice per service, and results kept for this visit.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [results, setResults] = useState<Record<string, SkillResult>>({});
+
   useEffect(() => {
     const s = loadSession();
     setSession(s);
@@ -92,6 +109,9 @@ export default function Workspace() {
     getMyServices(s.token)
       .then(setPlan)
       .catch((e) => setError(e.status === 401 ? "Your sign-in expired. Please sign in again." : e.message));
+    getSkills()
+      .then(setSkills)
+      .catch(() => {});
     getIntakeOptions()
       .then((o) => setBookingUrl(o.booking_url))
       .catch(() => {});
@@ -112,7 +132,19 @@ export default function Workspace() {
   const input: CleaningInput = useMemo(() => ({ files, strategy: "keep", columnActions }), [files, columnActions]);
   const group = analysis?.groups[groupIndex];
 
+  // The current service's skill menu: built-in view first (if any), then its skills.
+  const menu = useMemo(() => {
+    if (!current) return [] as { value: string; label: string }[];
+    const view = VIEW_SKILL[current];
+    const list = skills.filter((k) => k.category === current && k.id !== view?.skill);
+    // Primary skill first, then catalog order.
+    list.sort((a, b) => Number(b.primary) - Number(a.primary));
+    return [...(view ? [{ value: VIEW, label: view.label }] : []), ...list.map((k) => ({ value: k.id, label: k.label }))];
+  }, [skills, current]);
+  const choice = (current && picked[current]) || menu[0]?.value || VIEW;
+
   async function clean(chosen: File[]) {
+    setResults({});   // new data: earlier skill results no longer apply
     setBusy(true);
     setError(null);
     try {
@@ -132,6 +164,7 @@ export default function Workspace() {
     const next = { ...columnActions, [String(groupId)]: actions };
     setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next }));
     setColumnActions(next);
+    setResults({});
   }
 
   async function add(id: string) {
@@ -329,7 +362,26 @@ export default function Workspace() {
               </div>
             )}
 
-            {current === CLEANING && (
+            {/* Skill menu: opens on the service's primary view or skill. */}
+            {menu.length > 1 && (
+              <label className="block max-w-md space-y-1 text-sm">
+                <span className="font-medium">Skill</span>
+                <select
+                  className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
+                  value={choice}
+                  onChange={(e) => current && setPicked((p) => ({ ...p, [current]: e.target.value }))}
+                >
+                  {menu.map((m, i) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                      {i === 0 ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {current === CLEANING && choice === VIEW && (
               <>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={() => download("csv")}>Download CSV</Button>
@@ -347,31 +399,31 @@ export default function Workspace() {
               </>
             )}
 
-            {current === DASHBOARD &&
+            {current === DASHBOARD && choice === VIEW &&
               (group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped") ? (
                 <Dashboard key={group.group_id} input={input} groupId={group.group_id} />
               ) : (
                 <Card>
                   <p className="text-sm">
-                    This table has no date column, so there&apos;s no time dashboard. Try the visualization skills below.
+                    This table has no date column, so there&apos;s no time dashboard. Pick another visualization skill from the menu above.
                   </p>
                 </Card>
               ))}
 
-            {current !== CLEANING && plan && (
-              <div className="space-y-2">
-                {current === DASHBOARD && <h2 className="font-semibold">More visualization skills</h2>}
-                <SkillsPanel
-                  key={`${current}-${group.group_id}`}
-                  input={input}
-                  groupId={group.group_id}
-                  columns={group.preview.columns}
-                  services={plan.services}
-                  selectedServices={plan.active}
-                  onAddService={add}
-                  category={current ?? undefined}
-                />
-              </div>
+            {choice !== VIEW && plan && (
+              <SkillsPanel
+                key={`${choice}-${group.group_id}`}
+                input={input}
+                groupId={group.group_id}
+                columns={group.preview.columns}
+                services={plan.services}
+                selectedServices={plan.active}
+                onAddService={add}
+                fixedSkill={choice}
+                autoRun
+                initialResult={results[`${group.group_id}:${choice}`] ?? null}
+                onResult={(r) => setResults((old) => ({ ...old, [`${group.group_id}:${choice}`]: r }))}
+              />
             )}
           </div>
         ) : null}

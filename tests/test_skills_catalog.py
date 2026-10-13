@@ -55,3 +55,9 @@ def test_services_expose_capabilities():
     by_id = {s["id"]: s for s in catalog()}
     assert "ER diagrams" in by_id["data_engineering"]["capabilities"]
     assert all(s["capabilities"] for s in by_id.values())
+
+
+def test_each_category_has_exactly_one_primary_skill():
+    for c in _catalog()["categories"]:
+        primaries = [s["id"] for s in c["skills"] if s.get("primary")]
+        assert len(primaries) == 1, (c["id"], primaries)

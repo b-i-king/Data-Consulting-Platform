@@ -28,6 +28,7 @@
             --brand: #c8ac44; --cur: #a68a2c; --prev: #6f8fd8; --good: #69db7c; --bad: #ff8787; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* so el.hidden wins over display rules */
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
@@ -74,8 +75,11 @@
      fixed at the bottom of the screen while you scroll. */
   .timebar { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 10; pointer-events: none;
              display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  /* Slightly see-through (frosted) so the chart behind stays visible. */
   .timebar .seg { pointer-events: auto; flex-wrap: nowrap; max-width: 100%; overflow-x: auto;
-                  box-shadow: 0 10px 30px rgb(0 0 0 / .25); }
+                  background: color-mix(in srgb, var(--surface) 60%, transparent);
+                  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+                  box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
   .timebar .seg button { white-space: nowrap; }
   .timebar.compact .seg button { padding: 6px 10px; }
   main { padding-bottom: 150px; }
@@ -88,7 +92,8 @@
   <div class="chips" id="filters" aria-label="Filters applied"></div>
 
   <div class="cards" id="overviewCards"></div>
-  <section class="panel">
+  <p class="note" id="tooLittle" hidden>Charts over time appear once the data covers at least two days. More date ranges unlock as the data grows: a week, then 4 weeks, 3 months and a year.</p>
+  <section class="panel" id="chartPanel">
     <h2 id="chartTitle"></h2>
     <div class="legend"><span><i style="background:var(--cur)"></i>This period</span>
       <span id="prevLegend"><i style="background:var(--prev)"></i><span></span></span></div>
@@ -159,9 +164,18 @@ addEventListener("resize", fitTimebar);
 function render() {
   const R = D.ranges[state.range];
   // Day-over-day isn't available on very long ranges: fall back to week over week.
-  if (!R.series[state.cmp]) state.cmp = R.series.wow ? "wow" : "mom";
+  // Only comparisons calculated for this range, and only ranges the data supports.
+  const cmpKeys = Object.keys(R.series);
+  if (!R.series[state.cmp]) state.cmp = cmpKeys.includes("wow") ? "wow" : cmpKeys[cmpKeys.length - 1];
+  const hasCharts = cmpKeys.length > 0;
   const cmpLabels = Object.fromEntries(Object.entries(D.comparison_labels).filter(([k]) => R.series[k]));
-  buttons($("ranges"), D.range_labels, "range", D.range_short_labels);
+  const rangeLabels = Object.fromEntries(Object.entries(D.range_labels).filter(([k]) => (D.available_ranges || []).includes(k)));
+  buttons($("ranges"), rangeLabels, "range", D.range_short_labels);
+  $("ranges").hidden = !Object.keys(rangeLabels).length;
+  $("comparisons").hidden = !hasCharts;
+  $("timebar").hidden = $("ranges").hidden && $("comparisons").hidden;
+  $("chartPanel").hidden = !hasCharts;
+  $("tooLittle").hidden = hasCharts;
   buttons($("comparisons"), cmpLabels, "cmp", D.comparison_short_labels);
 
   const w = R.window;
@@ -181,7 +195,7 @@ function render() {
     c.append(el("div", D.metric_labels[m], "k"), el("div", fmt(k.current), "v"), deltaNode(k.pct_change));
     return c;
   }));
-  const rows = R.series[state.cmp][state.overview];
+  const rows = hasCharts ? R.series[state.cmp][state.overview] : [];
   $("chartTitle").textContent = `${D.metric_labels[state.overview]} over time — ${D.comparison_labels[state.cmp]}`;
   $("prevLegend").style.display = w.prev_start ? "" : "none";
   $("prevLegend").lastChild.textContent = w.prev_start ? `Previous period (${usDate(w.prev_start)} – ${usDate(w.prev_end)})` : "";
@@ -206,7 +220,7 @@ function render() {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 900 260"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${D.metric_labels[m]} line chart`);
     c.append(el("div", D.metric_labels[m], "k"), el("div", fmt(k.current), "v"), deltaNode(k.pct_change), svg);
-    setTimeout(() => drawChart(svg, R.series[state.cmp][m], 260), 0);
+    if (hasCharts) setTimeout(() => drawChart(svg, R.series[state.cmp][m], 260), 0); else svg.style.display = "none";
     return c;
   }));
 
