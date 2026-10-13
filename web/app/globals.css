@@ -1,0 +1,44 @@
+/*
+  Global styles.
+  Tailwind v4 is imported here; brand colors are defined once as CSS
+  variables in @theme so classes like `bg-brand` / `text-ink-muted` work.
+  Dark mode swaps the same variables, so components never hard-code colors.
+*/
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #3b5bdb;          /* primary actions */
+  --color-brand-strong: #2f4ac0;   /* hover */
+  --color-brand-soft: #e7ecff;     /* selected cards, badges */
+  --color-ink: #16181d;            /* main text */
+  --color-ink-muted: #5b6170;      /* secondary text */
+  --color-surface: #ffffff;        /* cards */
+  --color-canvas: #f6f7fb;         /* page background */
+  --color-line: #e3e6ee;           /* borders */
+  --color-good: #2b8a3e;
+  --color-warn: #b7791f;
+  --color-bad: #c92a2a;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-brand: #748ffc;
+    --color-brand-strong: #91a7ff;
+    --color-brand-soft: #1f2747;
+    --color-ink: #eceef3;
+    --color-ink-muted: #a3a9b8;
+    --color-surface: #171a21;
+    --color-canvas: #0f1116;
+    --color-line: #2a2f3a;
+    --color-good: #69db7c;
+    --color-warn: #ffd43b;
+    --color-bad: #ff8787;
+  }
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}

@@ -1,0 +1,123 @@
+"""
+The flat-file pipeline: upload -> read -> categorize -> combine -> clean.
+
+WHAT THIS FILE DOES
+-------------------
+Glues the individual services together in the order a consultant would work:
+
+    1. load_uploads()    read every uploaded file into DataFrames
+                         (api/services/file_reader.py)
+    2. categorize()      single file? or several — same structure, split by
+                         year, or different kinds of data?
+                         (api/services/categorizer.py)
+    3. combine_group()   stack files that share a structure into one table
+    4. clean_dataframe() remove duplicates, measure missing values...
+                         (api/services/cleaning.py)
+    5. sample_size_snapshot()  "is there enough data?" (api/services/sample_size.py)
+
+The routers call `run_pipeline()` for both the guest preview and the signed-in
+download, so both always produce exactly the same cleaned data.
+
+NOTHING IS SAVED: the uploaded bytes and DataFrames exist only for the
+duration of the request and are released by Python afterwards.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import asdict, dataclass
+
+import pandas as pd
+from fastapi import HTTPException, UploadFile, status
+
+from api.core.config import get_settings
+from api.services.categorizer import CategorizationResult, categorize, combine_group
+from api.services.cleaning import CleaningReport, MissingStrategy, clean_dataframe
+from api.services.file_reader import FileReadError, LoadedDataset, UnsupportedFileError, read_file
+from api.services.sample_size import sample_size_snapshot
+
+
+@dataclass
+class GroupResult:
+    """The cleaned output for one group of files (or the single file)."""
+
+    group_id: int
+    label: str
+    cleaned: pd.DataFrame
+    report: CleaningReport
+    sample_size: dict
+
+
+@dataclass
+class PipelineResult:
+    categorization: CategorizationResult
+    groups: list[GroupResult]
+    total_runtime_seconds: float
+
+    def categorization_dict(self) -> dict:
+        return asdict(self.categorization)
+
+
+async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
+    """
+    Read every uploaded file, enforcing the size and count limits from
+    settings. Errors are converted to HTTP 400/413 responses with messages
+    that are safe to show the user.
+    """
+    settings = get_settings()
+    if not files:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Please choose at least one file.")
+    if len(files) > settings.max_files_per_upload:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Please upload {settings.max_files_per_upload} files or fewer at a time.",
+        )
+
+    datasets: list[LoadedDataset] = []
+    for upload in files:
+        # Read one byte past the limit: if we get it, the file is too big.
+        raw = await upload.read(settings.max_upload_bytes + 1)
+        if len(raw) > settings.max_upload_bytes:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"'{upload.filename}' is larger than {settings.max_upload_mb} MB. "
+                       "Book a consultation for larger datasets.",
+            )
+        try:
+            datasets.extend(read_file(upload.filename or "upload", raw))
+        except (UnsupportedFileError, FileReadError) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        finally:
+            await upload.close()
+
+    # Two files with the same name would collide in the categorizer.
+    names = [d.name for d in datasets]
+    if len(names) != len(set(names)):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Two uploaded files have the same name.")
+    return datasets
+
+
+def run_pipeline(datasets: list[LoadedDataset], missing_strategy: MissingStrategy = "keep") -> PipelineResult:
+    """Steps 2–5 of the pipeline. Timed so runtime billing is accurate."""
+    started = time.perf_counter()
+    categorization = categorize(datasets)
+
+    groups: list[GroupResult] = []
+    for group in categorization.groups:
+        combined = combine_group(datasets, group.members)
+        cleaned, report = clean_dataframe(combined, dataset_name=group.label, missing_strategy=missing_strategy)
+        groups.append(
+            GroupResult(
+                group_id=group.group_id,
+                label=group.label,
+                cleaned=cleaned,
+                report=report,
+                sample_size=sample_size_snapshot(cleaned),
+            )
+        )
+
+    return PipelineResult(
+        categorization=categorization,
+        groups=groups,
+        total_runtime_seconds=round(time.perf_counter() - started, 4),
+    )
