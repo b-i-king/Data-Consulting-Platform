@@ -33,6 +33,13 @@ coding, so **understanding the code matters as much as the code itself**.
 - **Routers thin, services thick.** Logic in `api/services/`, HTTP in `api/routers/`.
 - Add or update a test in `tests/` for every behavior change.
 
+## Git
+
+- Commit finished, tested work to the current feature branch. A project hook
+  (`.claude/hooks/auto-push.sh`, wired in `.claude/settings.json`) pushes the
+  branch to GitHub automatically after every `git commit`. It never pushes
+  `main`/`master` and never force-pushes.
+
 ## Commands
 
 ```bash
