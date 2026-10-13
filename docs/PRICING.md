@@ -13,8 +13,8 @@ Code: `api/services/pricing.py`. Rates: environment variables (see `.env.example
 | Data Strategy & Discovery | Consultation | Free call, then quoted | Yes → booking link |
 | Data Exploration & Analysis | Package | from $250 | Optional |
 | Data Visualization | Package | from $500 | Optional |
-| Data Science & Machine Learning | Package | from $1,500 | Yes |
 | Data Engineering | Package | from $750 | Yes |
+| Data Science & Machine Learning | Package | from $1,500 | Yes |
 | AI | Early access | No charge yet | No — shown with an "Early access" badge |
 
 Each service is also a **skill category**: the skills behind it
@@ -56,7 +56,7 @@ on each provider's pricing page before budgeting.
 
 | Piece | Charged for | What one download uses |
 |---|---|---|
-| Render (API) | Server time: flat monthly fee, not per request. Outbound bandwidth: Hobby includes **5 GB/month**, Pro 25 GB, then **$0.15/GB** ([Render docs](https://render.com/docs/outbound-bandwidth); these were cut sharply in April 2026) | The preview + the cleaned file leave the server |
+| Render (API) | Server time: flat monthly fee, not per request. Outbound bandwidth: Hobby includes **5 GB/month**, Pro 25 GB, then **$0.15/GB** ([Render docs](https://render.com/docs/outbound-bandwidth); these were cut sharply in April 2026) | The report, a 5-row preview and the cleaned file leave the server |
 | Vercel (website) | Bandwidth for the website pages | Nothing — the file goes straight from the API to the browser |
 | Supabase (database) | Egress; free plan includes 5 GB/month | One tiny `usage_events` row (no data) |
 | Uploads (inbound) | Free on Render | — |

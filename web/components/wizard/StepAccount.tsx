@@ -5,8 +5,9 @@
 //   business:   + company name, + optional team members (name + email each)
 //
 // Once signed in, each dataset group gets CSV and Excel download buttons.
-// Clicking one re-sends the files kept in memory; the server cleans them again
-// and streams the result back (nothing is stored on the server).
+// Clicking one re-sends the files kept in memory, plus the missing-value
+// choices from step 3; the server cleans them again and streams the result
+// back (nothing is stored on the server).
 
 "use client";
 
@@ -14,7 +15,7 @@ import { useState, type FormEvent } from "react";
 import { downloadCleaned, signin, signup } from "@/lib/api";
 import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, Industry, MissingStrategy, TeamMemberInput } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, Industry, TeamMemberInput } from "@/lib/types";
 import { Button, Card, ChoiceCard, ErrorBox, NavRow, StepHeader } from "./ui";
 
 const inputCls =
@@ -26,8 +27,7 @@ export default function StepAccount(props: {
   session: Session | null;
   onSignedIn: (s: Session) => void;
   onSignOut: () => void;
-  files: File[];
-  strategy: MissingStrategy;
+  input: CleaningInput;
   analysis: AnalyzeResponse;
   onBack: () => void;
 }) {
@@ -181,8 +181,7 @@ function AuthPanel({
 function DownloadPanel(props: {
   session: Session;
   onSignOut: () => void;
-  files: File[];
-  strategy: MissingStrategy;
+  input: CleaningInput;
   analysis: AnalyzeResponse;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -195,10 +194,9 @@ function DownloadPanel(props: {
     setError(null);
     try {
       const { amountUsd } = await downloadCleaned({
-        files: props.files,
+        input: props.input,
         token: props.session.token,
         groupId,
-        strategy: props.strategy,
         format,
       });
       if (amountUsd) setCharged(amountUsd);

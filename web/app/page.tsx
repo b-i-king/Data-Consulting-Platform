@@ -11,7 +11,7 @@ import { categoryColor } from "@/lib/categories";
 const STEPS = [
   { title: "Tell us about you", body: "Individual or business, and where your data lives today." },
   { title: "Upload your files", body: "CSV, Excel, JSON, or Parquet. One file or many — we sort them out." },
-  { title: "Get clean data", body: "Duplicates removed, missing values measured, a full preview on screen." },
+  { title: "Get clean data", body: "Duplicates removed, missing values measured with advice, gaps filled if you choose." },
   { title: "Go further, your way", body: "Analysis, dashboards, ML, AI, or a call with a consultant — only if you want." },
 ];
 
@@ -20,8 +20,8 @@ const CATEGORIES = [
   { id: "data_strategy_discovery", name: "Data Strategy & Discovery", body: "Find your data sources and build a roadmap tied to your goals." },
   { id: "data_exploration_analysis", name: "Data Exploration & Analysis", body: "Answers to your critical questions and the key trends behind them." },
   { id: "data_visualization", name: "Data Visualization", body: "Dashboards and reports in Tableau, Power BI, or custom builds." },
-  { id: "data_science_ml", name: "Data Science & ML", body: "Forecasts, predictive models, and advanced analytics." },
   { id: "data_engineering", name: "Data Engineering", body: "ER diagrams, data dictionaries, and data built to integrate." },
+  { id: "data_science_ml", name: "Data Science & ML", body: "Forecasts, predictive models, and advanced analytics." },
   { id: "ai", name: "AI", body: "Ask questions about your data in plain English. Early access." },
 ];
 

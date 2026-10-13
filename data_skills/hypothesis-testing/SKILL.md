@@ -77,7 +77,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run hypothesis-testing samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Hypothesis testing** · API: `POST /api/skills/hypothesis-testing/run`.
+Web: **Explore your data → Run a skill → Hypothesis testing** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/hypothesis-testing/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

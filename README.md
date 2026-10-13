@@ -12,23 +12,25 @@ higher-impact projects.
 
 ## What it does today (v0.1)
 
-1. **About you** — individual or business; businesses pick goods vs. services,
-   then their NAICS sector and subsector
+1. **About you** — individual or business; businesses pick their size
+   (LinkedIn's employee bands), goods vs. services, then NAICS sector and subsector
 2. **Your data** — files on your computer (live), cloud storage / warehouses and
    business apps (coming soon → consultant hand-off)
 3. **Upload** — CSV and Excel recommended, plus every format pandas can safely
    read (JSON, Parquet, SAS, Stata, SPSS, XML, HTML, .zip/.gz, ...); one or many files
 4. **Clean & preview** — multi-file categorization (same structure, split by
    year, or different kinds of data linked by shared IDs or fuzzy name/email/phone
-   matching), automatic cleaning, a
-   missing-value report per column, an "is there enough data?" check, and a full
-   preview
+   matching), automatic cleaning, rows and **fields** counts, a missing-value report
+   with advice (20%+ missing: think about removing; 90%+: remove; mostly empty: book
+   a consultation), optional **fills** with the mean / median (chosen by skewness) /
+   mode, an "is there enough data?" check, and a first-5-rows preview
 5. **Explore your data** — a Copilot Money-style **dashboard** when the data has
-   dates (last 4 weeks, 3 months, 1 year, month to date, year to date; day over
-   day, week over week, month over month), plus all **30 data skills** runnable
-   on the cleaned data
+   dates: KPIs for the most common transaction types, transactions over time,
+   customer/demographic filters, and a floating time bar (last 4 weeks, 3 months,
+   1 year, month to date, year to date; day/week/month over period). Plus the
+   **data skills** of the services the client chose (others show as 🔒 badges)
 6. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
-   Visualization, Data Science & ML, Data Engineering, and AI (early access),
+   Visualization, Data Engineering, Data Science & ML, and AI (early access),
    with a price estimate
 7. **Download** — create an account (only now), download CSV or Excel; billed by
    processing minute
@@ -81,7 +83,7 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Supabase + Render + Vercel |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
 | [docs/TESTING.md](docs/TESTING.md) | **Try it yourself** with the sample data (web, command line, API) |
-| [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | How date ranges and DoD/WoW/MoM comparisons are calculated |
+| [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | How KPIs, filters, date ranges and DoD/WoW/MoM comparisons work |
 | [data_skills/README.md](data_skills/README.md) | 30 skills (SKILL.md + skill.py), organized by service category |
 
 ## Project layout

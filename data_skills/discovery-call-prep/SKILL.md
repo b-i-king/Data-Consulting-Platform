@@ -79,7 +79,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run discovery-call-prep samples/sales.csv samples/customers.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Data-source inventory & roadmap** · API: `POST /api/skills/discovery-call-prep/run`.
+Web: **Explore your data → Run a skill → Data-source inventory & roadmap** (unlocked when the client chooses **Data Strategy & Discovery**) · API: `POST /api/skills/discovery-call-prep/run`.
 Input: several tables (every file you pass). Runs on the data as uploaded, before cleaning.
 
 | Option | Type | Default | What it does |

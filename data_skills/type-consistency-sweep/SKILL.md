@@ -126,5 +126,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run type-consistency-sweep samples/sales.csv samples/customers.csv
 ```
 
-Web: **Explore your data → Run a skill → Data-type consistency check** · API: `POST /api/skills/type-consistency-sweep/run`.
+Web: **Explore your data → Run a skill → Data-type consistency check** (always included) · API: `POST /api/skills/type-consistency-sweep/run`.
 Input: several tables (every file you pass). Runs on the data as uploaded, before cleaning.

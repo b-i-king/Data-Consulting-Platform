@@ -62,24 +62,57 @@ Entity labels are a keyword-based guess and are shown to clients as such.
 | 2. Empty rows | Drop rows with no values at all | Blank lines at the bottom of a spreadsheet |
 | 3. Duplicates | Drop rows identical in every column (keep first) | Same order exported twice |
 | 3b. Whole numbers | `1001.0` → `1001` when a column only has whole numbers | ID columns with some blanks |
-| 4. Missing report | Count and % missing per column | `phone`: 31% missing |
-| 5. Strategy | **Keep** rows with gaps (default) or **remove** them | Client picks on the upload step |
+| 4. Missing report + advice | Count, % missing, a level and a fill suggestion per column | `phone`: 31% missing → "think about removing" |
+| 5a. Column choices | Per column: **keep** gaps (default), **remove** the column, or **fill** with the mean / median / mode | Client picks on the results step, then **Apply changes** |
+| 5b. Row strategy | **Keep** rows with gaps (default) or **remove** them (after 5a) | Client picks on the upload step |
 | 6. Profile | Type, unique values, examples per column | `order_date`: date (stored as text) |
 
 Steps 2 and 3 ignore the platform's own `source_file` column, so a blank row is
 still blank and a record repeated across two overlapping exports is still a
 duplicate.
 
+### Missing values: rules of thumb and fill options
+
+| % missing in a column | What we say |
+|---|---|
+| under 20% | Fine — keep it, or fill the gaps |
+| 20% or more | **Review:** think about removing the column (or fill it) |
+| 90% or more | **Remove:** too little is left to trust or fill |
+| 90%+ of all cells in the table | Book a consultation — a banner links to your booking page |
+
+How gaps would be filled (the suggested method is starred in the dropdown):
+
+- **Numbers:** the **mean** if the values are roughly symmetric (|skewness| below
+  0.5), otherwise the **median** — sales and prices usually have a long tail of
+  big values that drags the mean up. pandas: `s.skew()`, `s.mean()`, `s.median()`.
+- **Text, categories, true/false:** the **mode** (most common value), `s.mode()[0]`.
+- **Dates, IDs and codes** (`customer_id`, order numbers, zip codes, SKUs): no fill.
+  An average ID means nothing, and a blank ID usually means "none" — in the
+  sample data, a blank `customer_id` is a walk-in customer.
+- Whole-number columns get a rounded value, so `1001` stays `1001`.
+
+**Use our suggestions** removes 90%+ columns and fills small gaps (under 20%).
+Columns in between are left for the client: filling a third of a column with one
+value changes the data a lot. Choices are sent as `column_actions` (JSON, by
+table: `{"0": {"age_group": "mode"}}`) with every request that needs the data —
+analyze, dashboard, skills, download — so all of them see the same cleaned data.
+The report keeps the **before** numbers and adds what was done (`action`,
+`filled_count`, `missing_after`).
+
 ### What we deliberately do NOT do automatically
 
-Fill in missing values, remove near-duplicates, drop columns, remove outliers, or
-reformat dates/currency. All of these need business context — they are part of
-the consultant-assisted services.
+Fill in missing values or drop columns without the client choosing to, fill IDs,
+remove near-duplicates, remove outliers, or reformat dates/currency. These need
+business context — they are the client's call or part of the consultant-assisted
+services.
 
 ## 4. Preview and download
 
-- **Preview:** every cleaned row is sent to the browser (up to
-  `PREVIEW_MAX_ROWS`, default 50,000) and shown 50 per page.
+- **Summary tiles:** rows (before → after), **fields** (columns; how many were
+  removed), duplicates removed, and % of cells missing (how many were filled).
+- **Preview:** the first 5 cleaned rows, like pandas' `df.head()`
+  (`PREVIEW_MAX_ROWS`, default 5 — raise it to page through more on screen).
+  Kept short because the cleaning re-runs each time a missing-value choice is applied.
 - **Download:** requires an account. CSV (UTF-8 with BOM so Excel shows accents
   correctly) or Excel (with a second sheet holding the missing-value report).
   Downloads always contain every row.

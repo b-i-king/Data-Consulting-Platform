@@ -1,8 +1,11 @@
-// "Run a skill" — pick any data skill, fill in its options, see the result.
+// "Run a skill" — pick a data skill from a dropdown, fill in its options, see the result.
 //
 // The list of skills and each skill's options come from GET /api/skills, which
-// reads every data_skills/<skill>/skill.py. Column options become dropdowns of
-// the table's columns. Results show the summary, findings, charts, tables and
+// reads every data_skills/<skill>/skill.py, in catalog order (AI last).
+// ONLY the skills of services the user has chosen are in the dropdown (Data
+// Cleaning is always included); every other service is a locked badge the
+// user can add (LockedService.tsx). Column options become dropdowns of the
+// table's columns. Results show the summary, findings, charts, tables and
 // downloadable outputs (Markdown reports, SQL, Mermaid diagrams, HTML).
 
 "use client";
@@ -10,10 +13,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
-import type { Cell, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
+import type { Cell, CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
 import BarChart from "@/components/charts/BarChart";
 import LineChart from "@/components/charts/LineChart";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import { LockedBadge } from "./LockedService";
+
+const ALWAYS_INCLUDED = "data_cleaning";
 
 const inputCls = "w-full rounded-xl border border-line bg-surface px-3 py-1.5 text-sm";
 const EXT: Record<string, [string, string]> = {
@@ -111,9 +117,17 @@ function ResultTable({ rows }: { rows: Record<string, Cell>[] }) {
   );
 }
 
-export default function SkillsPanel({ files, groupId, columns }: { files: File[]; groupId: number; columns: string[] }) {
+export default function SkillsPanel(props: {
+  input: CleaningInput;
+  groupId: number;
+  columns: string[];
+  services: Service[];
+  selectedServices: string[];
+  onAddService: (id: string) => void;
+}) {
+  const { input, groupId, columns } = props;
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [selected, setSelected] = useState<string>("explore-data");
+  const [selected, setSelected] = useState<string>("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [result, setResult] = useState<SkillResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -123,12 +137,17 @@ export default function SkillsPanel({ files, groupId, columns }: { files: File[]
     getSkills().then(setSkills).catch((e) => setError(e.message));
   }, []);
 
+  // Unlocked = Data Cleaning + every service the user chose.
+  const unlocked = useMemo(() => new Set([ALWAYS_INCLUDED, ...props.selectedServices]), [props.selectedServices]);
   const byCategory = useMemo(() => {
     const groups: Record<string, SkillInfo[]> = {};
-    skills.forEach((s) => (groups[s.category_name] ??= []).push(s));
+    skills.filter((s) => unlocked.has(s.category)).forEach((s) => (groups[s.category_name] ??= []).push(s));
     return groups;
-  }, [skills]);
-  const skill = skills.find((s) => s.id === selected);
+  }, [skills, unlocked]);
+  const locked = props.services.filter((s) => !unlocked.has(s.id) && skills.some((k) => k.category === s.id));
+  // Keep a valid selection: default to the first unlocked skill.
+  const available = Object.values(byCategory).flat();
+  const skill = available.find((s) => s.id === selected) ?? available[0];
 
   function pick(id: string) {
     setSelected(id);
@@ -144,7 +163,7 @@ export default function SkillsPanel({ files, groupId, columns }: { files: File[]
     try {
       // Send only options the user filled in; empty = the skill's default.
       const params = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== ""));
-      setResult(await runSkill(skill.id, files, params, groupId));
+      setResult(await runSkill(skill.id, input, params, groupId));
     } catch (e) {
       setResult(null);
       setError(e instanceof Error ? e.message : "The skill could not run.");
@@ -154,32 +173,45 @@ export default function SkillsPanel({ files, groupId, columns }: { files: File[]
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[16rem_1fr]">
-      <nav aria-label="Skills" className="space-y-4">
-        {Object.entries(byCategory).map(([cat, list]) => (
-          <div key={cat}>
-            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: categoryColor(list[0].category) }}>
-              {cat}
-            </h3>
-            <ul className="space-y-0.5">
-              {list.map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => pick(s.id)}
-                    aria-current={selected === s.id}
-                    className={`w-full rounded-lg px-2 py-1 text-left text-sm ${
-                      selected === s.id ? "bg-brand-soft font-medium" : "text-ink-muted hover:bg-surface-2 hover:text-ink"
-                    }`}
-                  >
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block min-w-64 flex-1 space-y-1 text-sm">
+          <span className="font-medium">Skill</span>
+          {/* One dropdown, grouped by service, in catalog order (AI last). */}
+          <select
+            className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
+            value={skill?.id ?? ""}
+            onChange={(e) => pick(e.target.value)}
+          >
+            {Object.entries(byCategory).map(([cat, list]) => (
+              <optgroup key={cat} label={cat}>
+                {list.map((s) => (
+                  <option key={s.id} value={s.id}>
                     {s.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        {skill && (
+          <span className="mb-2 flex items-center gap-1.5 text-xs text-ink-muted">
+            <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: categoryColor(skill.category) }} />
+            {skill.category_name}
+          </span>
+        )}
+      </div>
+
+      {locked.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs text-ink-muted">More skills come with other services — add one to unlock it:</p>
+          <div className="flex flex-wrap gap-2">
+            {locked.map((s) => (
+              <LockedBadge key={s.id} service={s} onAdd={props.onAddService} />
+            ))}
           </div>
-        ))}
-      </nav>
+        </div>
+      )}
 
       <div className="space-y-4">
         {skill && (

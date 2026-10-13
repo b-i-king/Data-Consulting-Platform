@@ -312,5 +312,5 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run data-visualization samples/sales.csv
 ```
 
-Web: **Explore your data → Run a skill → Chart design best practices** · API: `POST /api/skills/data-visualization/run`.
+Web: **Explore your data → Run a skill → Chart design best practices** (unlocked when the client chooses **Data Visualization**) · API: `POST /api/skills/data-visualization/run`.
 Input: one table.

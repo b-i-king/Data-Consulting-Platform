@@ -113,9 +113,9 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run setup-data-workspace samples/sales.csv samples/customers.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → "Talk to your data" workspace** · API: `POST /api/skills/setup-data-workspace/run`.
+Web: **Explore your data → Run a skill → "Talk to your data" workspace** (unlocked when the client chooses **AI**) · API: `POST /api/skills/setup-data-workspace/run`.
 Input: several tables (every file you pass).
 
 | Option | Type | Default | What it does |
 |---|---|---|---|
-| `db_path` | str | auto | Where to write the SQLite file (command line only) (command line only) |
+| `db_path` | str | auto | Where to write the SQLite file (command line only) |

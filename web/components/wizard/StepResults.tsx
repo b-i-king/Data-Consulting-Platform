@@ -3,23 +3,31 @@
 // Sections:
 //   1. "How your files fit together" — only for multi-file uploads
 //   2. One tab per dataset group, each with:
-//        a. cleaning summary tiles (rows before/after, duplicates, missing)
-//        b. missing values by column (table with bars)
+//        a. cleaning summary tiles (rows, fields, duplicates, missing)
+//        b. missing values by column, with advice and fill/remove choices
+//           (MissingValues.tsx); a consultation banner if 90%+ is missing
 //        c. "Is there enough data?" sample-size snapshot
-//        d. full data preview (paginated)
+//        d. preview of the first rows
+//   3. Explore your data — dashboard + skills, limited to the services chosen
 
 "use client";
 
 import { useState } from "react";
 import { fmtInt, fmtPct } from "@/lib/format";
-import type { AnalyzeResponse, GroupOutput } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, GroupOutput, Service } from "@/lib/types";
 import { Button, Card, ConsultantCta, NavRow, Stat, StepHeader } from "./ui";
 import DataPreview from "./DataPreview";
+import MissingValues from "./MissingValues";
 import ExplorePanel from "@/components/explore/ExplorePanel";
 
 export default function StepResults(props: {
   analysis: AnalyzeResponse;
-  files: File[]; // kept in memory so the dashboard and skills can re-send them
+  input: CleaningInput; // files in memory + missing-value choices, re-sent by the dashboard and skills
+  /** Re-run the cleaning with new choices for one table (group). */
+  onApplyActions: (groupId: number, actions: Record<string, ColumnAction>) => Promise<void>;
+  services: Service[];
+  selectedServices: string[];
+  onAddService: (id: string) => void;
   bookingUrl: string;
   onBack: () => void;
   onNext: () => void;
@@ -80,10 +88,23 @@ export default function StepResults(props: {
         </div>
       )}
 
-      <GroupDetails key={group.group_id} group={group} />
+      <GroupDetails
+        key={group.group_id}
+        group={group}
+        bookingUrl={props.bookingUrl}
+        applied={props.input.columnActions[String(group.group_id)] ?? {}}
+        onApply={(actions) => props.onApplyActions(group.group_id, actions)}
+      />
 
-      {/* Dashboard (when there are dates) and the 30 data skills, on this table. */}
-      <ExplorePanel key={`explore-${group.group_id}`} files={props.files} group={group} />
+      {/* Dashboard (when there are dates) and the data skills, on this table. */}
+      <ExplorePanel
+        key={`explore-${group.group_id}`}
+        input={props.input}
+        group={group}
+        services={props.services}
+        selectedServices={props.selectedServices}
+        onAddService={props.onAddService}
+      />
 
       <ConsultantCta bookingUrl={props.bookingUrl}>
         <strong>Not sure what these numbers mean for your business?</strong> Talk it through with a consultant.
@@ -96,7 +117,13 @@ export default function StepResults(props: {
   );
 }
 
-function GroupDetails({ group }: { group: GroupOutput }) {
+function GroupDetails(props: {
+  group: GroupOutput;
+  bookingUrl: string;
+  applied: Record<string, ColumnAction>;
+  onApply: (actions: Record<string, ColumnAction>) => Promise<void>;
+}) {
+  const { group } = props;
   const r = group.report;
   const s = group.sample_size;
 
@@ -104,15 +131,25 @@ function GroupDetails({ group }: { group: GroupOutput }) {
     <div className="space-y-8">
       {/* a. Summary tiles */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Rows before" value={fmtInt(r.rows_before)} />
-        <Stat label="Rows after" value={fmtInt(r.rows_after)} />
+        <Stat label={`Rows (${fmtInt(r.rows_before)} before)`} value={fmtInt(r.rows_after)} />
+        <Stat
+          label={r.columns_dropped.length ? `Fields (${fmtInt(r.columns_dropped.length)} removed)` : "Fields (columns)"}
+          value={fmtInt(r.columns)}
+        />
         <Stat label="Duplicates removed" value={fmtInt(r.duplicate_rows_removed)} tone={r.duplicate_rows_removed ? "good" : undefined} />
         <Stat
-          label="Cells missing"
+          label={r.cells_filled ? `Cells missing (${fmtInt(r.cells_filled)} filled)` : "Cells missing"}
           value={fmtPct(r.total_missing_pct)}
-          tone={r.total_missing_pct > 20 ? "bad" : r.total_missing_pct > 5 ? "warn" : "good"}
+          tone={r.total_missing_pct >= 90 ? "bad" : r.total_missing_pct >= 20 ? "warn" : "good"}
         />
       </div>
+
+      {r.consultation_recommended && (
+        <ConsultantCta bookingUrl={props.bookingUrl}>
+          <strong>{fmtPct(r.missing_pct_before)} of this data is missing.</strong> That&apos;s more than cleaning can fix —
+          book a free consultation and we&apos;ll help you find the missing data.
+        </ConsultantCta>
+      )}
 
       {r.notes.length > 0 && (
         <ul className="list-inside list-disc space-y-1 text-sm">
@@ -122,44 +159,8 @@ function GroupDetails({ group }: { group: GroupOutput }) {
         </ul>
       )}
 
-      {/* b. Missing values by column */}
-      <div>
-        <h3 className="mb-2 font-semibold">Missing values by column</h3>
-        <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-[var(--shadow-card)]">
-          <table className="w-full text-sm">
-            <thead className="border-b border-line bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted">
-              <tr>
-                <th className="px-3 py-2">Column</th>
-                <th className="px-3 py-2">Type</th>
-                <th className="px-3 py-2 text-right">Missing</th>
-                <th className="w-1/3 px-3 py-2">% missing</th>
-                <th className="px-3 py-2 text-right">Unique</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {r.column_reports.map((c) => (
-                <tr key={c.column}>
-                  <td className="px-3 py-2 font-medium">{c.column}</td>
-                  <td className="px-3 py-2 text-ink-muted">{c.inferred_type}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtInt(c.missing_count)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 flex-1 rounded-full bg-line">
-                        <div
-                          className={`h-2 rounded-full ${c.missing_pct > 20 ? "bg-bad" : c.missing_pct > 5 ? "bg-warn" : "bg-good"}`}
-                          style={{ width: `${Math.max(c.missing_pct, c.missing_pct > 0 ? 2 : 0)}%` }}
-                        />
-                      </div>
-                      <span className="w-12 text-right tabular-nums">{fmtPct(c.missing_pct)}</span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtInt(c.unique_count)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* b. Missing values by column — advice + fill / remove choices */}
+      <MissingValues report={r} applied={props.applied} onApply={props.onApply} />
 
       {/* c. Sample-size snapshot (adapted from the sample-size skill) */}
       <div>

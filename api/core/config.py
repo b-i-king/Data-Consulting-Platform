@@ -62,11 +62,13 @@ class Settings(BaseSettings):
     # Largest size a compressed upload (.zip, .gz, ...) may expand to, in MB.
     # Protects the server from "zip bombs" (tiny archives that expand hugely).
     max_decompressed_mb: int = Field(default=200, alias="MAX_DECOMPRESSED_MB")
-    # Safety cap on how many cleaned rows are sent back to the browser for the
-    # on-screen preview. The goal is to preview 100% of the data; this cap only
-    # kicks in for very large files, so the browser tab does not freeze.
-    # The downloaded file ALWAYS contains every row regardless of this cap.
-    preview_max_rows: int = Field(default=50_000, alias="PREVIEW_MAX_ROWS")
+    # How many cleaned rows are sent back to the browser for the on-screen
+    # preview: the first 5, like pandas' df.head(). Small on purpose — the
+    # browser re-runs the cleaning each time the user changes a missing-value
+    # choice, and a short preview keeps that instant. Raise it (e.g. 50000)
+    # to page through more rows on screen. The downloaded file ALWAYS
+    # contains every row regardless of this setting.
+    preview_max_rows: int = Field(default=5, alias="PREVIEW_MAX_ROWS")
 
     # ── Pricing (runtime-based billing) ───────────────────────────────────────
     # Price in US dollars for each started minute of processing runtime.

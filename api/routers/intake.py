@@ -42,6 +42,8 @@ async def intake_options():
         "booking_url": settings.booking_url,
         # Business funnel: goods/services -> NAICS sector -> subsector.
         "industries": intake.naics_tree(),
+        # Business size bands (LinkedIn company size codes A–I).
+        "company_sizes": intake.COMPANY_SIZES,
     }
 
 

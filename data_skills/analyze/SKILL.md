@@ -126,7 +126,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run analyze samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Answers to business questions** · API: `POST /api/skills/analyze/run`.
+Web: **Explore your data → Run a skill → Answers to business questions** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/analyze/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

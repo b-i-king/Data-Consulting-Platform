@@ -137,10 +137,10 @@ Update the repo's `CLAUDE.md` (or create a `data/enrichment/README.md`) with:
 This procedure is also runnable code: [`skill.py`](skill.py) in this folder (category: **Data Strategy & Discovery**).
 
 ```bash
-python -m data_skills run data-enrichment samples/customers.csv --param KEY=VALUE
+python -m data_skills run data-enrichment samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Data-gap & enrichment plan** · API: `POST /api/skills/data-enrichment/run`.
+Web: **Explore your data → Run a skill → Data-gap & enrichment plan** (unlocked when the client chooses **Data Strategy & Discovery**) · API: `POST /api/skills/data-enrichment/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

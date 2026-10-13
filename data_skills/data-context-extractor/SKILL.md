@@ -222,7 +222,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run data-context-extractor samples/sales.csv samples/customers.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Learns your business vocabulary** · API: `POST /api/skills/data-context-extractor/run`.
+Web: **Explore your data → Run a skill → Learns your business vocabulary** (unlocked when the client chooses **AI**) · API: `POST /api/skills/data-context-extractor/run`.
 Input: several tables (every file you pass).
 
 | Option | Type | Default | What it does |

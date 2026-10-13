@@ -129,7 +129,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run write-query samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → SQL for your questions** · API: `POST /api/skills/write-query/run`.
+Web: **Explore your data → Run a skill → SQL for your questions** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/write-query/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

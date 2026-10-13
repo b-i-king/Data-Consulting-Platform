@@ -1,23 +1,71 @@
-# Dashboards: date ranges and comparisons
+# Dashboards: KPIs, filters, date ranges and comparisons
 
 How the dashboard (the `build-dashboard` skill and the **Dashboard** tab in the
-app) slices time — the same ideas Copilot Money uses for spending. Code:
-`data_skills/_time.py` (the calculations) and
-`data_skills/build-dashboard/skill.py` (the dashboard).
+app) is built and how it slices time — the same ideas Copilot Money uses for
+spending. Code: `data_skills/build-dashboard/skill.py` (the dashboard),
+`data_skills/_time.py` (the time calculations) and
+`web/components/explore/Dashboard.tsx` (the screen).
 
 ## When does the dashboard appear?
 
 Whenever the cleaned table has a date column (real dates, or text where 80%+
-of values parse as dates). Without dates, **Explore your data** opens on
-**Run a skill** instead.
+of values parse as dates). It is part of the **Data Visualization** service:
+until the client chooses that service it shows as a locked card with an **Add**
+button. Without dates, **Explore your data** opens on **Run a skill** instead.
 
-## What gets charted
+## Layout (top to bottom)
 
-By default, up to three number columns, best first: money (amount, revenue,
-total, cost…), then counts (quantity, units…), then other numbers — plus
-**Number of records** (e.g. orders). Per-unit columns (price, rate, score) are
-never added up; if a table only has scores (CSAT, NPS), they're **averaged**.
-Pick other columns with the `value_columns` option.
+1. **Filters** — dropdowns for WHO the numbers are about (below), plus
+   **Download dashboard (HTML)**.
+2. **Overview** — two cards, **Total amount** and **Transactions**; click one to
+   chart it over time ("Transactions over time"), with a values-by-period table.
+3. **KPIs** — one card and one line chart per KPI (below).
+4. **Breakdown** — the top 8 values of a category column (e.g. product) vs. the
+   previous period.
+5. **Time bar** — date range and comparison, floating at the bottom of the screen
+   while the dashboard is in view (on phones: two rows that scroll sideways).
+
+## KPIs come from transaction types
+
+Transaction data almost always has a column saying what **kind** of record each
+row is. The dashboard finds it automatically, best match first:
+
+1. an exact name: `event_type`, `transaction_type`, `txn_type`, `type`,
+   `event_subtype`, `record_type`, `entry_type`, `activity_type` (the platform
+   warehouse uses `event_type` / `event_subtype`, see `db/warehouse.sql`);
+2. any `*_type`, `*_kind`, `*_class` or `*_category` column — except ones about
+   the customer (`customer_type` is a filter, not a KPI);
+3. a column named `category`, `kind` or `class`.
+
+It must have 2–50 distinct values. The **3–4 values with the most rows** become
+the KPIs (`top_kpis`, default 4). For the sample bakery: In-store, Online pickup,
+Delivery, Catering. Each KPI's number is that type's total of the money column
+(`amount`; or its average for score columns, or its row count if there's no
+number column), and its line chart compares this period with the previous one.
+
+The KPI list is ranked on **all** rows, so the cards don't jump around when you
+filter. Choose a different column with `kpi_column`, or the measure with
+`value_column`. **No type column?** The best number columns become the KPIs:
+money (amount, revenue, total, cost…) first, then counts (quantity, units…).
+Per-unit columns (price, rate, score) are never added up; if a table only has
+scores (CSAT, NPS), they're **averaged**.
+
+## Filters: customer type and demographics
+
+Filters narrow the dashboard to a group of customers. Offered automatically
+(up to 4, each with 2–30 values), best group first:
+
+| Group | Column names containing… |
+|---|---|
+| Customer groupings | customer, client, member, segment, tier, loyal, cohort, persona |
+| Demographics | gender, sex, age / age_group, generation, income, education, ethnicity, race, marital, household, language |
+| Place | region, state, city, county, zip, country, location, store, branch, channel, market |
+
+Picking a value asks the server to rebuild the dashboard on matching rows only
+(the files are re-sent from browser memory; nothing is stored), keeping the
+range and comparison you picked. Dropdown choices come from all rows, so they
+don't shrink as you filter. Options: `filters` (e.g. `{"customer_type": "Wholesale"}`)
+and `filter_columns`.
 
 ## The "as of" date
 
@@ -72,8 +120,11 @@ isn't mistaken for a drop. For a fair comparison of the current month, use
 ## Download
 
 **Download dashboard (HTML)** saves a single self-contained file with every
-range and comparison built in — open it in any browser, offline, or email it
-to a client. From the command line:
+range and comparison built in, for the filters chosen at the time (listed at
+the top of the file) — open it in any browser, offline, or email it to a client.
+The web app builds this file only when you click the button (`include_html`),
+which keeps every other dashboard response about half the size. From the
+command line:
 `python -m data_skills run build-dashboard yourfile.csv` → `outputs/build-dashboard/html_dashboard.html`.
 
 ## Colors

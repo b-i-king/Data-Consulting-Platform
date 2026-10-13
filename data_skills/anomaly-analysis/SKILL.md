@@ -65,7 +65,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run anomaly-analysis samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Outlier & impossible-value sweep** · API: `POST /api/skills/anomaly-analysis/run`.
+Web: **Explore your data → Run a skill → Outlier & impossible-value sweep** (always included) · API: `POST /api/skills/anomaly-analysis/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

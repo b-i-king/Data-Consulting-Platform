@@ -79,7 +79,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run predictive-modeling samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Forecasts & predictive models** · API: `POST /api/skills/predictive-modeling/run`.
+Web: **Explore your data → Run a skill → Forecasts & predictive models** (unlocked when the client chooses **Data Science & Machine Learning**) · API: `POST /api/skills/predictive-modeling/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

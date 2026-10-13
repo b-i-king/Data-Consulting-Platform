@@ -36,6 +36,8 @@ export default function LineChart(props: {
   formatX?: (x: string) => string;
   extraTooltip?: (index: number) => string | null;
   ariaLabel: string;
+  /** Drawing height in pixels (default 300, or 220 on narrow screens). */
+  height?: number;
 }) {
   const { x, series, partialLast = false } = props;
   const formatX = props.formatX ?? usDate;
@@ -44,7 +46,7 @@ export default function LineChart(props: {
   const boxRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const [W, setW] = useState(900);
-  const H = W < 520 ? 220 : 300;
+  const H = props.height ?? (W < 520 ? 220 : 300);
 
   useEffect(() => {
     const el = boxRef.current;

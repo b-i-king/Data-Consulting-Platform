@@ -120,7 +120,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run sample-size samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → "Is there enough data?" assessment** · API: `POST /api/skills/sample-size/run`.
+Web: **Explore your data → Run a skill → "Is there enough data?" assessment** (unlocked when the client chooses **Data Strategy & Discovery**) · API: `POST /api/skills/sample-size/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

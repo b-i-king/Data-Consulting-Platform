@@ -55,11 +55,14 @@ listing the skill's options. Try everything on the sample data: see
 | `__main__.py` | The command line (`python -m data_skills …`) |
 | `<skill>/skill.py` | One skill: `SKILL = SkillSpec(...)` and `run(data, **options) -> SkillResult` |
 
-**Why the folder moved:** skills used to live in `.claude/skills/`. They are
-now product code, so they live in `data_skills/`; `.claude/skills` is a
-symbolic link to this folder so Claude Code still finds every `SKILL.md`.
-(On Windows, enable symlinks in Git — `git config core.symlinks true` — or
-Claude Code won't see the skills.)
+**Why the folder is here:** skills used to live in `.claude/skills/`. They are
+now product code (the web app and API run them), so they live in `data_skills/`.
+To let Claude Code also load them as skills in your own sessions, point it here,
+e.g. `mkdir -p .claude && ln -s ../data_skills .claude/skills` (not committed).
+
+**In the web app** a skill is offered only when the client has chosen its
+service; Data Cleaning is always included. The others show as locked badges
+with a price and an **Add** button.
 
 ## By category
 
@@ -101,18 +104,18 @@ Claude Code won't see the skills.)
 | [`data-visualization`](data-visualization/SKILL.md) | Anthropic | Chart choice, color, accessibility principles |
 | [`data-reporting`](data-reporting/SKILL.md) | Rosehill | Shareable PDF report about a dataset |
 
-### 5. Data Science & Machine Learning — *predict*
-| Skill | Source | Use it to… |
-|---|---|---|
-| [`predictive-modeling`](predictive-modeling/SKILL.md) | project | Forecasts and predictive models with baseline, CV, plain-English results |
-| [`multivariate-analysis`](multivariate-analysis/SKILL.md) | Rosehill | Controlled effects, multicollinearity, dimensionality reduction |
-
-### 6. Data Engineering — *structure and document*
+### 5. Data Engineering — *structure and document*
 | Skill | Source | Use it to… |
 |---|---|---|
 | [`er-diagram`](er-diagram/SKILL.md) | project | Verified ER diagrams (Mermaid) with key checks |
 | [`data-dictionary-creator`](data-dictionary-creator/SKILL.md) | Rosehill | Column-by-column documentation |
 | [`sql-queries`](sql-queries/SKILL.md) | Anthropic | Correct, performant SQL across warehouse dialects |
+
+### 6. Data Science & Machine Learning — *predict*
+| Skill | Source | Use it to… |
+|---|---|---|
+| [`predictive-modeling`](predictive-modeling/SKILL.md) | project | Forecasts and predictive models with baseline, CV, plain-English results |
+| [`multivariate-analysis`](multivariate-analysis/SKILL.md) | Rosehill | Controlled effects, multicollinearity, dimensionality reduction |
 
 ### 7. AI — *ask questions about your data*
 | Skill | Source | Use it to… |
@@ -165,6 +168,7 @@ turn off the plugin and use these copies.
    `run(data, **options) -> SkillResult` (copy a similar skill as a starting point).
 3. Add it to **one** category in `catalog.json` with a client-friendly `label`.
 4. Add a case to `CASES` in `tests/test_data_skills.py` that runs it on the sample data.
-5. Run `pytest -q` — the tests confirm it's placed exactly once, has a
-   `skill.py`, and runs.
-6. If it's adapted from someone else's work, keep their license notice.
+5. Run `python scripts/sync_skill_docs.py` to add its "Run it" section to SKILL.md.
+6. Run `pytest -q` — the tests confirm it's placed exactly once, has a
+   `skill.py`, runs, and its docs match the code.
+7. If it's adapted from someone else's work, keep their license notice.

@@ -176,7 +176,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run data-reporting samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Shareable PDF reports** · API: `POST /api/skills/data-reporting/run`.
+Web: **Explore your data → Run a skill → Shareable PDF reports** (unlocked when the client chooses **Data Visualization**) · API: `POST /api/skills/data-reporting/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

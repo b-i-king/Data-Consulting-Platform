@@ -92,6 +92,60 @@ def test_drop_any_strategy_removes_rows_with_missing_values():
     assert report.rows_dropped_for_missing == 2
 
 
+def test_missing_value_advice_levels_and_fill_suggestions():
+    n = 20
+    df = pd.DataFrame({
+        "row_id":    range(1, n + 1),   # keeps rows unique, so none are removed as duplicates
+        "symmetric": [10.0, 11, 9, 10, 12, 8, 10, 11, 9, 10, 10, 11, 9, 10, 12, 8, 10, 11, 9, None],  # 5% missing
+        "skewed":    [1.0, 1, 1, 2, 1, 2, 1, 1, 3, 1, 2, 1, 1, 50, 1, 2, None, None, None, None],     # 20%, long tail
+        "city":      ["Atlanta"] * 12 + ["Decatur"] * 2 + [None] * 6,                               # 30% text
+        "notes":     ["x"] + [None] * (n - 1),                                                      # 95%
+    })
+    _, report = clean_dataframe(df)
+    by = {c.column: c for c in report.column_reports}
+    assert (by["symmetric"].missing_level, by["symmetric"].suggested_fill) == ("low", "mean")
+    assert (by["skewed"].missing_level, by["skewed"].suggested_fill) == ("review", "median")
+    assert by["skewed"].skewness > 0.5
+    assert (by["city"].missing_level, by["city"].suggested_fill) == ("review", "mode")
+    assert by["city"].fill_options == {"mode": "Atlanta"}
+    assert by["notes"].missing_level == "remove"
+    assert report.columns_to_review == ["skewed", "city"] and report.columns_to_remove == ["notes"]
+    assert not report.consultation_recommended
+
+
+def test_fill_and_drop_choices_change_only_what_was_asked():
+    df = pd.DataFrame({"qty": [1, 2, None, 4], "price": [1.5, None, 2.5, 3.0],
+                       "city": ["A", "A", None, "B"], "notes": [None, None, None, "x"]})
+    cleaned, report = clean_dataframe(
+        df, column_actions={"qty": "mean", "price": "median", "city": "auto", "notes": "drop"})
+    assert cleaned["qty"].tolist() == [1, 2, 2, 4]          # mean 2.33 rounded: whole numbers stay whole
+    assert cleaned["price"].tolist() == [1.5, 2.5, 2.5, 3.0]
+    assert cleaned["city"].tolist() == ["A", "A", "A", "B"]  # auto = mode for text
+    assert "notes" not in cleaned.columns and report.columns_dropped == ["notes"]
+    assert report.columns == 3 and report.columns_before == 4 and report.cells_filled == 3
+    qty = next(c for c in report.column_reports if c.column == "qty")
+    assert (qty.missing_count, qty.action, qty.filled_count, qty.missing_after) == (1, "mean", 1, 0)
+    # The caller's data is untouched, and "keep" is the default.
+    assert df["qty"].isna().sum() == 1
+    assert clean_dataframe(df)[0]["qty"].isna().sum() == 1
+
+
+def test_fills_happen_before_dropping_rows_and_bad_actions_are_refused():
+    df = pd.DataFrame({"a": [1.0, None, 3.0], "b": ["x", "y", None]})
+    cleaned, report = clean_dataframe(df, missing_strategy="drop_any", column_actions={"a": "median"})
+    assert len(cleaned) == 2 and report.rows_dropped_for_missing == 1   # only b's gap drops a row
+    with pytest.raises(ValueError):
+        clean_dataframe(df, column_actions={"a": "average"})
+
+
+def test_mostly_empty_data_recommends_a_consultation():
+    # 10 columns, each row has just one value: 90% of cells are empty.
+    df = pd.DataFrame([[i if j == i else None for j in range(10)] for i in range(10)],
+                      columns=[f"c{j}" for j in range(10)])
+    _, report = clean_dataframe(df)
+    assert report.missing_pct_before >= 90 and report.consultation_recommended
+
+
 def test_cleaning_does_not_modify_the_input():
     df = pd.DataFrame({"a": [" x ", " x "]})
     clean_dataframe(df)
@@ -176,3 +230,12 @@ def test_no_shared_id_suggests_fuzzy_link():
     result = categorize([sales, qb])
     [rel] = result.relationships
     assert rel.method == "fuzzy" and rel.key_columns == ["name"]
+
+
+def test_id_columns_are_never_filled():
+    df = pd.DataFrame({"order_id": range(10), "customer_id": [1001, None, 1003, None, 1005, 1006, None, 1008, 1009, 1010]})
+    cleaned, report = clean_dataframe(df, column_actions={"customer_id": "mean"})
+    cid = next(c for c in report.column_reports if c.column == "customer_id")
+    assert cid.fill_options == {} and cid.suggested_fill is None and "ID" in cid.recommendation
+    assert cleaned["customer_id"].isna().sum() == 3            # the request is refused, gaps kept
+    assert any("IDs" in n for n in report.notes)

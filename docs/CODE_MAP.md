@@ -41,19 +41,33 @@ Each source file also starts with a header comment explaining itself.
 
 ### 3. Follow a skill run: the dashboard
 
-1. **`web/components/explore/Dashboard.tsx`** — calls `runSkill("build-dashboard", files)`
-   once; range and comparison buttons just switch between precomputed series.
+1. **`web/components/explore/Dashboard.tsx`** — calls `runSkill("build-dashboard", input)`
+   with the files and missing-value choices; range and comparison buttons just switch
+   between precomputed series. Changing a filter (customer type, age group…) calls it again.
 2. **`api/routers/skills.py` → `run_skill_endpoint()`** → **`api/services/skills_runner.py`**
    — cleans the uploads with the same pipeline, then calls the registry.
 3. **`data_skills/registry.py` → `run_skill()`** — checks the options and calls
-   **`data_skills/build-dashboard/skill.py` → `run()`**.
+   **`data_skills/build-dashboard/skill.py` → `run()`**, which finds the type column
+   (`find_kpi_column`) and the customer/demographic filters (`find_filter_columns`).
 4. **`data_skills/_time.py`** — `window()` (which dates each range covers and
    what it's compared with) and `period_series()` (one row per day/week/month
    with the previous period and % change).
 5. Back in the browser: **`components/charts/LineChart.tsx`** draws it.
 
 Every other skill follows the same path; **`SkillsPanel.tsx`** shows any
-skill's summary, findings, tables, charts and downloads.
+skill's summary, findings, tables, charts and downloads. Only skills of the
+services the client chose are offered; the rest are badges from
+**`LockedService.tsx`** that add the service.
+
+### 4. Follow a missing-value choice
+
+1. **`web/components/wizard/MissingValues.tsx`** — the per-column dropdowns; **Apply
+   changes** calls `onApply`.
+2. **`Wizard.tsx` → `applyActions()`** — re-sends the files with `column_actions` to
+   `/api/files/analyze` and stores the choices for the dashboard, skills and download.
+3. **`api/services/pipeline.py` → `parse_column_actions()`** →
+   **`api/services/cleaning.py` → `_missing_advice()`** (levels, skewness, fill
+   suggestion) and **`_apply_column_actions()`** (drop / fill).
 
 ## File reference
 
@@ -83,6 +97,9 @@ skill's summary, findings, tables, charts and downloads.
 | `api/services/skills_runner.py` | Uploads → cleaned tables → skill | Changing which data a skill receives |
 | `web/components/explore/*.tsx` | Dashboard + skills panel | Changing the Explore UI |
 | `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
+| `scripts/sync_skill_docs.py` | Regenerates each SKILL.md "Run it" section | After changing a skill's options |
+| `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |
+| `web/components/explore/LockedService.tsx` | Locked-service badges | Changing how services unlock skills |
 
 ## Patterns worth knowing
 

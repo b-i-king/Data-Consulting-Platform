@@ -12,7 +12,7 @@ import type {
   SkillResult,
   AuthResponse,
   IntakeOptions,
-  MissingStrategy,
+  CleaningInput,
   Quote,
   SignupInput,
 } from "./types";
@@ -81,19 +81,25 @@ export const signin = (email: string) => postJson<AuthResponse>("/api/accounts/s
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
 
+/** The missing-value choices as form fields (same for analyze, download and skills). */
+const choiceFields = (c: CleaningInput) => ({
+  missing_strategy: c.strategy,
+  column_actions: JSON.stringify(c.columnActions),
+});
+
 /**
- * Run a data skill (data_skills/<id>/skill.py) on the files kept in memory.
- * `groupId` picks which cleaned table to use when there are several.
+ * Run a data skill (data_skills/<id>/skill.py) on the files kept in memory,
+ * cleaned with the user's choices. `groupId` picks which cleaned table to use.
  */
 export async function runSkill(
   skillId: string,
-  files: File[],
+  input: CleaningInput,
   params: Record<string, unknown>,
   groupId = 0,
 ): Promise<SkillResult> {
   const res = await fetch(`${API_URL}/api/skills/${encodeURIComponent(skillId)}/run`, {
     method: "POST",
-    body: filesForm(files, { params: JSON.stringify(params), group_id: String(groupId) }),
+    body: filesForm(input.files, { params: JSON.stringify(params), group_id: String(groupId), ...choiceFields(input) }),
   });
   await raiseForStatus(res);
   return res.json();
@@ -112,10 +118,10 @@ export function saveText(filename: string, text: string, type = "text/plain") {
 }
 
 /** Guest step: upload files and get the cleaning report + preview. */
-export async function analyzeFiles(files: File[], strategy: MissingStrategy): Promise<AnalyzeResponse> {
+export async function analyzeFiles(input: CleaningInput): Promise<AnalyzeResponse> {
   const res = await fetch(`${API_URL}/api/files/analyze`, {
     method: "POST",
-    body: filesForm(files, { missing_strategy: strategy }),
+    body: filesForm(input.files, choiceFields(input)),
   });
   await raiseForStatus(res);
   return res.json();
@@ -126,19 +132,18 @@ export async function analyzeFiles(files: File[], strategy: MissingStrategy): Pr
  * The file is never stored on the server — see api/routers/files.py.
  */
 export async function downloadCleaned(opts: {
-  files: File[];
+  input: CleaningInput;
   token: string;
   groupId: number;
-  strategy: MissingStrategy;
   format: "csv" | "xlsx";
 }): Promise<{ amountUsd: string | null }> {
   const res = await fetch(`${API_URL}/api/files/download`, {
     method: "POST",
     headers: { Authorization: `Bearer ${opts.token}` },
-    body: filesForm(opts.files, {
+    body: filesForm(opts.input.files, {
       group_id: String(opts.groupId),
-      missing_strategy: opts.strategy,
       file_format: opts.format,
+      ...choiceFields(opts.input),
     }),
   });
   await raiseForStatus(res);

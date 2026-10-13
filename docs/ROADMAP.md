@@ -8,7 +8,7 @@ What exists today (v0.1) and suggested next steps, roughly in priority order.
 - Flat files: CSV, TSV, TXT, Excel (multi-sheet), JSON, Parquet
 - Multi-file categorization: same structure / partitioned by year / different
   entities, with suggested join keys
-- Automatic cleaning with a per-column missing-value report and full preview
+- Automatic cleaning with a per-column missing-value report, fill/remove advice, and a first-rows preview
 - Sample-size snapshot (adapted `sample-size` skill)
 - Service selection with a price estimate and consultant booking hand-off
 - Signup at download (individual or business + team members); CSV/Excel download

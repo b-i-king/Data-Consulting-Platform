@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     industry_supersector TEXT CHECK (industry_supersector IN ('goods_producing', 'service_providing')),
     naics_sector         TEXT,               -- e.g. '44-45' (Retail Trade)
     naics_subsector      TEXT,               -- e.g. '445'   (Food and Beverage Retailers)
+    -- Company size (business accounts): LinkedIn size code, 'A' = self-employed,
+    -- 'B' = 1-10 employees ... 'I' = 10,001+ (see api/services/intake.py).
+    company_size         TEXT CHECK (company_size IN ('A','B','C','D','E','F','G','H','I')),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ                -- NULL until an invited member first signs in
 );
@@ -49,6 +52,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS industry_supersector TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_sector TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_subsector TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS company_size TEXT;
 CREATE INDEX IF NOT EXISTS idx_accounts_naics ON accounts (naics_sector, naics_subsector);
 
 -- ── Teams ───────────────────────────────────────────────────────────────────

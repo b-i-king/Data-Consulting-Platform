@@ -104,7 +104,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run standard-deviation samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Spread & variability** · API: `POST /api/skills/standard-deviation/run`.
+Web: **Explore your data → Run a skill → Spread & variability** (unlocked when the client chooses **Data Exploration & Analysis**) · API: `POST /api/skills/standard-deviation/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

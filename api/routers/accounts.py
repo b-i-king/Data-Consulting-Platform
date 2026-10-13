@@ -48,6 +48,7 @@ def _account_out(acc: dict) -> AccountOut:
         industry_supersector=acc.get("industry_supersector"),
         naics_sector=acc.get("naics_sector"),
         naics_subsector=acc.get("naics_subsector"),
+        company_size=acc.get("company_size"),
     )
 
 
@@ -68,6 +69,7 @@ async def signup(body: SignupIn):
             industry_supersector=body.industry_supersector,
             naics_sector=body.naics_sector,
             naics_subsector=body.naics_subsector,
+            company_size=body.company_size,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -136,6 +138,7 @@ async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
             industry_supersector=owner.get("industry_supersector"),
             naics_sector=owner.get("naics_sector"),
             naics_subsector=owner.get("naics_subsector"),
+            company_size=owner.get("company_size"),
         )
     except account_store.AccountExistsError:
         raise HTTPException(

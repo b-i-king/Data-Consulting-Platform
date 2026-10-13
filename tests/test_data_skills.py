@@ -112,6 +112,44 @@ def test_dashboard_month_to_date_matches_pandas(sales):
     assert set(r["ranges"]["last_4_weeks"]["series"]) == {"dod", "wow", "mom"}
 
 
+def test_dashboard_kpis_are_the_most_common_types(sales):
+    r = run_skill("build-dashboard", sales, {}).data
+    assert r["mode"] == "kpi_types" and r["kpi_column"] == "order_type" and r["value_column"] == "amount"
+    top = sales["order_type"].value_counts().head(4).index.tolist()
+    assert [r["metric_labels"][m] for m in r["kpis"]] == top          # most rows first
+    assert r["overview"] == ["__total__", "__rows__"]
+    # Customer / demographic columns are the filters (not metrics).
+    assert r["filter_columns"][:2] == ["customer_type", "age_group"]
+    # In-store total for the last 3 months matches plain pandas.
+    w = r["ranges"]["last_3_months"]["window"]
+    d = pd.to_datetime(sales["order_date"])
+    inside = (d >= w["start"]) & (d <= w["end"])
+    expected = sales.loc[inside & (sales["order_type"] == top[0]), "amount"].sum()
+    assert r["ranges"]["last_3_months"]["kpis"][r["kpis"][0]]["current"] == pytest.approx(expected)
+    assert r["ranges"]["last_3_months"]["kpis"]["__rows__"]["current"] == inside.sum()
+
+
+def test_dashboard_filters_use_only_matching_rows(sales):
+    full = run_skill("build-dashboard", sales, {"include_html": False}).data
+    r = run_skill("build-dashboard", sales, {"filters": {"customer_type": "Wholesale"}, "include_html": False})
+    d = r.data
+    assert d["filters"] == {"customer_type": ["Wholesale"]} and "html_dashboard" not in r.artifacts
+    assert d["kpis"] == full["kpis"] and d["filter_options"] == full["filter_options"]   # stable under filters
+    w = d["ranges"]["year_to_date"]["window"]
+    dates = pd.to_datetime(sales["order_date"])
+    mask = (sales["customer_type"] == "Wholesale") & (dates >= w["start"]) & (dates <= w["end"])
+    assert d["ranges"]["year_to_date"]["kpis"]["__total__"]["current"] == pytest.approx(sales.loc[mask, "amount"].sum())
+    with pytest.raises(SkillInputError):
+        run_skill("build-dashboard", sales, {"filters": {"customer_type": "Nobody"}})
+
+
+def test_dashboard_without_a_type_column_falls_back_to_metrics():
+    feedback = _load("feedback")
+    d = run_skill("build-dashboard", feedback, {}).data
+    assert d["mode"] == "metrics" and d["kpis"] == ["csat", "nps"]          # scores are averaged
+    assert d["metric_labels"]["csat"] == "Average CSAT"
+
+
 def test_windows():
     asof, first = pd.Timestamp("2026-10-13"), pd.Timestamp("2024-01-01")
     w = _time.window("month_to_date", asof, first)
@@ -141,3 +179,13 @@ def test_ask_your_data_matches_pandas(sales):
     assert got == pytest.approx(sales.groupby("store")["amount"].sum().to_dict())
     with pytest.raises(SkillInputError, match="can't answer"):
         run_skill("ask-your-data", sales, {"question": "why are sales down"})
+
+
+def test_skill_docs_match_the_code():
+    """Each SKILL.md's "Run it" options table is generated from skill.py (scripts/sync_skill_docs.py)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "sync_skill_docs.py"
+    spec = importlib.util.spec_from_file_location("sync_skill_docs", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.sync(check=True) == [], "Run: python scripts/sync_skill_docs.py"

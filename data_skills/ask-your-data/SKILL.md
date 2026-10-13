@@ -74,7 +74,7 @@ This procedure is also runnable code: [`skill.py`](skill.py) in this folder (cat
 python -m data_skills run ask-your-data samples/sales.csv --param KEY=VALUE
 ```
 
-Web: **Explore your data → Run a skill → Ask questions in plain English** · API: `POST /api/skills/ask-your-data/run`.
+Web: **Explore your data → Run a skill → Ask questions in plain English** (unlocked when the client chooses **AI**) · API: `POST /api/skills/ask-your-data/run`.
 Input: one table.
 
 | Option | Type | Default | What it does |

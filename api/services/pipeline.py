@@ -11,8 +11,9 @@ Glues the individual services together in the order a consultant would work:
                          year, or different kinds of data?
                          (api/services/categorizer.py)
     3. combine_group()   stack files that share a structure into one table
-    4. clean_dataframe() remove duplicates, measure missing values...
-                         (api/services/cleaning.py)
+    4. clean_dataframe() remove duplicates, measure missing values, and apply
+                         the user's missing-value choices (drop / fill a
+                         column, drop rows) — api/services/cleaning.py
     5. sample_size_snapshot()  "is there enough data?" (api/services/sample_size.py)
 
 The routers call `run_pipeline()` for both the guest preview and the signed-in
@@ -24,6 +25,7 @@ duration of the request and are released by Python afterwards.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict, dataclass
 
@@ -97,7 +99,30 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
     return datasets
 
 
-def run_pipeline(datasets: list[LoadedDataset], missing_strategy: MissingStrategy = "keep") -> PipelineResult:
+def parse_column_actions(text: str | None) -> dict[int, dict[str, str]]:
+    """
+    Read the `column_actions` form field: JSON like
+        {"0": {"amount": "median", "notes": "drop"}}
+    i.e. group id -> {column -> action}. The browser sends the same value to
+    analyze, download and skills, so all three see identical data.
+    """
+    try:
+        raw = json.loads(text or "{}")
+        if not isinstance(raw, dict) or not all(isinstance(v, dict) for v in raw.values()):
+            raise ValueError
+        return {int(k): {str(c): str(a) for c, a in v.items()} for k, v in raw.items()}
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail='column_actions must look like {"0": {"column name": "median"}}.',
+        )
+
+
+def run_pipeline(
+    datasets: list[LoadedDataset],
+    missing_strategy: MissingStrategy = "keep",
+    column_actions: dict[int, dict[str, str]] | None = None,
+) -> PipelineResult:
     """Steps 2–5 of the pipeline. Timed so runtime billing is accurate."""
     started = time.perf_counter()
     categorization = categorize(datasets)
@@ -105,7 +130,13 @@ def run_pipeline(datasets: list[LoadedDataset], missing_strategy: MissingStrateg
     groups: list[GroupResult] = []
     for group in categorization.groups:
         combined = combine_group(datasets, group.members)
-        cleaned, report = clean_dataframe(combined, dataset_name=group.label, missing_strategy=missing_strategy)
+        try:
+            cleaned, report = clean_dataframe(
+                combined, dataset_name=group.label, missing_strategy=missing_strategy,
+                column_actions=(column_actions or {}).get(group.group_id),
+            )
+        except ValueError as exc:  # e.g. an unknown fill method
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
         groups.append(
             GroupResult(
                 group_id=group.group_id,
