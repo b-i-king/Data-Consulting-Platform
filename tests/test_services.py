@@ -168,3 +168,11 @@ def test_sample_size_snapshot_counts_complete_rows():
     verdicts = {c["rows_needed"]: c["verdict"] for c in snap["checks"]}
     assert verdicts[385] == "yellow"   # 300 is short of 385 but more than half
     assert verdicts[100] == "green"
+
+
+def test_no_shared_id_suggests_fuzzy_link():
+    sales = _ds("sales.csv", pd.DataFrame({"order_no": [1], "customer": ["Acme Bakery"], "amount": [5.0]}))
+    qb = _ds("quickbooks_customers.csv", pd.DataFrame({"DisplayName": ["ACME BAKERY, LLC"], "Balance": [0]}))
+    result = categorize([sales, qb])
+    [rel] = result.relationships
+    assert rel.method == "fuzzy" and rel.key_columns == ["name"]

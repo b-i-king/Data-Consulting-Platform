@@ -22,6 +22,11 @@ coding, so **understanding the code matters as much as the code itself**.
   - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)
   - any API response → update `web/lib/types.ts`
   - any table → update `db/schema.sql` and `api/services/account_store.py`
+  - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
+  - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
+  - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
+- **Never read pickle or HDF5 uploads** — they can run code. Untrusted files only
+  go through the readers in `file_reader.py`.
 - **pandas is the data engine.** Prefer clear pandas over clever pandas.
 - **Never store client data** without an explicit design change documented in
   `docs/ARCHITECTURE.md`.

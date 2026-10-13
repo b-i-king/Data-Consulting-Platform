@@ -67,6 +67,9 @@ async def create_account(
     team_id: str | None = None,
     team_role: str | None = None,
     status: str = "active",
+    industry_supersector: str | None = None,
+    naics_sector: str | None = None,
+    naics_subsector: str | None = None,
 ) -> dict:
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
@@ -91,6 +94,9 @@ async def create_account(
         "id": account_id, "account_type": account_type, "first_name": first_name,
         "last_name": last_name, "email": email, "company_name": company_name,
         "team_id": team_id, "team_role": team_role, "status": status, "created_at": _now(),
+        "last_login_at": _now() if status == "active" else None,
+        "industry_supersector": industry_supersector, "naics_sector": naics_sector,
+        "naics_subsector": naics_subsector,
     }
 
     if database.pool is None:
@@ -105,10 +111,12 @@ async def create_account(
         async with conn.transaction():
             await conn.execute(
                 """INSERT INTO accounts (id, account_type, first_name, last_name, email,
-                                         company_name, team_id, team_role, status)
-                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)""",
+                                         company_name, team_id, team_role, status, last_login_at,
+                                         industry_supersector, naics_sector, naics_subsector)
+                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
-                company_name, team_role, status,
+                company_name, team_role, status, account["last_login_at"],
+                industry_supersector, naics_sector, naics_subsector,
             )
             if team:
                 await conn.execute(
@@ -121,6 +129,17 @@ async def create_account(
                     uuid.UUID(team_id), uuid.UUID(account_id),
                 )
     return account
+
+
+async def touch_last_login(account_id: str) -> None:
+    """Record a sign-in time (useful for your consulting analysis: who is active?)."""
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id]["last_login_at"] = _now()
+        return
+    await database.pool.execute(
+        "UPDATE accounts SET last_login_at = now() WHERE id = $1", uuid.UUID(account_id)
+    )
 
 
 async def list_team_members(team_id: str) -> list[dict]:

@@ -45,6 +45,9 @@ def _account_out(acc: dict) -> AccountOut:
         team_id=str(acc["team_id"]) if acc.get("team_id") else None,
         team_role=acc.get("team_role"),
         status=acc.get("status", "active"),
+        industry_supersector=acc.get("industry_supersector"),
+        naics_sector=acc.get("naics_sector"),
+        naics_subsector=acc.get("naics_subsector"),
     )
 
 
@@ -62,6 +65,9 @@ async def signup(body: SignupIn):
             last_name=body.last_name.strip(),
             email=body.email,
             company_name=(body.company_name or "").strip() or None,
+            industry_supersector=body.industry_supersector,
+            naics_sector=body.naics_sector,
+            naics_subsector=body.naics_subsector,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -79,6 +85,7 @@ async def signin(body: SigninIn):
     acc = await account_store.get_account_by_email(body.email)
     if acc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No account found for that email. Please sign up.")
+    await account_store.touch_last_login(str(acc["id"]))
     return _auth_response(acc)
 
 
@@ -125,6 +132,10 @@ async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
             team_id=str(owner["team_id"]),
             team_role="member",
             status="invited",
+            # Colleagues share the business's industry.
+            industry_supersector=owner.get("industry_supersector"),
+            naics_sector=owner.get("naics_sector"),
+            naics_subsector=owner.get("naics_subsector"),
         )
     except account_store.AccountExistsError:
         raise HTTPException(

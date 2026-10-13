@@ -33,7 +33,8 @@ api/                      FastAPI backend (Python)
   routers/intake.py       GET questions, GET services, POST quote
   routers/files.py        POST analyze (guest), POST download (signed in)
   routers/accounts.py     signup, signin, me, team
-  services/file_reader.py   file -> DataFrame (CSV, Excel, JSON, Parquet)
+  services/file_reader.py   file -> DataFrames: every safe pandas format (CSV/Excel recommended)
+  services/entity_matching.py  fuzzy-link records with no shared ID (names/emails/phones)
   services/categorizer.py   how multiple files relate
   services/cleaning.py      the cleaning pipeline + report
   services/sample_size.py   "is there enough data?" snapshot
@@ -41,7 +42,11 @@ api/                      FastAPI backend (Python)
   services/pricing.py       service catalog, runtime billing, quotes
   services/intake.py        questionnaire answer choices
   services/account_store.py accounts/teams/usage (Postgres or in-memory)
-db/schema.sql             database tables (run once in Supabase)
+db/schema.sql             platform tables: accounts, teams, usage (run once in Supabase)
+db/warehouse.sql          client-data star schema for Data Engineering (opt-in)
+api/data/                 reference data (NAICS sectors/subsectors)
+scripts/                  one-off scripts (rebuild the NAICS list)
+data/reference/           source files for reference data (SBA size standards)
 tests/                    pytest unit + API tests
 web/                      Next.js frontend (TypeScript + Tailwind CSS)
   app/page.tsx            landing page
@@ -80,6 +85,12 @@ files to disk or the database:
 jobs (ML training). At that point, add temporary storage (Supabase Storage with a
 24-hour auto-delete) and a background job queue. Pricing would then add a
 storage component — see [PRICING.md](PRICING.md).
+
+**Opt-in exception: Data Engineering.** Clients who buy Data Engineering can
+choose to have their data stored in the warehouse schema (`db/warehouse.sql`,
+explained in [DATA_MODEL.md](DATA_MODEL.md)): one shared star schema for all
+clients, `client_id` on every row, Row Level Security for isolation. The free
+cleaning flow never writes to it.
 
 ### 2. Guest first, account only at download
 

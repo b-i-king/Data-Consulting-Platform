@@ -50,7 +50,8 @@ export default function StepResults(props: {
           </div>
           {categorization.relationships.map((r) => (
             <p key={`${r.left_group}-${r.right_group}`} className="text-sm">
-              🔗 {r.description}
+              {/* 🔗 exact shared ID · ≈ fuzzy match on names / emails / phones */}
+              <span aria-hidden>{r.method === "fuzzy" ? "≈" : "🔗"}</span> {r.description}
             </p>
           ))}
           <p className="text-xs text-ink-muted">

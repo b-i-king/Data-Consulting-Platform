@@ -12,12 +12,15 @@ higher-impact projects.
 
 ## What it does today (v0.1)
 
-1. **About you** — individual or business
+1. **About you** — individual or business; businesses pick goods vs. services,
+   then their NAICS sector and subsector
 2. **Your data** — files on your computer (live), cloud storage / warehouses and
    business apps (coming soon → consultant hand-off)
-3. **Upload** — CSV, TSV, TXT, Excel (every sheet), JSON, Parquet; one or many files
+3. **Upload** — CSV and Excel recommended, plus every format pandas can safely
+   read (JSON, Parquet, SAS, Stata, SPSS, XML, HTML, .zip/.gz, ...); one or many files
 4. **Clean & preview** — multi-file categorization (same structure, split by
-   year, or different kinds of data with join keys), automatic cleaning, a
+   year, or different kinds of data linked by shared IDs or fuzzy name/email/phone
+   matching), automatic cleaning, a
    missing-value report per column, an "is there enough data?" check, and a full
    preview
 5. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
@@ -64,7 +67,9 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit, design decisions, hosting costs |
 | [docs/CODE_MAP.md](docs/CODE_MAP.md) | File-by-file guided walkthrough |
 | [docs/DATA_CLEANING.md](docs/DATA_CLEANING.md) | Exactly what happens to client files |
-| [docs/PRICING.md](docs/PRICING.md) | Services, runtime billing, open decisions |
+| [docs/PRICING.md](docs/PRICING.md) | Services, runtime billing, what downloads cost you, open decisions |
+| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | One database for many clients: star schema, ER diagram, privacy |
+| [docs/CONNECTORS.md](docs/CONNECTORS.md) | Cloud sources & integrations (QuickBooks, Gusto): status and plan |
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Run it locally |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Supabase + Render + Vercel |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
@@ -74,7 +79,9 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 
 ```
 api/            FastAPI backend (core, models, routers, services)
-db/schema.sql   Supabase tables
+db/schema.sql   platform tables (accounts, teams, usage)
+db/warehouse.sql client-data star schema (Data Engineering, opt-in)
+scripts/        reference-data builders (NAICS)
 tests/          pytest suite
 web/            Next.js frontend
 docs/           documentation

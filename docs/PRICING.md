@@ -49,6 +49,30 @@ Each download writes a row to `usage_events` (account, dataset name, row count,
 runtime, billable minutes, amount). **No payment is collected yet** — this is
 the ledger a payment integration will charge from.
 
+## What a download costs YOU (hosting)
+
+**Short answer: almost nothing per download.** Checked October 2026 — verify
+on each provider's pricing page before budgeting.
+
+| Piece | Charged for | What one download uses |
+|---|---|---|
+| Render (API) | Server time: flat monthly fee, not per request. Outbound bandwidth: Hobby includes **5 GB/month**, Pro 25 GB, then **$0.15/GB** ([Render docs](https://render.com/docs/outbound-bandwidth); these were cut sharply in April 2026) | The preview + the cleaned file leave the server |
+| Vercel (website) | Bandwidth for the website pages | Nothing — the file goes straight from the API to the browser |
+| Supabase (database) | Egress; free plan includes 5 GB/month | One tiny `usage_events` row (no data) |
+| Uploads (inbound) | Free on Render | — |
+
+Responses are **gzip-compressed** (`GZipMiddleware` in `api/main.py`). Measured
+on a 1.1 MB, 20,000-row CSV: the preview JSON shrinks from 2.31 MB to 0.22 MB,
+and the cleaned CSV download from 1.11 MB to 0.13 MB — about 0.35 MB of
+outbound bandwidth in total. (That test file was repetitive; real client data
+compresses somewhat less, so plan on 0.3–0.5 MB per 1 MB uploaded.)
+
+Rough math: **5 GB covers roughly 10,000 users a month with ~1 MB files**. Past that, each extra 1 MB user costs well under a tenth of a
+cent at $0.15/GB, compared with the $0.50 minimum runtime charge.
+
+What *can* cost more: very large files (50 MB × many users), the server size you
+pick so big files don't time out, and the Render workspace plan itself.
+
 ## Open decisions for you
 
 1. **Per download or per job?** Right now each download is recorded (CSV and

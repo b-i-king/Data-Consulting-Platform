@@ -14,7 +14,7 @@ import { useState, type FormEvent } from "react";
 import { downloadCleaned, signin, signup } from "@/lib/api";
 import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, MissingStrategy, TeamMemberInput } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, Industry, MissingStrategy, TeamMemberInput } from "@/lib/types";
 import { Button, Card, ChoiceCard, ErrorBox, NavRow, StepHeader } from "./ui";
 
 const inputCls =
@@ -22,6 +22,7 @@ const inputCls =
 
 export default function StepAccount(props: {
   defaultType: AccountType;
+  industry: Industry;
   session: Session | null;
   onSignedIn: (s: Session) => void;
   onSignOut: () => void;
@@ -35,7 +36,7 @@ export default function StepAccount(props: {
       {props.session ? (
         <DownloadPanel {...props} session={props.session} />
       ) : (
-        <AuthPanel defaultType={props.defaultType} onSignedIn={props.onSignedIn} />
+        <AuthPanel defaultType={props.defaultType} industry={props.industry} onSignedIn={props.onSignedIn} />
       )}
       <NavRow onBack={props.onBack} />
     </section>
@@ -44,7 +45,15 @@ export default function StepAccount(props: {
 
 // ── Sign up / sign in ────────────────────────────────────────────────────────
 
-function AuthPanel({ defaultType, onSignedIn }: { defaultType: AccountType; onSignedIn: (s: Session) => void }) {
+function AuthPanel({
+  defaultType,
+  industry,
+  onSignedIn,
+}: {
+  defaultType: AccountType;
+  industry: Industry; // answered on step 1; sent only for business signups
+  onSignedIn: (s: Session) => void;
+}) {
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [type, setType] = useState<AccountType>(defaultType);
   const [first, setFirst] = useState("");
@@ -72,7 +81,7 @@ function AuthPanel({ defaultType, onSignedIn }: { defaultType: AccountType; onSi
               last_name: last,
               email,
               ...(type === "business"
-                ? { company_name: company, team_members: team.filter((m) => m.email.trim()) }
+                ? { company_name: company, team_members: team.filter((m) => m.email.trim()), ...industry }
                 : {}),
             });
       onSignedIn({ token: res.access_token, account: res.account });

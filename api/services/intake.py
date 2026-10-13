@@ -20,6 +20,10 @@ To launch a new connector later, build it, then flip `available` to True.
 
 from __future__ import annotations
 
+import json
+from functools import lru_cache
+from pathlib import Path
+
 ACCOUNT_TYPES = [
     {"id": "individual", "label": "Individual",
      "description": "Freelancer, student, researcher, or just curious about your own data."},
@@ -31,14 +35,11 @@ DATA_LOCATIONS = [
     {
         "id": "flat_files",
         "label": "Files on my computer",
-        "description": "CSV, Excel, JSON, Parquet, or text exports.",
+        "description": "CSV or Excel recommended — plus JSON, Parquet, SAS, Stata, SPSS, zip and more.",
         "available": True,
-        "options": [
-            {"id": "csv", "label": "CSV / TSV / TXT", "available": True},
-            {"id": "excel", "label": "Excel (.xlsx, .xls)", "available": True},
-            {"id": "json", "label": "JSON", "available": True},
-            {"id": "parquet", "label": "Parquet", "available": True},
-        ],
+        # The full list of formats comes from api/services/file_reader.py
+        # (FORMATS), sent to the browser as `file_formats`.
+        "options": [],
     },
     {
         "id": "cloud_storage",
@@ -79,3 +80,40 @@ DATA_LOCATIONS = [
         "options": [],
     },
 ]
+
+
+# ── Industry (NAICS) — asked of business accounts ────────────────────────────
+# Three questions, each narrowing the previous one:
+#   1. Goods-producing or service-providing?   (BLS supersector)
+#   2. Sector,    e.g. "44-45 Retail Trade"     (2-digit NAICS)
+#   3. Subsector, e.g. "445 Food and Beverage Retailers" (3-digit NAICS)
+# We deliberately stop at the subsector. The list is generated from the SBA
+# size-standards workbook by scripts/build_naics_reference.py.
+
+_NAICS_PATH = Path(__file__).resolve().parents[1] / "data" / "naics_sectors.json"
+
+
+@lru_cache
+def naics_tree() -> dict:
+    """The supersector → sector → subsector tree (loaded once)."""
+    return json.loads(_NAICS_PATH.read_text(encoding="utf-8"))
+
+
+def validate_industry(supersector: str | None, sector: str | None, subsector: str | None) -> str | None:
+    """
+    Check that the three industry answers are consistent with each other.
+    Returns an error message, or None when the answers are valid.
+    All three are optional, but each one requires the one before it.
+    """
+    if not supersector:
+        return "Choose goods-producing or service-providing first." if (sector or subsector) else None
+    if supersector not in {s["id"] for s in naics_tree()["supersectors"]}:
+        return "Unknown industry group."
+    if not sector:
+        return "Pick a sector before a subsector." if subsector else None
+    match = next((s for s in naics_tree()["sectors"] if s["code"] == sector), None)
+    if match is None or match["supersector"] != supersector:
+        return "That sector does not belong to the chosen industry group."
+    if subsector and subsector not in {s["code"] for s in match["subsectors"]}:
+        return "That subsector does not belong to the chosen sector."
+    return None

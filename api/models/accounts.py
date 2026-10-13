@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+from api.services.intake import validate_industry
+
 
 class TeamMemberIn(BaseModel):
     """A colleague a business owner wants to add to their team."""
@@ -34,12 +36,25 @@ class SignupIn(BaseModel):
     email: EmailStr
     company_name: str | None = Field(default=None, max_length=200)
     team_members: list[TeamMemberIn] = Field(default_factory=list, max_length=25)
+    # Industry (business accounts only) — see api/services/intake.py.
+    #   industry_supersector: "goods_producing" or "service_providing"
+    #   naics_sector:         2-digit sector code, e.g. "44-45"
+    #   naics_subsector:      3-digit subsector code, e.g. "445"
+    industry_supersector: str | None = None
+    naics_sector: str | None = None
+    naics_subsector: str | None = None
 
     @model_validator(mode="after")
     def _business_rules(self) -> "SignupIn":
-        # Only businesses have teams.
-        if self.account_type == "individual" and self.team_members:
-            raise ValueError("Team members can only be added to a business account.")
+        # Only businesses have teams and an industry.
+        if self.account_type == "individual":
+            if self.team_members:
+                raise ValueError("Team members can only be added to a business account.")
+            if self.industry_supersector or self.naics_sector or self.naics_subsector:
+                raise ValueError("Industry applies to business accounts only.")
+        error = validate_industry(self.industry_supersector, self.naics_sector, self.naics_subsector)
+        if error:
+            raise ValueError(error)
         return self
 
 
@@ -57,6 +72,9 @@ class AccountOut(BaseModel):
     team_id: str | None = None
     team_role: str | None = None
     status: str
+    industry_supersector: str | None = None
+    naics_sector: str | None = None
+    naics_subsector: str | None = None
 
 
 class AuthOut(BaseModel):

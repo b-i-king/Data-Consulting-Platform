@@ -3,7 +3,7 @@
 // step to show. Each step is its own component that receives just the values
 // and callbacks it needs. Flow:
 //
-//   0. Who are you?            individual / business
+//   0. Who are you?            individual / business (+ industry for businesses)
 //   1. Where is your data?     flat files (live) · cloud · business apps (coming soon)
 //   2. Upload files            one or many; choose how to treat missing values
 //   3. Clean & preview         categorization, cleaning report, full preview
@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import { getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
@@ -38,6 +38,11 @@ export default function Wizard() {
   // Answers collected along the way.
   const [step, setStep] = useState(0);
   const [accountType, setAccountType] = useState<AccountType | null>(null);
+  const [industry, setIndustry] = useState<Industry>({
+    industry_supersector: null,
+    naics_sector: null,
+    naics_subsector: null,
+  });
   const [location, setLocation] = useState<string | null>(null);
   const [locationOption, setLocationOption] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -85,6 +90,9 @@ export default function Wizard() {
           choices={options.account_types}
           value={accountType}
           onChange={setAccountType}
+          industries={options.industries}
+          industry={industry}
+          onIndustryChange={setIndustry}
           onNext={() => go(1)}
         />
       )}
@@ -144,6 +152,7 @@ export default function Wizard() {
       {step === 5 && analysis && (
         <StepAccount
           defaultType={accountType ?? "individual"}
+          industry={industry}
           session={session}
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}

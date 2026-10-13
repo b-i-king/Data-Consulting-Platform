@@ -35,8 +35,21 @@ CREATE TABLE IF NOT EXISTS accounts (
     team_id       UUID,
     team_role     TEXT CHECK (team_role IN ('owner', 'member')),
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'disabled')),
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- Industry (business accounts; team members copy the owner's values).
+    -- Asked in the funnel: goods vs. services -> NAICS sector -> subsector.
+    industry_supersector TEXT CHECK (industry_supersector IN ('goods_producing', 'service_providing')),
+    naics_sector         TEXT,               -- e.g. '44-45' (Retail Trade)
+    naics_subsector      TEXT,               -- e.g. '445'   (Food and Beverage Retailers)
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ                -- NULL until an invited member first signs in
 );
+
+-- Columns added after v0.1 (safe to re-run on an existing database).
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS industry_supersector TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_sector TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_subsector TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_accounts_naics ON accounts (naics_sector, naics_subsector);
 
 -- ── Teams ───────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS teams (

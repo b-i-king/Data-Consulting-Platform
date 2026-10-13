@@ -44,9 +44,10 @@ data sources and services clients ask for → which connector to build next.
 - Automatic invoices (Stripe Invoicing) to cut manual invoicing.
 
 ### 6. Connectors ("meet them where their data lives")
-Start with the most-requested sources from step 3. Likely order:
-Google Sheets → QuickBooks → Shopify/Square → Snowflake/BigQuery → AWS S3 →
-Salesforce. Each connector returns DataFrames into the same pipeline.
+Start with the most-requested sources from step 4. Likely order:
+Google Sheets → QuickBooks → Shopify/Square → Gusto → Snowflake/BigQuery.
+Each connector returns DataFrames into the same pipeline; QuickBooks/Gusto act
+as enhancers joined with fuzzy matching. Full plan: [CONNECTORS.md](CONNECTORS.md).
 
 ### 7. Self-serve analysis and dashboards
 - Auto-generated summary (key trends) for Data Exploration
@@ -55,8 +56,10 @@ Salesforce. Each connector returns DataFrames into the same pipeline.
   prototype templates.
 
 ### 8. Data engineering tier
-Optional managed storage in Postgres for clients who want it (with explicit
-consent, per-client schema, and storage pricing).
+The schema is ready (`db/warehouse.sql`, [DATA_MODEL.md](DATA_MODEL.md)): one
+shared star schema, `client_id` + Row Level Security. Still to build: loaders
+that write cleaned files into it, a review screen for "review" fuzzy matches,
+consent, and storage pricing.
 
 ### 9. Mobile apps
 React Native + Expo app (iOS/Android) calling the same API, following the

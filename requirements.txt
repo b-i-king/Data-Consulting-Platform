@@ -20,7 +20,13 @@ pandas>=2.2.0
 numpy>=1.26.0
 openpyxl>=3.1.0             # .xlsx / .xlsm read + write
 xlrd>=2.0.1                 # legacy .xls read
-pyarrow>=15.0.0             # .parquet read
+python-calamine>=0.2.0      # .xlsb and .ods (OpenDocument) read
+pyarrow>=15.0.0             # .parquet, .feather, .orc read (>=14.0.1 has a security fix)
+lxml>=5.0.0                 # .html tables
+beautifulsoup4>=4.12.0      # .html tables (fallback parser)
+html5lib>=1.1               # .html tables (fallback parser)
+pyreadstat>=1.2.0           # .sav / .zsav (SPSS)
+rapidfuzz>=3.0.0            # fuzzy name matching (api/services/entity_matching.py)
 
 # Tests
 pytest>=8.0.0

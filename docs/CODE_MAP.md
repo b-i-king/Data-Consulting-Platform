@@ -16,8 +16,9 @@ Each source file also starts with a header comment explaining itself.
 4. **`api/services/pipeline.py`**
    - `load_uploads()` enforces limits and calls the reader.
    - `run_pipeline()` = categorize → stack each group → clean → sample size.
-5. **`api/services/file_reader.py` → `read_file()`** — picks the pandas reader by
-   extension; tries several text encodings; splits Excel sheets.
+5. **`api/services/file_reader.py` → `read_file()`** — looks up the format in the
+   `FORMATS` registry (CSV/Excel recommended + every safe pandas format), unwraps
+   .zip/.gz first, tries several text encodings, and splits multi-table files.
 6. **`api/services/categorizer.py` → `categorize()`** — the 6-step algorithm in
    the file header. Then `combine_group()` stacks files with `source_file`.
 7. **`api/services/cleaning.py` → `clean_dataframe()`** — Steps 1–6; returns
@@ -47,8 +48,11 @@ Each source file also starts with a header comment explaining itself.
 | `api/core/security.py` | JWT create/verify | Switching to Supabase Auth |
 | `api/models/accounts.py` | Validates signup/quote JSON | Adding signup fields |
 | `api/routers/*.py` | HTTP endpoints (thin) | Adding an endpoint |
-| `api/services/file_reader.py` | Read uploads | Supporting a new file type |
+| `api/services/file_reader.py` | Read uploads (format registry) | Supporting a new file type: add one `FileFormat` + a test sample |
 | `api/services/categorizer.py` | Relate multiple files | Improving entity detection |
+| `api/services/entity_matching.py` | Fuzzy-link records without a shared ID | Tuning match thresholds / name rules |
+| `api/data/naics_sectors.json` | NAICS sectors & subsectors for the funnel | Regenerate with `scripts/build_naics_reference.py` |
+| `db/warehouse.sql` | Client-data star schema (opt-in) | Adding event types or dimensions (see DATA_MODEL.md) |
 | `api/services/cleaning.py` | Cleaning pipeline | Adding a cleaning step |
 | `api/services/sample_size.py` | Adequacy snapshot | Adding rules of thumb |
 | `api/services/pricing.py` | Services & prices | Changing packages/prices |

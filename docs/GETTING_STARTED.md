@@ -39,7 +39,8 @@ cd web && npm run build              # frontend: production build
 ## 4. (Optional) Connect Supabase locally
 
 1. Create a project at https://supabase.com.
-2. SQL Editor → paste `db/schema.sql` → Run.
+2. SQL Editor → paste `db/schema.sql` → Run. (Only if you're offering Data
+   Engineering: also run `db/warehouse.sql` — see docs/DATA_MODEL.md.)
 3. Project Settings → Database → Connection string → **Transaction pooler**
    (port 6543). Put it in `.env` as `DATABASE_URL=...`.
 4. Restart the API; `/health` should now say `"database": "connected"`.

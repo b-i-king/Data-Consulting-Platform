@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from api.core import database
 from api.core.config import get_settings
@@ -52,6 +53,11 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD"],
 )
+
+# Compress responses over 1 KB. The data preview (JSON) and CSV downloads
+# shrink several-fold, which keeps outbound bandwidth — billed by the host
+# per GB — low. Browsers decompress automatically. See docs/PRICING.md.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(intake.router, prefix="/api", tags=["intake"])
 app.include_router(files.router, prefix="/api", tags=["files"])

@@ -30,12 +30,50 @@ export interface Service {
   capabilities: string[];
 }
 
+export interface FileFormat {
+  id: string;
+  label: string;
+  extensions: string[];
+  group: string;
+  recommended: boolean;
+  note: string;
+}
+
+export interface Subsector {
+  code: string; // 3-digit NAICS, e.g. "445"
+  name: string;
+}
+
+export interface Sector {
+  code: string; // 2-digit NAICS, e.g. "44-45"
+  name: string;
+  supersector: Supersector;
+  subsectors: Subsector[];
+}
+
+export type Supersector = "goods_producing" | "service_providing";
+
+/** Business industry answers (all optional; each narrows the previous). */
+export interface Industry {
+  industry_supersector: Supersector | null;
+  naics_sector: string | null;
+  naics_subsector: string | null;
+}
+
 /** GET /api/intake/options */
 export interface IntakeOptions {
   account_types: Choice[];
   data_locations: DataLocation[];
   services: Service[];
   supported_extensions: string[];
+  file_formats: FileFormat[];
+  /** extension -> reason it is refused (e.g. pickle can run code) */
+  excluded_formats: Record<string, string>;
+  industries: {
+    source: string;
+    supersectors: { id: Supersector; label: string; description: string }[];
+    sectors: Sector[];
+  };
   limits: { max_upload_mb: number; max_files_per_upload: number };
   pricing: { price_per_runtime_minute_usd: number; billing_increment_seconds: number };
   booking_url: string;
@@ -71,6 +109,8 @@ export interface Relationship {
   right_group: number;
   key_columns: string[];
   description: string;
+  /** "key" = exact shared ID; "fuzzy" = matched by name / email / phone */
+  method: "key" | "fuzzy";
 }
 
 export interface ColumnReport {
@@ -182,6 +222,9 @@ export interface Account {
   team_id: string | null;
   team_role: string | null;
   status: string;
+  industry_supersector: Supersector | null;
+  naics_sector: string | null;
+  naics_subsector: string | null;
 }
 
 export interface AuthResponse {
@@ -203,4 +246,7 @@ export interface SignupInput {
   email: string;
   company_name?: string;
   team_members?: TeamMemberInput[];
+  industry_supersector?: Supersector | null;
+  naics_sector?: string | null;
+  naics_subsector?: string | null;
 }

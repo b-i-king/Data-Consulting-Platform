@@ -34,6 +34,8 @@ THE ALGORITHM, STEP BY STEP
    identifier-looking column (ends with "id", "_key", "number", "email"...),
    that column can link them — e.g. transactions.customer_id ↔
    customers.customer_id. These become "suggested relationships".
+   If they share NO key but both have names, emails, or phone numbers, we
+   suggest a FUZZY link instead (see api/services/entity_matching.py).
 
 6. **Recommend a next step** for the whole upload.
 
@@ -47,6 +49,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from api.services.entity_matching import detect_match_columns
 from api.services.file_reader import LoadedDataset
 
 # Two column sets that share at least 80% of their columns = "same structure".
@@ -189,8 +192,9 @@ class DatasetGroup:
 class Relationship:
     left_group: int
     right_group: int
-    key_columns: list[str]
+    key_columns: list[str]          # shared ID columns, or the fuzzy-match columns
     description: str
+    method: str = "key"             # "key" = exact shared ID; "fuzzy" = name/email/phone matching
 
 
 @dataclass
@@ -321,6 +325,20 @@ def categorize(datasets: list[LoadedDataset]) -> CategorizationResult:
                         ),
                     )
                 )
+                continue
+            # No shared ID: can we match on names / emails / phones instead?
+            fuzzy_on = _fuzzy_link_fields(datasets, group_members[a][0], group_members[b][0])
+            if fuzzy_on:
+                relationships.append(
+                    Relationship(
+                        left_group=a, right_group=b, key_columns=fuzzy_on, method="fuzzy",
+                        description=(
+                            f"'{groups[a].label}' and '{groups[b].label}' have no shared ID, but can be "
+                            f"matched by {' and '.join(fuzzy_on)} (fuzzy matching — a person should "
+                            "review uncertain matches)."
+                        ),
+                    )
+                )
 
     # Step 6 — overall recommendation.
     if len(groups) == 1:
@@ -340,6 +358,20 @@ def categorize(datasets: list[LoadedDataset]) -> CategorizationResult:
         mode="multiple_files", datasets=summaries, groups=groups,
         relationships=relationships, next_step=next_step,
     )
+
+
+def _fuzzy_link_fields(datasets: list[LoadedDataset], i: int, j: int) -> list[str]:
+    """Which of email / phone / name both datasets have (for fuzzy linking)."""
+    a, b = detect_match_columns(datasets[i].df), detect_match_columns(datasets[j].df)
+    fields = []
+    if a.email and b.email:
+        fields.append("email")
+    if a.phone and b.phone:
+        fields.append("phone")
+    has_name = lambda c: bool(c.name or (c.first_name and c.last_name))  # noqa: E731
+    if has_name(a) and has_name(b):
+        fields.append("name")
+    return fields
 
 
 def combine_group(datasets: list[LoadedDataset], member_names: list[str]) -> pd.DataFrame:

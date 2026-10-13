@@ -25,6 +25,13 @@ export default function StepUpload(props: {
   const [error, setError] = useState<string | null>(null);
   const { max_upload_mb, max_files_per_upload } = props.options.limits;
   const exts = props.options.supported_extensions;
+  const excluded = props.options.excluded_formats;
+  const formats = props.options.file_formats;
+  const recommended = formats.filter((f) => f.recommended);
+  // Group the other formats under headings, keeping the backend's order.
+  const groups = formats
+    .filter((f) => !f.recommended)
+    .reduce<Record<string, typeof formats>>((acc, f) => ({ ...acc, [f.group]: [...(acc[f.group] ?? []), f] }), {});
 
   /** Validate and merge newly picked files with the ones already chosen. */
   function addFiles(list: FileList | null) {
@@ -33,8 +40,12 @@ export default function StepUpload(props: {
     const next = [...props.files];
     for (const f of Array.from(list)) {
       const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+      if (excluded[ext]) {
+        setError(`"${f.name}": ${excluded[ext]}`);
+        continue;
+      }
       if (!exts.includes(ext)) {
-        setError(`"${f.name}" isn't a supported file type (${exts.join(", ")}).`);
+        setError(`"${f.name}" isn't a supported file type. CSV or Excel work best — see all supported formats below.`);
         continue;
       }
       if (f.size > max_upload_mb * 1024 * 1024) {
@@ -93,7 +104,7 @@ export default function StepUpload(props: {
       >
         <p className="font-medium">Drag files here, or click to browse</p>
         <p className="mt-1 text-sm text-ink-muted">
-          {exts.join(" · ")} — up to {max_upload_mb} MB each. The first row should hold your column names.
+          Up to {max_upload_mb} MB each. The first row should hold your column names.
         </p>
         <input
           ref={inputRef}
@@ -106,6 +117,53 @@ export default function StepUpload(props: {
             e.target.value = ""; // allow picking the same file again after removing it
           }}
         />
+      </div>
+
+      {/* Supported formats: CSV and Excel first, everything else tucked away. */}
+      <div className="mt-3 space-y-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-ink-muted">Recommended:</span>
+          {recommended.map((f) => (
+            <span
+              key={f.id}
+              title={f.note}
+              className="rounded-full border border-brand/40 bg-brand-soft px-2.5 py-0.5 font-mono text-xs"
+            >
+              {f.label} <span className="text-ink-muted">{f.extensions.join(" ")}</span>
+            </span>
+          ))}
+        </div>
+        <details className="group rounded-xl border border-line bg-surface px-4 py-2">
+          <summary className="cursor-pointer text-ink-muted hover:text-ink">
+            See all {formats.length} supported formats (including .zip and .gz archives)
+          </summary>
+          <div className="mt-3 grid gap-4 pb-2 sm:grid-cols-2">
+            {Object.entries(groups).map(([group, list]) => (
+              <div key={group}>
+                <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">{group}</h3>
+                <ul className="space-y-1">
+                  {list.map((f) => (
+                    <li key={f.id}>
+                      <span className="font-medium">{f.label}</span>{" "}
+                      <span className="font-mono text-xs text-ink-muted">{f.extensions.join(" ")}</span>
+                      <div className="text-xs text-ink-muted">{f.note}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            <div>
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">Compressed</h3>
+              <p className="text-xs text-ink-muted">
+                <span className="font-mono">.zip .gz .bz2 .xz</span> — e.g. <span className="font-mono">sales.csv.gz</span>,
+                or a .zip holding several files.
+              </p>
+            </div>
+          </div>
+          <p className="border-t border-line pt-2 pb-1 text-xs text-ink-muted">
+            Not accepted for your security: pickle (.pkl) and HDF5 (.h5) files, which can run hidden code when opened.
+          </p>
+        </details>
       </div>
 
       {props.files.length > 0 && (

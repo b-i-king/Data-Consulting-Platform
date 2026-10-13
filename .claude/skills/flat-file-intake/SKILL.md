@@ -21,6 +21,7 @@ How many tables? (each Excel sheet counts as one)
               └── same/unknown years ───► "same structure": stack + keep source_file
           Then, between groups:
               shared ID-like column? ───► suggest a relationship (join key)
+              no ID, but names/emails/phones? ► suggest a fuzzy link (review matches)
 ```
 
 ## Procedure
@@ -38,7 +39,10 @@ How many tables? (each Excel sheet counts as one)
    finance/accounting, operations, or "general". This is a guess — always show
    it as such and let a human correct it.
 5. **Find join keys between groups** — shared columns whose names end in `id`,
-   `key`, `number`, `code`, `email`, `sku`.
+   `key`, `number`, `code`, `email`, `sku`. If there is **no** shared key but both
+   sides have names, emails, or phones, suggest a **fuzzy** link instead
+   (`api/services/entity_matching.py`: exact email → exact phone → fuzzy name;
+   92+ auto, 80–91 needs a person to review).
 6. **Stack** each multi-table group with `pd.concat`, adding a `source_file`
    column first so year/origin is never lost.
 7. Hand every group to `data-cleaning`.

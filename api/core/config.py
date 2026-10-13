@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     # Most files accepted in one multi-file upload.
     max_files_per_upload: int = Field(default=20, alias="MAX_FILES_PER_UPLOAD")
+    # Largest size a compressed upload (.zip, .gz, ...) may expand to, in MB.
+    # Protects the server from "zip bombs" (tiny archives that expand hugely).
+    max_decompressed_mb: int = Field(default=200, alias="MAX_DECOMPRESSED_MB")
     # Safety cap on how many cleaned rows are sent back to the browser for the
     # on-screen preview. The goal is to preview 100% of the data; this cap only
     # kicks in for very large files, so the browser tab does not freeze.

@@ -81,3 +81,12 @@ def test_unsupported_file_returns_friendly_400():
     res = client.post("/api/files/analyze", files=[("files", ("x.png", io.BytesIO(b"x"), "image/png"))])
     assert res.status_code == 400
     assert "not a supported file type" in res.json()["detail"]
+
+
+def test_large_responses_are_gzip_compressed():
+    rows = "\n".join(f"Customer {i},{i}.50" for i in range(2000))
+    csv = f"customer,amount\n{rows}\n".encode()
+    res = client.post("/api/files/analyze", files=_files(("big.csv", csv)),
+                      headers={"Accept-Encoding": "gzip"})
+    assert res.status_code == 200
+    assert res.headers.get("content-encoding") == "gzip"

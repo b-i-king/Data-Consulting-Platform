@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 from api.core.config import get_settings
 from api.models.accounts import QuoteIn
 from api.services import intake, pricing
-from api.services.file_reader import SUPPORTED_EXTENSIONS
+from api.services.file_reader import EXCLUDED_FORMATS, SUPPORTED_EXTENSIONS, formats_for_ui
 
 router = APIRouter()
 
@@ -28,6 +28,9 @@ async def intake_options():
         "data_locations": intake.DATA_LOCATIONS,
         "services": pricing.catalog(),
         "supported_extensions": list(SUPPORTED_EXTENSIONS),
+        # Grouped list for the upload screen; CSV and Excel are marked recommended.
+        "file_formats": formats_for_ui(),
+        "excluded_formats": EXCLUDED_FORMATS,
         "limits": {
             "max_upload_mb": settings.max_upload_mb,
             "max_files_per_upload": settings.max_files_per_upload,
@@ -37,6 +40,8 @@ async def intake_options():
             "billing_increment_seconds": settings.billing_increment_seconds,
         },
         "booking_url": settings.booking_url,
+        # Business funnel: goods/services -> NAICS sector -> subsector.
+        "industries": intake.naics_tree(),
     }
 
 
