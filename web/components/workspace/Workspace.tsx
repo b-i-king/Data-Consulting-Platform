@@ -362,8 +362,20 @@ export default function Workspace() {
               </div>
             )}
 
+            {/* Under 30 rows: analysis pages explain why instead of running anything. */}
+            {current !== CLEANING && !group.report.analysis_ready && (
+              <Card>
+                <p className="text-sm">
+                  <strong>Not enough rows to analyze.</strong> {group.report.analysis_note}
+                </p>
+                <Button className="mt-3" variant="secondary" onClick={() => setSection(CLEANING)}>
+                  Go to Data Cleaning
+                </Button>
+              </Card>
+            )}
+
             {/* Skill menu: opens on the service's primary view or skill. */}
-            {menu.length > 1 && (
+            {(current === CLEANING || group.report.analysis_ready) && menu.length > 1 && (
               <label className="block max-w-md space-y-1 text-sm">
                 <span className="font-medium">Skill</span>
                 <select
@@ -399,7 +411,7 @@ export default function Workspace() {
               </>
             )}
 
-            {current === DASHBOARD && choice === VIEW &&
+            {current === DASHBOARD && choice === VIEW && group.report.analysis_ready &&
               (group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped") ? (
                 <Dashboard key={group.group_id} input={input} groupId={group.group_id} />
               ) : (
@@ -410,7 +422,7 @@ export default function Workspace() {
                 </Card>
               ))}
 
-            {choice !== VIEW && plan && (
+            {choice !== VIEW && plan && (current === CLEANING || group.report.analysis_ready) && (
               <SkillsPanel
                 key={`${choice}-${group.group_id}`}
                 input={input}

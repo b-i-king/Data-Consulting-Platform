@@ -1,0 +1,11 @@
+City data for the signup form's location picker (api/data/locations.json)
+
+Source:  GeoNames geographical database — https://www.geonames.org
+         packaged by the geonamescache Python library (MIT License),
+         https://github.com/yaph/geonamescache
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+         https://creativecommons.org/licenses/by/4.0/
+
+Changes: filtered to US cities with 1,000+ people and other cities with
+15,000+ people, and reduced to id, name, US state, country and population
+by scripts/build_locations.py.

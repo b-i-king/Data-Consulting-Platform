@@ -145,6 +145,13 @@ export function GroupDetails(props: {
         />
       </div>
 
+      {!r.analysis_ready && (
+        // Fewer than 30 rows before or after cleaning: cleaning + download only.
+        <div role="status" className="rounded-2xl border border-warn/40 bg-warn/10 p-4 text-sm">
+          <strong>Not enough rows to analyze.</strong> {r.analysis_note}
+        </div>
+      )}
+
       {r.consultation_recommended && (
         <ConsultantCta bookingUrl={props.bookingUrl}>
           <strong>{fmtPct(r.missing_pct_before)} of this data is missing.</strong> That&apos;s more than cleaning can fix —

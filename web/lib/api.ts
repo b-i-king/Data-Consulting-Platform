@@ -13,6 +13,7 @@ import type {
   AuthResponse,
   IntakeOptions,
   CleaningInput,
+  Location,
   MyServices,
   Quote,
   SignupInput,
@@ -81,6 +82,9 @@ export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accou
 export const signin = (email: string) => postJson<AuthResponse>("/api/accounts/signin", { email });
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
+
+/** City search for the signup form's location picker (at least 2 letters). */
+export const searchLocations = (q: string) => getJson<Location[]>(`/api/locations?q=${encodeURIComponent(q)}`);
 
 /** Services on the signed-in account's plan (drives the workspace's left pane). */
 export async function getMyServices(token: string): Promise<MyServices> {

@@ -4,6 +4,8 @@
 //   Dashboard    — only when the table has a date column (build-dashboard
 //                  skill); part of the Data Visualization service
 //   Run a skill  — the data skills of the services the user has chosen
+// Tables with fewer than 30 rows (before or after cleaning) get only the Data
+// Cleaning skills, with a note saying why (api/services/cleaning.py, Step 7).
 // Services that aren't chosen appear as locked badges the user can add
 // (LockedService.tsx). Both tabs send the files kept in browser memory, plus
 // the missing-value choices, to the API; nothing is stored.
@@ -26,7 +28,9 @@ export default function ExplorePanel(props: {
   onAddService: (id: string) => void;
 }) {
   const { group } = props;
-  const hasDates = group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped");
+  // Under 30 rows (before or after cleaning): only the cleaning tools are offered.
+  const ready = group.report.analysis_ready;
+  const hasDates = ready && group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped");
   const [tab, setTab] = useState<"dashboard" | "skills">(hasDates ? "dashboard" : "skills");
   const vizService = props.services.find((s) => s.id === DASHBOARD_SERVICE);
   const dashboardUnlocked = props.selectedServices.includes(DASHBOARD_SERVICE);
@@ -65,8 +69,15 @@ export default function ExplorePanel(props: {
           )}
         </div>
       )}
+      {!ready && (
+        <p role="status" className="rounded-2xl border border-warn/40 bg-warn/10 p-4 text-sm">
+          <strong>The dashboard and analysis skills need at least 30 rows.</strong> {group.report.analysis_note} The
+          cleaning tools below still work.
+        </p>
+      )}
       <div hidden={tab !== "skills"}>
         <SkillsPanel
+          category={ready ? undefined : "data_cleaning"}
           input={props.input}
           groupId={group.group_id}
           columns={group.preview.columns}

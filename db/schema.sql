@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- Company size (business accounts): LinkedIn size code, 'A' = self-employed,
     -- 'B' = 1-10 employees ... 'I' = 10,001+ (see api/services/intake.py).
     company_size         TEXT CHECK (company_size IN ('A','B','C','D','E','F','G','H','I')),
+    -- Optional location, chosen from the signup's city picker (GeoNames).
+    location_geoname_id  INTEGER,            -- e.g. 4180439
+    location_city        TEXT,               -- 'Atlanta'
+    location_region      TEXT,               -- 'Georgia' (US states only)
+    location_country_code TEXT,              -- 'US' (ISO 3166-1)
+    location_label       TEXT,               -- 'Atlanta, Georgia, United States'
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ                -- NULL until an invited member first signs in
 );
@@ -53,6 +59,11 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_sector TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS naics_subsector TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS company_size TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_geoname_id INTEGER;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_city TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_region TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_country_code TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_label TEXT;
 CREATE INDEX IF NOT EXISTS idx_accounts_naics ON accounts (naics_sector, naics_subsector);
 
 -- ── Teams ───────────────────────────────────────────────────────────────────

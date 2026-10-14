@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import create_access_token, get_current_account
 from api.models.accounts import AccountOut, AddServiceIn, AuthOut, SigninIn, SignupIn, TeamMemberIn
-from api.services import account_store, entitlements
+from api.services import account_store, entitlements, locations
 from api.services.pricing import catalog
 
 router = APIRouter(prefix="/accounts")
@@ -52,6 +52,8 @@ def _account_out(acc: dict) -> AccountOut:
         naics_sector=acc.get("naics_sector"),
         naics_subsector=acc.get("naics_subsector"),
         company_size=acc.get("company_size"),
+        location_id=acc.get("location_geoname_id"),
+        location=acc.get("location_label"),
     )
 
 
@@ -65,6 +67,17 @@ async def signup(body: SignupIn):
     unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
     if unknown:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown service id(s): {', '.join(unknown)}")
+    # Check EVERY email before creating anything, so a taken address never
+    # leaves a half-created signup behind (one email = one account).
+    for email in [body.email, *(m.email for m in body.team_members)]:
+        if await account_store.get_account_by_email(email):
+            who = "You already have" if email == body.email else f"{email} already has"
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"{who} an account. Each email address can only be used once"
+                       + (" — please sign in instead." if email == body.email else "."),
+            )
+    place = locations.get(body.location_id) if body.location_id else None
     try:
         owner = await account_store.create_account(
             account_type=body.account_type,
@@ -76,6 +89,7 @@ async def signup(body: SignupIn):
             naics_sector=body.naics_sector,
             naics_subsector=body.naics_subsector,
             company_size=body.company_size,
+            location=place,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))

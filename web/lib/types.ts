@@ -182,6 +182,10 @@ export interface CleaningReport {
   columns_to_remove: string[];
   /** 90%+ of all cells are missing: suggest a consultation. */
   consultation_recommended: boolean;
+  /** At least 30 rows before AND after cleaning; otherwise no dashboard or analysis skills. */
+  analysis_ready: boolean;
+  /** Why the table can't be analyzed (empty when it can). */
+  analysis_note: string;
 }
 
 export interface SampleSizeCheck {
@@ -389,6 +393,20 @@ export interface Account {
   naics_sector: string | null;
   naics_subsector: string | null;
   company_size: string | null;
+  location_id: number | null;
+  /** "Atlanta, Georgia, United States" */
+  location: string | null;
+}
+
+/** GET /api/locations — one city in the location picker. */
+export interface Location {
+  id: number; // GeoNames id
+  label: string; // "Atlanta, Georgia, United States"
+  city: string;
+  region: string; // US state name ("" elsewhere)
+  region_code: string;
+  country: string;
+  country_code: string;
 }
 
 export interface AuthResponse {
@@ -414,6 +432,8 @@ export interface SignupInput {
   naics_sector?: string | null;
   naics_subsector?: string | null;
   company_size?: string | null;
+  /** Optional city from the location picker (GeoNames id); signup only. */
+  location_id?: number | null;
   /** Services chosen in the questionnaire; put on the new account's plan. */
   service_ids?: string[];
 }

@@ -61,6 +61,22 @@ python scripts/make_sample_data.py --end 2026-10-31
 5. Upload `samples/sales.csv` + `samples/customers.csv` + `samples/quickbooks_customers.csv`
    together to see multi-file grouping, a shared-ID link (🔗) and a fuzzy link (≈).
 
+### Signup rules and location
+
+On **Create an account**, try: a lowercase first name (it's capitalized as you
+type), a digit in a name, `name@example` as the email, an emoji in the business
+name, or the same email for you and a team member — each gets a clear message
+under the field. Accents (José, García-López, Nguyễn) are fine. **Location** is
+optional: type "decat" and pick a city with ↓ and Enter. Signing up twice with
+the same email (in any capitalization) is refused.
+
+### Small files (30-row minimum)
+
+Upload a file with fewer than 30 rows (e.g. the first 10 lines of
+`samples/sales.csv`): it's cleaned and downloadable, but a banner explains that
+the dashboard and analysis skills need at least 30 rows, and only the cleaning
+tools are offered.
+
 ### The signed-in workspace
 
 1. On the home page, click **Create an account** (under "Start as a guest"), sign up

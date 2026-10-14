@@ -48,6 +48,11 @@ themes follow the visitor's computer, with a switch in the header.
 
 ![Clean & preview step](docs/images/wizard-clean-preview.png)
 
+**Foolproof input:** signup names accept letters from any alphabet (accents
+fine) and start with a capital; emails must be valid and are used once per
+account; business names are checked; location is an optional city picker shown
+only at signup. Analysis needs at least 30 rows before and after cleaning.
+
 ## Tech stack
 
 Based on the [Video_Game_Stats_Tracker](https://github.com/b-i-king/Video_Game_Stats_Tracker) template.
@@ -113,4 +118,5 @@ licenses/       third-party license texts
 
 MIT — see [LICENSE](LICENSE). Vendored skills keep their own licenses: Daniel
 Rosehill's Claude-Data-Analyst-plugin (MIT) and Anthropic's data plugin
-(Apache-2.0); see [`licenses/`](licenses).
+(Apache-2.0). City data for the location picker is from GeoNames (CC BY 4.0).
+See [`licenses/`](licenses).

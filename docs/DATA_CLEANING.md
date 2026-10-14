@@ -99,6 +99,22 @@ analyze, dashboard, skills, download — so all of them see the same cleaned dat
 The report keeps the **before** numbers and adds what was done (`action`,
 `filled_count`, `missing_after`).
 
+### Enough rows to analyze? (30-row minimum)
+
+Analysis needs at least **30 rows** — with fewer, averages, trends and tests
+are too unreliable to show. The check runs twice:
+
+| When | Example | Message |
+|---|---|---|
+| Before cleaning (as uploaded) | a 10-row file | "This file has only 10 rows — analysis needs at least 30…" |
+| After cleaning (duplicates/empty rows removed, row choices applied) | 35 rows, 10 of them duplicates → 25 | "After cleaning, only 25 rows remain…" |
+
+Below 30 at either point the file can still be **cleaned and downloaded**, but
+the dashboard and every skill outside Data Cleaning are switched off for that
+table, on screen and on the server (`api/services/skills_runner.py` refuses
+them). The report carries `analysis_ready` and `analysis_note`. For skills that
+use several tables (e.g. an ER diagram), at least one table must have 30+ rows.
+
 ### What we deliberately do NOT do automatically
 
 Fill in missing values or drop columns without the client choosing to, fill IDs,
