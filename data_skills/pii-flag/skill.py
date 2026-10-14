@@ -1,7 +1,7 @@
 """
 pii-flag — find personal information before sharing (Data Cleaning).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Each column is checked two ways:
 
   * by NAME   — first_name, email, phone, ssn, dob, address, ...

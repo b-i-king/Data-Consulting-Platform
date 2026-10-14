@@ -1,7 +1,7 @@
 """
 forensic-sweep — is this data "suspiciously clean"? (Data Cleaning)
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Looks for fingerprints of processing done BEFORE the
 data reached you, so you know whether you're analyzing raw reality or someone
 else's editing:

@@ -1,7 +1,7 @@
 """
 data-context-extractor — draft a client-specific skill (AI).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0), BOOTSTRAP mode. It discovers what it can from the client's
 tables and writes a draft SKILL.md that teaches Claude (and the future AI
 service) the client's data:
@@ -64,5 +64,5 @@ def run(tables: dict[str, pd.DataFrame], client_name="client") -> SkillResult:
     md += [f"- TODO: {t}" for t in todos] + ["", "## Gotchas", "", "- TODO: known data quirks (e.g. walk-in sales have no customer_id)", ""]
     return SkillResult(skill=SKILL.id, summary=f"Draft skill '{slug}-data' with {len(tables)} table(s) and {len(metrics)} candidate metric(s).",
                        findings=["Review the TODOs with the client — they define what the numbers mean.",
-                                 f"Save as data_skills/{slug}-data/SKILL.md (and add it to catalog.json) once confirmed."],
+                                 f"Save as data_skills/{slug}-data/README.md (and add it to catalog.json) once confirmed."],
                        artifacts={"markdown_skill": "\n".join(md)})

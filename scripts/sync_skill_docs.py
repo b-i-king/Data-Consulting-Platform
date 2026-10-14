@@ -1,10 +1,10 @@
 """
-Regenerate the "Run it (platform implementation)" section of every SKILL.md.
+Regenerate the "Run it (platform implementation)" section of every README.md.
 
 WHY
 ---
-Each data skill has two files: SKILL.md (the procedure in plain English) and
-skill.py (the same procedure as code). The bottom of each SKILL.md lists the
+Each data skill has two files: README.md (the procedure in plain English) and
+skill.py (the same procedure as code). The bottom of each README.md lists the
 skill's options — and those must match the code. Rather than editing 30
 tables by hand, this script rebuilds the section from skill.py itself
 (data_skills.registry.describe), so the docs can't drift from the code.
@@ -76,10 +76,10 @@ def run_section(skill_id: str) -> str:
 
 
 def sync(check: bool) -> list[str]:
-    """Rewrite (or just compare) every SKILL.md; return the ones that changed."""
+    """Rewrite (or just compare) every README.md; return the ones that changed."""
     changed = []
     for skill_id in skill_ids():
-        path = ROOT / "data_skills" / skill_id / "SKILL.md"
+        path = ROOT / "data_skills" / skill_id / "README.md"
         text = path.read_text(encoding="utf-8")
         body = text.split(MARKER)[0].rstrip() + "\n\n"
         new = body + run_section(skill_id)
@@ -98,4 +98,4 @@ if __name__ == "__main__":
     if args.check and out:
         print("Out of date (run python scripts/sync_skill_docs.py):", ", ".join(out))
         sys.exit(1)
-    print(f"{'Would update' if args.check else 'Updated'} {len(out)} SKILL.md file(s){': ' + ', '.join(out) if out else ''}")
+    print(f"{'Would update' if args.check else 'Updated'} {len(out)} README.md file(s){': ' + ', '.join(out) if out else ''}")

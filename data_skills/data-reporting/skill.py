@@ -1,7 +1,7 @@
 """
 data-reporting — a shareable report about a dataset (Data Visualization).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). The original compiles a PDF with Typst; this version
 writes the same sections as Markdown AND a print-ready HTML page (open it in a
 browser and choose "Save as PDF"), so no extra software is needed.

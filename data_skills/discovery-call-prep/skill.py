@@ -1,7 +1,7 @@
 """
 discovery-call-prep — one-page brief before a discovery call (Data Strategy & Discovery).
 
-Python implementation of SKILL.md in this folder. Given the client's tables
+Python implementation of README.md in this folder. Given the client's tables
 (and, optionally, their intake answers), it writes a Markdown brief:
 
   1. Data-source inventory — every table: rows, columns, date span, entity guess

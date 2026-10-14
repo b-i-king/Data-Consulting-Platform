@@ -1,7 +1,7 @@
 """
 trend-analysis — the headline story over time (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). For a date + number column:
 
   1. Monthly series, with month-over-month and year-over-year growth

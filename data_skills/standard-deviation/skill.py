@@ -1,7 +1,7 @@
 """
 standard-deviation — spread and variability (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). For each number column:
 
   * sample SD (ddof=1 — use for a sample of a bigger population) and

@@ -1,7 +1,7 @@
 """
 correlation-analysis — what moves together (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT).
 
   * Pearson  — straight-line relationships (sensitive to outliers)

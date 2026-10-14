@@ -1,7 +1,7 @@
 """
 create-viz — make a specific chart from the data (Data Visualization).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). The original draws with matplotlib/plotly; here charts are
 produced as small JSON chart specs (see data_skills/_core.py `line_chart`,
 `bar_chart`) that the web app draws in the platform's colors, in light and

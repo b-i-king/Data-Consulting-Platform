@@ -40,7 +40,9 @@ from __future__ import annotations
 import bz2
 import gzip
 import io
+import json
 import lzma
+import re
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -108,7 +110,8 @@ def detect_delimiter(text: str) -> str:
     (pandas' built-in "sniffer" can pick a letter as the delimiter on small
     files — e.g. splitting "customer" on "u" — so we use this simpler rule.)
     """
-    lines = [ln for ln in text.splitlines() if ln.strip()][:20]
+    # Separators inside quotes ("Smith, John") don't count, so drop quoted text first.
+    lines = [re.sub(r'"[^"]*"', "", ln) for ln in text.splitlines() if ln.strip()][:20]
     best, best_cols = ",", 0
     for delim in _CANDIDATE_DELIMITERS:
         counts = {ln.count(delim) for ln in lines}
@@ -117,15 +120,32 @@ def detect_delimiter(text: str) -> str:
     return best
 
 
+def _uses_decimal_comma(text: str) -> bool:
+    """
+    European exports write 1.234,56 instead of 1,234.56 (usually with ";" as
+    the separator). True when numbers like 12,5 clearly outnumber 12.5.
+    """
+    sample = text[:20000]
+    # Decimals have 1-2 digits after the mark (,5 or ,56); thousands groups have 3,
+    # so "1.000,5" counts as a decimal comma and "1,234.56" as a decimal point.
+    commas = len(re.findall(r"\d,\d{1,2}(?!\d)", sample))
+    points = len(re.findall(r"\d\.\d{1,2}(?!\d)", sample))
+    return commas > 2 * points
+
+
 def _delimited(sep: str | None) -> Reader:
     """
     CSV-style text. With `sep=None` the separator is detected by
-    detect_delimiter(). The usual missing-value markers ("", "NA", "N/A",
-    "null", ...) become real nulls.
+    detect_delimiter() — also used for .csv files, because many "CSV" exports
+    (Excel in Europe and Latin America) actually use semicolons. The usual
+    missing-value markers ("", "NA", "N/A", "null", ...) become real nulls.
+    Semicolon files with decimal commas (12,5) are read as numbers.
     """
     def read(name: str, raw: bytes) -> dict[str, pd.DataFrame]:
         text = _decode_text(raw)
-        return {name: pd.read_csv(io.StringIO(text), header=0, sep=sep or detect_delimiter(text))}
+        delim = sep or detect_delimiter(text)
+        extra = {"decimal": ",", "thousands": "."} if delim == ";" and _uses_decimal_comma(text) else {}
+        return {name: pd.read_csv(io.StringIO(text), header=0, sep=delim, **extra)}
     return read
 
 
@@ -147,17 +167,54 @@ def _spreadsheet(engine: str) -> Reader:
 
 
 def _json(name: str, raw: bytes) -> dict[str, pd.DataFrame]:
-    """A JSON array/object of records; falls back to JSON Lines."""
+    """
+    A JSON array of records (or {"key": [records]}); falls back to JSON Lines.
+    Nested objects become columns: {"meta": {"k": 1}} -> column "meta.k".
+    """
     text = _decode_text(raw)
     try:
-        return {name: pd.read_json(io.StringIO(text))}
+        data = json.loads(text)
     except ValueError:
-        return {name: pd.read_json(io.StringIO(text), lines=True)}
+        return _json_lines(name, raw)
+    if isinstance(data, dict):
+        # {"records": [...]} -> the first list of records inside; else one row.
+        lists = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
+        data = lists[0] if lists else [data]
+    return {name: pd.json_normalize(data)}
 
 
 def _json_lines(name: str, raw: bytes) -> dict[str, pd.DataFrame]:
-    """JSON Lines / NDJSON: one JSON object per line."""
-    return {name: pd.read_json(io.StringIO(_decode_text(raw)), lines=True)}
+    """JSON Lines / NDJSON: one JSON object per line (nested objects become columns)."""
+    rows = [json.loads(ln) for ln in _decode_text(raw).splitlines() if ln.strip()]
+    return {name: pd.json_normalize(rows)}
+
+
+def _flatten_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Lists or dicts left inside cells (JSON, XML, Parquet can hold them) can't
+    be compared, so duplicate checks would fail. Store them as JSON text.
+    """
+    for col in df.columns:
+        if df[col].dtype == object and df[col].map(lambda v: isinstance(v, (list, dict))).any():
+            df[col] = df[col].map(lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v)
+    return df
+
+
+def _friendly_error(fmt_label: str, filename: str, exc: Exception) -> str:
+    """Turn a parser's technical message into one a business owner can act on."""
+    text = str(exc)
+    if "No columns to parse" in text or "EmptyDataError" in type(exc).__name__:
+        return f"'{filename}' is empty. Please check you picked the right file."
+    if "not a zip file" in text.lower() or "unsupported format" in text.lower() or "corrupt" in text.lower():
+        return (f"'{filename}' doesn't look like a real {fmt_label} file — it may be damaged, or a different "
+                "file type renamed. Open it and save it again, or export it as CSV.")
+    m = re.search(r"Expected (\d+) fields in line (\d+), saw (\d+)", text)
+    if m:
+        return (f"Row {m.group(2)} of '{filename}' has {m.group(3)} columns but the header has {m.group(1)}. "
+                "The file may not be a table, or some rows have extra separators (like an unquoted comma).")
+    if "codec" in text or "decode" in text.lower():
+        return f"We couldn't read the text in '{filename}'. Try saving it as CSV with UTF-8 encoding."
+    return f"Could not read '{filename}' as {fmt_label}: {text}"
 
 
 def _html(name: str, raw: bytes) -> dict[str, pd.DataFrame]:
@@ -219,7 +276,7 @@ class FileFormat:
 FORMATS: tuple[FileFormat, ...] = (
     # Recommended — what most people already have and can open themselves.
     FileFormat("csv", "CSV", (".csv",), "Recommended", True,
-               "Comma-separated values. Every spreadsheet app can save as CSV.", _delimited(",")),
+               "Comma-separated values. Every spreadsheet app can save as CSV.", _delimited(None)),
     FileFormat("excel", "Excel", (".xlsx", ".xlsm", ".xls", ".xlsb"), "Recommended", True,
                "Every sheet in the workbook is read.", lambda n, r: _excel(n, r)),
     # Other spreadsheets and text.
@@ -389,7 +446,7 @@ def read_file(filename: str, raw: bytes) -> list[LoadedDataset]:
     try:
         frames = fmt.reader(filename, raw)
     except Exception as exc:  # noqa: BLE001 — turn any parser error into a friendly one
-        raise FileReadError(f"Could not read '{filename}' as {fmt.label}: {exc}") from exc
+        raise FileReadError(_friendly_error(fmt.label, filename, exc)) from exc
 
     if not frames:
         raise FileReadError(f"'{filename}' does not contain any data.")
@@ -399,6 +456,7 @@ def read_file(filename: str, raw: bytes) -> list[LoadedDataset]:
         # Column names: make sure they are strings and trim stray spaces,
         # e.g. " Email " -> "Email". Duplicated names get a numeric suffix.
         df.columns = _dedupe_column_names([str(c).strip() for c in df.columns])
+        df = _flatten_cells(df)
         datasets.append(LoadedDataset(name=name, source_file=filename, file_type=fmt.label, df=df, size_bytes=len(raw)))
     return datasets
 

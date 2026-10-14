@@ -1,7 +1,7 @@
 """
 hypothesis-testing — test a specific claim (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). The test is chosen from the column types:
 
   number  vs. 2 groups   → Welch's t-test (unequal variances) AND Mann-Whitney U

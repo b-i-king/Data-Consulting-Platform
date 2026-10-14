@@ -1,7 +1,7 @@
 """
 validate-data — QA an analysis before it goes to a client (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). Give it the table plus the numbers you plan to report; it
 recomputes them independently and runs the classic pitfall checks:
 

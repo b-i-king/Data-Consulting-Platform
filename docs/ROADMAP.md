@@ -33,7 +33,7 @@ checkout, and the payment confirmation calls `entitlements.add_services(...,
 source="payment")` (today, choosing a service unlocks it right away).
 
 ### 3. AI — ask your data
-Build the AI service following `data_skills/ask-your-data/SKILL.md`:
+Build the AI service following `data_skills/ask-your-data/README.md`:
 schema-only prompts, a whitelisted pandas plan executor, and answers that show
 their calculation. Flip `available=True` for `ai` in `api/services/pricing.py`.
 

@@ -7,6 +7,15 @@
 import type { Account } from "./types";
 
 const KEY = "dcp.session";
+/** Fired on window whenever someone signs in or out, so the header updates at once. */
+export const SESSION_EVENT = "dcp-session";
+const announce = () => {
+  try {
+    window.dispatchEvent(new Event(SESSION_EVENT));
+  } catch {
+    /* not in a browser */
+  }
+};
 
 export interface Session {
   token: string;
@@ -28,6 +37,7 @@ export function saveSession(session: Session): void {
   } catch {
     /* storage blocked — session lives only in React state */
   }
+  announce();
 }
 
 export function clearSession(): void {
@@ -36,4 +46,5 @@ export function clearSession(): void {
   } catch {
     /* ignore */
   }
+  announce();
 }

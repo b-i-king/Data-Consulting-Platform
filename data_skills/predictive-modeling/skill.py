@@ -1,7 +1,7 @@
 """
 predictive-modeling — baseline vs. model, honestly validated (Data Science & ML).
 
-Python implementation of SKILL.md in this folder, with scikit-learn:
+Python implementation of README.md in this folder, with scikit-learn:
 
   1. Frame      — regression (predict a number) or classification (predict a
                   category), chosen from the target column's type

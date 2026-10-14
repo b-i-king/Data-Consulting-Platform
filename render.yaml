@@ -7,7 +7,9 @@ services:
     runtime: python
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     # gunicorn manages uvicorn workers; 120 s timeout leaves room for big files.
-    startCommand: gunicorn api.main:app -w ${WEB_CONCURRENCY:-1} -k uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:$PORT
+    # --max-requests restarts the worker every ~200 requests so memory used by
+    # big uploads is returned (pandas doesn't always give it back on its own).
+    startCommand: gunicorn api.main:app -w ${WEB_CONCURRENCY:-1} -k uvicorn.workers.UvicornWorker --timeout 120 --max-requests 200 --max-requests-jitter 50 --bind 0.0.0.0:$PORT
     # free = $0 for test runs: sleeps after 15 idle minutes (about a minute to
     # wake up) and has 512 MB of memory (the API uses about 270 MB). Switch to
     # `starter` (paid) before real clients use it, so it never sleeps.
@@ -28,3 +30,12 @@ services:
         sync: false
       - key: PRICE_PER_RUNTIME_MINUTE_USD
         value: "0.50"
+      # 512 MB of memory: a 14 MB CSV peaks around 300-375 MB while cleaning and
+      # building the dashboard, so keep uploads at 15 MB on the free and Starter
+      # plans. Raise it (e.g. 50) on a plan with 2 GB+.
+      - key: MAX_UPLOAD_MB
+        value: "15"
+      # Optional: let Vercel preview links call the API too, e.g.
+      #   https://data-consulting-platform-.*\.vercel\.app
+      - key: ALLOWED_ORIGIN_REGEX
+        sync: false

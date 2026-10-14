@@ -1,7 +1,7 @@
 """
 type-consistency-sweep — find data-type problems (Data Cleaning).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Checks every column for:
 
   1. Mixed types       — numbers and text in the same column ("12", "N/A", "twelve")

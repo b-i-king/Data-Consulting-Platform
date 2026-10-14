@@ -1,7 +1,7 @@
 """
 data-visualization — pick the right chart for the data (Data Visualization).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). Looks at the column roles and recommends charts by the job the
 data does, following the platform's chart rules:
 

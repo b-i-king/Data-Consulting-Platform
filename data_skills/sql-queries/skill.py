@@ -1,7 +1,7 @@
 """
 sql-queries — warehouse-ready SQL for a table (Data Engineering).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). Generates, per dialect (PostgreSQL / Supabase, BigQuery, Snowflake):
 
   1. CREATE TABLE — column types mapped from pandas (integers, decimals with

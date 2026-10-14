@@ -1,7 +1,7 @@
 """
 setup-data-workspace — a local "talk to your data" database (AI).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). The original loads files into DuckDB; this version
 uses SQLite, which is built into Python (no extra install), and the same steps:
 

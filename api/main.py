@@ -20,6 +20,8 @@ Structure mirrors the Video_Game_Stats_Tracker template:
     api/services/  the real logic (pandas cleaning, categorizing, pricing)
 """
 
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -30,9 +32,17 @@ from api.core import database
 from api.core.config import get_settings
 from api.routers import accounts, files, intake, skills
 
+logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings = get_settings()
+    if settings.using_default_jwt_secret and os.environ.get("RENDER"):
+        # Render sets RENDER=true. A missing secret means anyone could forge sign-ins.
+        logger.warning("JWT_SECRET_KEY is not set — using the development secret. Set it in Render > Environment.")
+    if settings.origins_list == ["http://localhost:3000"] and os.environ.get("RENDER"):
+        logger.warning("ALLOWED_ORIGINS is still localhost — set it to your Vercel URL or the site can't reach the API.")
     await database.init_pool()   # startup
     yield
     await database.close_pool()  # shutdown
@@ -48,6 +58,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().origins_list,
+    allow_origin_regex=get_settings().allowed_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

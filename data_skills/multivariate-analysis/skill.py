@@ -1,7 +1,7 @@
 """
 multivariate-analysis — how three or more variables behave together (Data Science & ML).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). With numpy/scikit-learn:
 
   1. Partial correlations — the correlation of each pair after removing the
