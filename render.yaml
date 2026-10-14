@@ -1,6 +1,10 @@
-# Render "Blueprint" for the FastAPI backend (same host as the template repo).
-# Render dashboard -> New -> Blueprint -> pick this repo. Then fill in the
-# environment variables marked `sync: false` in the dashboard (they are secret).
+# Render settings for the FastAPI backend, written as a file (same host as the
+# template repo). You don't need this file: the usual setup is Render
+# dashboard -> New -> Web Service, typing in the same values (step by step in
+# docs/DEPLOYMENT.md, section 2). It stays here as the reference copy, and
+# Render's optional "Blueprint" feature can read it directly. Keep it in step
+# with docs/DEPLOYMENT.md. Variables marked `sync: false` are secret and are
+# set in the dashboard.
 services:
   - type: web
     name: data-consulting-api

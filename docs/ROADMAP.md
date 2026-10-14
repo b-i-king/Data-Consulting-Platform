@@ -13,7 +13,7 @@ What exists today (v0.1) and suggested next steps, roughly in priority order.
 - Service selection with a price estimate and consultant booking hand-off
 - Signup at download (individual or business + team members); CSV/Excel download
 - Runtime-based usage recorded per download
-- Supabase schema, Render blueprint, tests, docs, project skills
+- Supabase schema, Render setup (`render.yaml`), tests, docs, project skills
 
 ## Next
 
