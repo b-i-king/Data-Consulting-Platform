@@ -101,9 +101,21 @@ export interface IntakeOptions {
   consultant: { name: string } | null;
 }
 
-/** A plan you sell = a Stripe product with a monthly and an annual price. Cancel anytime. */
+/**
+ * One priced item = a Stripe product with a monthly and an annual price: a TOOL
+ * (build your own package; the total is the sum) or the All tools BUNDLE.
+ */
 export interface Subscription {
-  id: string; // "data_cleaning", "data_visualization", "data_engineering", "all_tools"
+  id: string; // "data_cleaning", "data_visualization", ..., "ai", "all_tools"
+  kind: "tool" | "bundle";
+  /** Data Cleaning: in every package. */
+  base: boolean;
+  /** Tools that must be picked too (AI needs "data_engineering"). */
+  requires: string[];
+  /** false = free until it launches (AI). */
+  billable: boolean;
+  /** Bundle only: how much less per month than picking every tool. */
+  bundle_savings_month_usd: number;
   name: string;
   description: string;
   monthly_usd: number;
@@ -117,18 +129,22 @@ export interface Subscription {
 }
 
 export type BillingInterval = "month" | "year";
+/** A "build your own" package: the tools picked (or ["all_tools"]), and the billing interval. */
 export interface SubscriptionChoice {
-  plan: string;
+  plans: string[];
   interval: BillingInterval;
 }
 
 /** One live subscription (table `subscriptions`, kept in sync by Stripe). */
 export interface LiveSubscription {
   id: string;
-  plan_id: string;
-  name: string;
+  /** The tools in it (or ["all_tools"]). */
+  plan_ids: string[];
+  names: string[];
   interval: BillingInterval;
   status: string;
+  /** What it costs per interval. */
+  total_usd: number;
   /** Canceled, but paid through current_period_end. */
   cancel_at_period_end: boolean;
   current_period_end: string | null; // YYYY-MM-DD
@@ -145,6 +161,8 @@ export interface ConsultationTerms {
 export interface CheckoutResult {
   url: string | null;
   activated: boolean;
+  /** An existing subscription's tools were changed in place. */
+  updated: boolean;
   test_mode: boolean;
 }
 

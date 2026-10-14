@@ -335,40 +335,60 @@ async def get_account_by_stripe_customer(customer_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def upsert_subscription(*, account_id: str, plan_id: str, billing_interval: str, status: str,
+async def upsert_subscription(*, account_id: str, billing_interval: str, status: str, items: list[dict],
                               stripe_subscription_id: str | None = None, stripe_customer_id: str | None = None,
-                              cancel_at_period_end: bool = False, current_period_end: datetime | None = None) -> dict:
-    """Create or update one subscription (matched by its Stripe id when there is one)."""
-    row = {"account_id": account_id, "plan_id": plan_id, "billing_interval": billing_interval, "status": status,
+                              cancel_at_period_end: bool = False, current_period_end: datetime | None = None,
+                              subscription_id: str | None = None) -> dict:
+    """
+    Create or update one subscription and REPLACE its items
+    (items = [{"plan_id": ..., "stripe_subscription_item_id": ...}]). Matched by
+    our id (test mode) or Stripe's id.
+    """
+    row = {"account_id": account_id, "billing_interval": billing_interval, "status": status,
            "stripe_subscription_id": stripe_subscription_id, "stripe_customer_id": stripe_customer_id,
            "cancel_at_period_end": cancel_at_period_end, "current_period_end": current_period_end,
            "updated_at": _now()}
+    items = [{"plan_id": i["plan_id"], "stripe_subscription_item_id": i.get("stripe_subscription_item_id")}
+             for i in items]
     if database.pool is None:
-        existing = next((s for s in _subscriptions.values()
-                         if stripe_subscription_id and s["stripe_subscription_id"] == stripe_subscription_id), None)
+        existing = _subscriptions.get(subscription_id or "") or next(
+            (s for s in _subscriptions.values()
+             if stripe_subscription_id and s["stripe_subscription_id"] == stripe_subscription_id), None)
         if existing:
-            existing.update(row)
+            existing.update(row, items=items)
             return existing
         sid = str(uuid.uuid4())
-        _subscriptions[sid] = {"id": sid, "created_at": _now(), **row}
+        _subscriptions[sid] = {"id": sid, "created_at": _now(), **row, "items": items}
         return _subscriptions[sid]
-    rec = await database.pool.fetchrow(
-        """INSERT INTO subscriptions (account_id, plan_id, billing_interval, status, stripe_subscription_id,
-                                      stripe_customer_id, cancel_at_period_end, current_period_end)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (stripe_subscription_id) DO UPDATE SET
-               plan_id = EXCLUDED.plan_id, billing_interval = EXCLUDED.billing_interval,
-               status = EXCLUDED.status, cancel_at_period_end = EXCLUDED.cancel_at_period_end,
-               current_period_end = EXCLUDED.current_period_end, updated_at = now()
-           RETURNING *""",
-        uuid.UUID(account_id), plan_id, billing_interval, status, stripe_subscription_id,
-        stripe_customer_id, cancel_at_period_end, current_period_end,
-    )
-    return dict(rec)
+    async with database.pool.acquire() as conn:
+        async with conn.transaction():      # the row and its items change together
+            if subscription_id:
+                rec = await conn.fetchrow(
+                    """UPDATE subscriptions SET billing_interval = $2, status = $3, cancel_at_period_end = $4,
+                              current_period_end = $5, updated_at = now() WHERE id = $1 RETURNING *""",
+                    uuid.UUID(subscription_id), billing_interval, status, cancel_at_period_end, current_period_end)
+            else:
+                rec = await conn.fetchrow(
+                    """INSERT INTO subscriptions (account_id, billing_interval, status, stripe_subscription_id,
+                                                  stripe_customer_id, cancel_at_period_end, current_period_end)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)
+                       ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+                           billing_interval = EXCLUDED.billing_interval, status = EXCLUDED.status,
+                           cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                           current_period_end = EXCLUDED.current_period_end, updated_at = now()
+                       RETURNING *""",
+                    uuid.UUID(account_id), billing_interval, status, stripe_subscription_id,
+                    stripe_customer_id, cancel_at_period_end, current_period_end)
+            await conn.execute("DELETE FROM subscription_items WHERE subscription_id = $1", rec["id"])
+            for item in items:
+                await conn.execute(
+                    """INSERT INTO subscription_items (subscription_id, plan_id, stripe_subscription_item_id)
+                       VALUES ($1, $2, $3)""", rec["id"], item["plan_id"], item["stripe_subscription_item_id"])
+    return {**dict(rec), "items": items}
 
 
 async def list_subscriptions(account_id: str, live_only: bool = True) -> list[dict]:
-    """An account's subscriptions, newest first (by default only ones that keep a plan on)."""
+    """An account's subscriptions (each with its "items"), newest first; by default only live ones."""
     if database.pool is None:
         rows = [s for s in _subscriptions.values() if s["account_id"] == account_id
                 and (not live_only or s["status"] in LIVE_STATUSES)]
@@ -378,11 +398,16 @@ async def list_subscriptions(account_id: str, live_only: bool = True) -> list[di
         sql += " AND status = ANY($2::text[])"
     sql += " ORDER BY created_at DESC"
     args = [uuid.UUID(account_id)] + ([list(LIVE_STATUSES)] if live_only else [])
-    return [dict(r) for r in await database.pool.fetch(sql, *args)]
+    subs = [dict(r) for r in await database.pool.fetch(sql, *args)]
+    for s in subs:
+        rows = await database.pool.fetch(
+            "SELECT plan_id, stripe_subscription_item_id FROM subscription_items WHERE subscription_id = $1", s["id"])
+        s["items"] = [dict(r) for r in rows]
+    return subs
 
 
 async def set_subscription_status(subscription_id: str, status: str, cancel_at_period_end: bool = False) -> None:
-    """Placeholder mode only (no Stripe): cancel by our own id."""
+    """Test mode only (no Stripe): cancel by our own id."""
     if database.pool is None:
         if subscription_id in _subscriptions:
             _subscriptions[subscription_id].update(status=status, cancel_at_period_end=cancel_at_period_end,
@@ -434,9 +459,10 @@ async def save_plan(plan: dict) -> None:
     await database.pool.execute(
         """INSERT INTO subscription_plans (id, name, description, service_ids, monthly_price_usd, annual_price_usd,
                                            stripe_product_id, stripe_monthly_price_id, stripe_annual_price_id,
-                                           active, sort_order, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, now())
+                                           active, sort_order, kind, is_base, requires, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12, $13, now())
            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+               kind = EXCLUDED.kind, is_base = EXCLUDED.is_base, requires = EXCLUDED.requires,
                service_ids = EXCLUDED.service_ids, monthly_price_usd = EXCLUDED.monthly_price_usd,
                annual_price_usd = EXCLUDED.annual_price_usd, stripe_product_id = EXCLUDED.stripe_product_id,
                stripe_monthly_price_id = EXCLUDED.stripe_monthly_price_id,
@@ -444,7 +470,8 @@ async def save_plan(plan: dict) -> None:
                sort_order = EXCLUDED.sort_order, updated_at = now()""",
         plan["id"], plan["name"], plan["description"], list(plan["service_ids"]), plan["monthly_price_usd"],
         plan["annual_price_usd"], plan.get("stripe_product_id"), plan.get("stripe_monthly_price_id"),
-        plan.get("stripe_annual_price_id"), plan.get("sort_order", 0),
+        plan.get("stripe_annual_price_id"), plan.get("sort_order", 0), plan.get("kind", "tool"),
+        bool(plan.get("is_base")), list(plan.get("requires", [])),
     )
 
 
@@ -457,8 +484,9 @@ async def insert_missing_plans(plans: list[dict]) -> None:
     for plan in plans:
         await database.pool.execute(
             """INSERT INTO subscription_plans (id, name, description, service_ids, monthly_price_usd,
-                                               annual_price_usd, sort_order)
-               VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING""",
+                                               annual_price_usd, sort_order, kind, is_base, requires)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING""",
             plan["id"], plan["name"], plan["description"], plan["service_ids"], plan["monthly_price_usd"],
-            plan["annual_price_usd"], plan["sort_order"],
+            plan["annual_price_usd"], plan["sort_order"], plan.get("kind", "tool"), bool(plan.get("is_base")),
+            list(plan.get("requires", [])),
         )

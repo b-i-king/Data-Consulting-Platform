@@ -10,7 +10,7 @@ Tables: `subscription_plans`, `subscriptions`, `consulting_purchases`
 
 | What | Stripe setup | Billed |
 |---|---|---|
-| A plan — Data Cleaning, Dashboards, Data Engineering, All tools | One **product** per plan, two **prices**: monthly and annual (lookup keys `dcp_<plan>_month`, `dcp_<plan>_year`) | Recurring; cancel anytime in the billing portal |
+| A package of tools ("build your own") — Data Cleaning (base), Data Exploration & Analysis, Dashboards, Data Engineering, Data Science & ML, AI (needs Data Engineering) — or the All tools bundle | One **product** per tool (and the bundle), two **prices** each: monthly and annual (lookup keys `dcp_<tool>_month`, `dcp_<tool>_year`). One subscription holds **one item per tool**, all on the same interval | Recurring; the total is the sum of the tools; change tools anytime (prorated); cancel anytime in the billing portal |
 | Consulting hours (after the free 30-minute consultation) | Product "Consulting (1 hour)", price `dcp_consulting_hour` ($80) | One-time, any number of hours (1–40) |
 | Cleaning downloads without a plan | Not in Stripe yet: recorded in `usage_events` (per started minute) | Future: Stripe usage-based billing or a monthly invoice |
 
@@ -56,9 +56,10 @@ them, and nothing is charged. A banner in Plan & billing says so.
 ## How it works
 
 ```
-Plan & billing ──► POST /api/billing/checkout ──► Stripe Checkout page
+Plan & billing ──► POST /api/billing/checkout {plan_ids, interval} ──► Stripe Checkout page
+                    (already subscribed? the subscription's items change in place, prorated)
                                                       │ client pays
-Stripe ──► POST /api/billing/webhook (signed) ──► subscriptions row (status active)
+Stripe ──► POST /api/billing/webhook (signed) ──► subscriptions + subscription_items rows
 Workspace ──► GET /api/accounts/services ──► plan's services unlocked
 "Manage billing" ──► POST /api/billing/portal ──► Stripe portal ──► cancel
 Stripe ──► webhook (cancel_at_period_end, then deleted) ──► plan off at period end
@@ -70,4 +71,6 @@ Stripe ──► webhook (cancel_at_period_end, then deleted) ──► plan off
   changes nothing.
 - A business's plan belongs to the **team owner**; only they (or their
   consultant, acting for them) can buy or cancel. Team members share it.
-- A plan that includes Data Cleaning makes cleaning downloads free.
+- Every package includes Data Cleaning, so subscribers' cleaning downloads are free.
+- AI isn't charged until it launches (`billable` in `pricing.py`): it's left out
+  of the Stripe line items until then.

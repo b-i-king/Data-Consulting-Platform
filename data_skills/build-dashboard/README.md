@@ -965,7 +965,7 @@ Input: one table.
 | `value_column` | column | auto | Number to total for each KPI (default: the money column; none = count transactions) |
 | `top_kpis` | int | 4 | How many KPIs (types) to show, 1–6 |
 | `filters` | json | auto | Only use matching rows, e.g. {"customer_type": "Wholesale"} or {"age_group": ["25–34", "35–44"]} |
-| `filter_columns` | columns | auto | Columns offered as filters (default: customer and demographic columns, auto-detected) |
+| `filter_columns` | columns | auto | Columns offered as filters, up to 9 (default: customer, demographic and place columns, auto-detected) |
 | `value_columns` | columns | auto | KPIs when there is no type column: number columns to chart (default: up to 3 detected) |
 | `dimension_column` | column | auto | Category column for a breakdown (e.g. product) |
 | `agg` | choice (sum, mean, count) | sum | How to combine values in a period |

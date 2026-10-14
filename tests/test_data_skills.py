@@ -214,3 +214,18 @@ def test_time_bar_offers_only_what_the_data_supports(sales):
     assert rng == ["last_1_week", "last_4_weeks"] and cmps == ["dod", "wow"] and default == "last_4_weeks"
     assert "all" not in offered(300)[0] and "month_to_date" in offered(300)[0]
     assert {"all", "year_to_date", "last_1_year"} <= set(offered(731)[0])
+
+
+def test_dashboard_offers_up_to_nine_filters():
+    import numpy as np
+    n = 60
+    rng = np.random.default_rng(0)
+    groups = ["customer_type", "segment", "tier", "gender", "age_group", "income_band", "region", "city",
+              "store", "channel", "country"]
+    df = pd.DataFrame({"order_date": pd.date_range("2026-01-01", periods=n, freq="D"),
+                       "amount": rng.integers(5, 50, n),
+                       **{g: rng.choice(["a", "b", "c"], n) for g in groups}})
+    r = run_skill("build-dashboard", df, {"include_html": False})
+    assert len(r.data["filter_columns"]) == 9                     # 11 candidates, capped at 9
+    with pytest.raises(SkillInputError, match="up to 9"):
+        run_skill("build-dashboard", df, {"filter_columns": groups[:10], "include_html": False})

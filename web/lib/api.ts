@@ -140,9 +140,9 @@ export async function getMyServices(token: string): Promise<MyServices> {
 // With Stripe on, these return Stripe's own page (`url`) to send the person to;
 // in test mode (no Stripe key) `url` is null and the change is already made.
 
-/** Start a subscription: a plan, billed monthly or yearly. */
-export const startCheckout = (token: string, planId: string, interval: BillingInterval) =>
-  postJson<CheckoutResult>("/api/billing/checkout", { plan_id: planId, interval }, token);
+/** Subscribe to (or change) a package: the tools picked, billed monthly or yearly. */
+export const startCheckout = (token: string, planIds: string[], interval: BillingInterval) =>
+  postJson<CheckoutResult>("/api/billing/checkout", { plan_ids: planIds, interval }, token);
 
 /** Prepay consulting hours (after the free 30-minute consultation). */
 export const buyConsultingHours = (token: string, hours: number, serviceId?: string) =>
@@ -151,9 +151,8 @@ export const buyConsultingHours = (token: string, hours: number, serviceId?: str
 /** Stripe's billing portal: change card, see invoices, cancel anytime. */
 export const openBillingPortal = (token: string) => postJson<{ url: string }>("/api/billing/portal", {}, token);
 
-/** Test mode only: switch a plan off. */
-export const cancelPlanTestMode = (token: string, planId: string) =>
-  postJson<{ ok: boolean }>("/api/billing/cancel", { plan_id: planId }, token);
+/** Test mode only: switch the subscription off. */
+export const cancelPlanTestMode = (token: string) => postJson<{ ok: boolean }>("/api/billing/cancel", {}, token);
 
 /** Consultants: the clients assigned to me (the "Working on" picker). */
 export async function getMyClients(token: string): Promise<{ consultant: { id: string; name: string }; clients: ConsultantClient[] }> {

@@ -11,9 +11,10 @@
 --   * consultants   the people who do the work for clients (a "dim" table);
 --                   each signs in with their own account
 --   * usage_events  one row per download, for runtime-based billing
---   * subscription_plans  the plans you sell (= Stripe products), each with a
---                   monthly and an annual price
+--   * subscription_plans  what you sell (= Stripe products): each tool, and
+--                   the All tools bundle, with a monthly and an annual price
 --   * subscriptions one row per client subscription, kept in sync by Stripe
+--   * subscription_items  the tools in each subscription ("build your own")
 --   * consulting_purchases  prepaid consulting hours bought through Stripe
 --   Full design, ER diagram and planned tables: docs/DATABASE.md
 --   * intake_responses  optional, anonymous answers to the guest questionnaire
@@ -161,14 +162,19 @@ CREATE TABLE IF NOT EXISTS account_services (
 );
 
 -- ── Subscription plans (= Stripe products) ───────────────────────────────────
--- One row per plan you sell. Each is a Stripe PRODUCT with two PRICES: monthly
--- and annual. The rows are written by `python scripts/sync_stripe.py`, which
+-- One row per thing you sell: each TOOL (Data Cleaning, Dashboards, ...) and
+-- the All tools BUNDLE. Each is a Stripe PRODUCT with two PRICES: monthly and
+-- annual. Clients build their own package from the tools; the total is the
+-- sum of the tools' prices. The rows are written by `python scripts/sync_stripe.py`, which
 -- reads the plans from api/services/pricing.py (SUBSCRIPTIONS), creates or
 -- updates them in Stripe, and stores the Stripe ids here.
 CREATE TABLE IF NOT EXISTS subscription_plans (
     id                       TEXT PRIMARY KEY,          -- 'all_tools', 'data_visualization', ...
     name                     TEXT NOT NULL,             -- 'All tools'
     description              TEXT,
+    kind                     TEXT NOT NULL DEFAULT 'tool' CHECK (kind IN ('tool', 'bundle')),
+    is_base                  BOOLEAN NOT NULL DEFAULT false,   -- Data Cleaning: in every package
+    requires                 TEXT[] NOT NULL DEFAULT '{}',     -- AI: '{data_engineering}' 
     service_ids              TEXT[] NOT NULL DEFAULT '{}',   -- services it unlocks ('{}' = every service)
     monthly_price_usd        NUMERIC(10, 2) NOT NULL,
     annual_price_usd         NUMERIC(10, 2) NOT NULL,
@@ -181,13 +187,13 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
 );
 
 -- ── Subscriptions (kept in sync by Stripe) ──────────────────────────────────
--- One row per subscription a client starts. Written by the Stripe webhook
--- (api/services/billing.py) — never edited by hand. Held by the account that
--- holds the plan (an individual, or a business's team owner).
+-- One row per subscription a client starts; its tools are in
+-- subscription_items. Written by the Stripe webhook (api/services/billing.py)
+-- — never edited by hand. Held by the account that holds the plan (an
+-- individual, or a business's team owner). All items share one billing interval.
 CREATE TABLE IF NOT EXISTS subscriptions (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id               UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
-    plan_id                  TEXT NOT NULL REFERENCES subscription_plans (id),
     billing_interval         TEXT NOT NULL CHECK (billing_interval IN ('month', 'year')),
     -- Stripe's statuses. 'active' and 'trialing' unlock the plan; 'past_due'
     -- keeps it on while Stripe retries the card; the rest switch it off.
@@ -202,6 +208,15 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions (account_id, status);
+
+-- The tools (or the bundle) in each subscription — one row per Stripe
+-- subscription item. Replaced as a whole whenever the subscription changes.
+CREATE TABLE IF NOT EXISTS subscription_items (
+    subscription_id          UUID NOT NULL REFERENCES subscriptions (id) ON DELETE CASCADE,
+    plan_id                  TEXT NOT NULL REFERENCES subscription_plans (id),
+    stripe_subscription_item_id TEXT UNIQUE,            -- si_... (NULL in test mode)
+    PRIMARY KEY (subscription_id, plan_id)
+);
 
 -- ── Consulting hours (prepaid through Stripe) ───────────────────────────────
 -- The first 30-minute consultation is free (except Data Strategy & Discovery);
@@ -246,6 +261,7 @@ ALTER TABLE consultants      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account_services ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscription_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE consulting_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_events     ENABLE ROW LEVEL SECURITY;

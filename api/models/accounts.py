@@ -192,10 +192,18 @@ class AddServiceIn(BaseModel):
 
 
 class CheckoutIn(BaseModel):
-    """Start a subscription: which plan, billed monthly or yearly."""
+    """Subscribe to (or change) a package: the tools picked, billed monthly or yearly.
+    ["all_tools"] = the bundle. Data Cleaning is always added; AI needs Data Engineering."""
 
-    plan_id: str = Field(max_length=60)
+    plan_ids: list[str] = Field(min_length=1, max_length=10)
     interval: Literal["month", "year"]
+
+
+class PriceIn(BaseModel):
+    """Price a package before subscribing (the selector's running total)."""
+
+    plan_ids: list[str] = Field(default_factory=list, max_length=10)
+    interval: Literal["month", "year"] = "month"
 
 
 class ConsultingHoursIn(BaseModel):
@@ -205,7 +213,3 @@ class ConsultingHoursIn(BaseModel):
     service_id: str | None = Field(default=None, max_length=60)
 
 
-class CancelPlanIn(BaseModel):
-    """Test mode only: cancel a plan (with Stripe, the billing portal does this)."""
-
-    plan_id: str = Field(max_length=60)

@@ -3,10 +3,12 @@ Create (or update) the Stripe products and prices from api/services/pricing.py.
 
 WHAT IT DOES
 ------------
-For every plan in SUBSCRIPTIONS it makes sure Stripe has:
-    one PRODUCT  (e.g. "All tools")
+For every TOOL (and the All tools bundle) in SUBSCRIPTIONS it makes sure Stripe has:
+    one PRODUCT  (e.g. "Dashboards")
     two PRICES   monthly and annual, found later by their "lookup key":
-                 dcp_all_tools_month, dcp_all_tools_year
+                 dcp_data_visualization_month, dcp_data_visualization_year
+A client's subscription holds one item per tool they pick ("build your own
+package"); the bundle is a single item.
 plus one price for prepaid consulting:  dcp_consulting_hour  (CONSULTING_RATE_PER_HOUR_USD)
 
 Stripe prices can't be edited once created. When you change a price in
@@ -91,6 +93,7 @@ def sync(stripe, dry: bool = False, log=print) -> list[dict]:
             "id": plan.id, "name": plan.name, "description": plan.description,
             "service_ids": list(plan.service_ids), "monthly_price_usd": plan.monthly_usd,
             "annual_price_usd": plan.annual_usd, "sort_order": order, "stripe_product_id": product,
+            "kind": plan.kind, "is_base": plan.base, "requires": list(plan.requires),
             "stripe_monthly_price_id": ensure_price(stripe, product, pricing.lookup_key(plan.id, "month"),
                                                     _cents(plan.monthly_usd), "month", dry, log),
             "stripe_annual_price_id": ensure_price(stripe, product, pricing.lookup_key(plan.id, "year"),

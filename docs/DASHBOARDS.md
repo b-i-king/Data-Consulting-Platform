@@ -84,6 +84,23 @@ range and comparison you picked. Dropdown choices come from all rows, so they
 don't shrink as you filter. Options: `filters` (e.g. `{"customer_type": "Wholesale"}`)
 and `filter_columns`.
 
+**Up to 9 filters**, in one "Filters" container, in rows of **at most 3**
+kept as even as possible (rows differ by at most one filter), so the box always
+looks tidy (`filterRows` in `web/components/explore/Dashboard.tsx`):
+
+| Filters | Rows |
+|---|---|
+| 1 / 2 / 3 | one row |
+| 4 | 2 + 2 |
+| 5 | 3 + 2 |
+| 6 | 3 + 3 |
+| 7 | 3 + 2 + 2 |
+| 8 | 3 + 3 + 2 |
+| 9 | 3 + 3 + 3 |
+
+On phones each filter takes the full width. The skill picks the filters in
+order: customer groupings, then demographics, then place (`MAX_FILTERS = 9`).
+
 ## The "as of" date
 
 Every range ends on the **latest date in the data**, not today. A sales export

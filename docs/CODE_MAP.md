@@ -113,7 +113,7 @@ services the client chose are offered; the rest are badges from
 | `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
 | `scripts/sync_skill_docs.py` | Regenerates each README.md "Run it" section | After changing a skill's options |
 | `scripts/sync_stripe.py` | Creates/updates Stripe products and prices from `pricing.py` | After changing a plan or price |
-| `web/components/billing/` | Plan picker and Plan & billing panel | Billing screens |
+| `web/components/billing/` | Build-your-own package selector and Plan & billing panel | Billing screens |
 | `web/components/ui/SearchSelect.tsx` | Searchable dropdown (business size, "Working on") | Adding another searchable picker |
 | `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |
 | `web/components/explore/LockedService.tsx` | Locked-service badges | Changing how services unlock skills |

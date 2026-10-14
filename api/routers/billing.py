@@ -1,11 +1,12 @@
 """
 Billing endpoints (Stripe). The logic lives in api/services/billing.py.
 
-    GET  /api/billing/plans              the plans on sale (monthly + annual prices)
-    POST /api/billing/checkout           start a subscription -> Stripe Checkout URL
+    GET  /api/billing/plans              the tools and the bundle (monthly + annual prices)
+    POST /api/billing/price              total for a "build your own" selection
+    POST /api/billing/checkout           subscribe to (or change) a package -> Stripe Checkout URL
     POST /api/billing/consulting-hours   prepay consulting hours -> Stripe Checkout URL
     POST /api/billing/portal             Stripe's billing portal (card, invoices, CANCEL ANYTIME)
-    POST /api/billing/cancel             test mode only: switch a plan off
+    POST /api/billing/cancel             test mode only: switch the subscription off
     POST /api/billing/webhook            Stripe -> us (signed); keeps the tables in sync
 
 The signed-in ones accept X-Acting-As, so a consultant can set up billing for
@@ -19,8 +20,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from api.core.security import get_acting_context
-from api.models.accounts import CancelPlanIn, CheckoutIn, ConsultingHoursIn
-from api.services import billing, entitlements
+from api.models.accounts import CheckoutIn, ConsultingHoursIn, PriceIn
+from api.services import billing, entitlements, pricing
 from api.services.pricing import subscription_catalog
 
 router = APIRouter(prefix="/billing")
@@ -39,9 +40,17 @@ async def plans():
     return {"plans": subscription_catalog(), "stripe": billing.stripe_enabled()}
 
 
+@router.post("/price")
+async def price(body: PriceIn):
+    try:
+        return pricing.selection_price(body.plan_ids, body.interval)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
 @router.post("/checkout")
 async def checkout(body: CheckoutIn, ctx: Annotated[dict, Depends(get_acting_context)]):
-    return await billing.start_checkout(await _plan_holder(ctx), body.plan_id, body.interval)
+    return await billing.start_checkout(await _plan_holder(ctx), body.plan_ids, body.interval)
 
 
 @router.post("/consulting-hours")
@@ -55,8 +64,8 @@ async def portal(ctx: Annotated[dict, Depends(get_acting_context)]):
 
 
 @router.post("/cancel")
-async def cancel(body: CancelPlanIn, ctx: Annotated[dict, Depends(get_acting_context)]):
-    await billing.cancel_placeholder(await _plan_holder(ctx), body.plan_id)
+async def cancel(ctx: Annotated[dict, Depends(get_acting_context)]):
+    await billing.cancel_placeholder(await _plan_holder(ctx))
     return {"ok": True}
 
 

@@ -35,25 +35,34 @@ includes your `BOOKING_URL`.
 Code: `consultation_terms()` and `consulting_rate()` in `pricing.py`; every
 service card shows its terms ("Free 30-minute consultation, then $80/hour").
 
-## Subscription plans (monthly or annual)
+## Subscriptions: build your own package (monthly or annual)
 
-Each plan is a **Stripe product with two prices**. Code: `SUBSCRIPTIONS` in
-`api/services/pricing.py`; `scripts/sync_stripe.py` creates them in Stripe and
-fills the `subscription_plans` table. Setup: [PAYMENTS.md](PAYMENTS.md).
+Clients pick the **tools** they need; each has a fixed monthly and annual
+price and the total is the **sum**. **All tools** is a cheaper bundle. Code:
+`SUBSCRIPTIONS`, `normalize_selection()` and `selection_price()` in
+`api/services/pricing.py`; the selector is `web/components/billing/PackageBuilder.tsx`.
+In Stripe each tool is a product with two prices, and one subscription holds
+one item per tool ([PAYMENTS.md](PAYMENTS.md)).
 
-| Plan (`id`) | Unlocks | Monthly | Annual | Annual per month |
-|---|---|---|---|---|
-| Data Cleaning (`data_cleaning`) | Cleaning tools; downloads included | $19 | $190 | $15.83 |
-| Dashboards (`data_visualization`) | + Data Visualization | $39 | $390 | $32.50 |
-| Data Engineering (`data_engineering`) | + Data Engineering (managed storage when it launches) | $59 | $590 | $49.17 |
-| All tools (`all_tools`) | Every available service | $99 | $990 | $82.50 |
+| Tool (`id`) | Monthly | Annual | Rule |
+|---|---|---|---|
+| Data Cleaning (`data_cleaning`) | $19 | $190 | **Base** — in every package; downloads included |
+| Data Exploration & Analysis (`data_exploration_analysis`) | $19 | $190 | |
+| Dashboards (`data_visualization`) | $19 | $190 | |
+| Data Engineering (`data_engineering`) | $39 | $390 | Managed storage when it launches |
+| Data Science & Machine Learning (`data_science_ml`) | $39 | $390 | |
+| AI (`ai`) | $29 | $290 | **Add-on: needs Data Engineering** (it answers questions from stored data); grayed out until Data Engineering is picked; **free until it launches** |
+| **All tools** (`all_tools`, bundle) | **$99** | **$990** | Every tool, AI included at launch — $65/month less than picking all six |
+
+Examples: Data Cleaning + Dashboards = $38/month. All six tools picked
+separately = $164/month, so the selector suggests All tools ($99).
 
 **Placeholder prices.** Annual = 10 × monthly ("2 months free", 17% off);
-change both together, then re-run the sync script. **Cancel anytime:** in
-Stripe's billing portal ("Manage billing"); access runs to the end of the paid
-period. A plan that includes Data Cleaning makes cleaning downloads free (no
-per-minute charge). The plans are the self-serve side; the packages in the
-table above are work a consultant does for you.
+change both together, then re-run `scripts/sync_stripe.py`. **Changing tools**
+later updates the same subscription (Stripe prorates the difference).
+**Cancel anytime** in Stripe's billing portal ("Manage billing"); access runs to
+the end of the paid period. The packages in the services table above are
+one-time projects a consultant does for you.
 
 ## Runtime billing for cleaning
 
@@ -119,8 +128,8 @@ The signed-in workspace (`/app`) opens the services on the account's **plan**
 - **Data Cleaning** is always included.
 - **Every available service** for consultants and consultant-managed ("done for
   you") clients (`entitlements.gets_everything`).
-- **A plan's services** while its subscription is live (`active`, `trialing`,
-  `past_due`) — "All tools" = every available service.
+- **The tools in a live subscription** (`active`, `trialing`, `past_due`) —
+  "All tools" = every available service.
 - Services chosen in the guest questionnaire are put on the plan at signup.
 - Other services appear grayed out in the left pane, with an ⓘ explaining what
   they add, the price, and how to get them; **Add to my plan** adds one after

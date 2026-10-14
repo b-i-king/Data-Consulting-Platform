@@ -25,7 +25,8 @@ erDiagram
     consultants ||--o{ accounts : "manages (consultant_id)"
     accounts ||--o{ account_services : "plan (one-off services)"
     accounts ||--o{ subscriptions : "pays for"
-    subscription_plans ||--o{ subscriptions : "plan_id"
+    subscriptions ||--|{ subscription_items : "tools in it"
+    subscription_plans ||--o{ subscription_items : "plan_id"
     accounts ||--o{ consulting_purchases : "prepaid hours"
     accounts ||--o{ usage_events : "downloads"
     consultants |o--o{ usage_events : "done on the client's behalf"
@@ -71,8 +72,11 @@ erDiagram
         text source "signup | added | payment"
     }
     subscription_plans {
-        text id PK "all_tools, data_visualization..."
+        text id PK "each tool, or all_tools"
         text name
+        text kind "tool | bundle"
+        bool is_base "Data Cleaning"
+        text_array requires "AI: data_engineering"
         text_array service_ids
         numeric monthly_price_usd
         numeric annual_price_usd
@@ -84,12 +88,16 @@ erDiagram
     subscriptions {
         uuid id PK
         uuid account_id FK
-        text plan_id FK
         text billing_interval "month | year"
         text status "Stripe status"
         bool cancel_at_period_end
         timestamptz current_period_end
         text stripe_subscription_id UK
+    }
+    subscription_items {
+        uuid subscription_id PK, FK
+        text plan_id PK, FK
+        text stripe_subscription_item_id UK
     }
     consulting_purchases {
         bigint id PK
@@ -125,8 +133,9 @@ erDiagram
 | `teams` | business | business signup | `accounts.team_id` links members. |
 | `consultants` | consultant (a "dim" table) | first consultant sign-in (`consultants.register`) | Email must be in `CONSULTANT_EMAILS`; `is_default` = who "do it for me" clients go to. |
 | `account_services` | service added one at a time | signup ("Your needs"), workspace "Add" | Placeholder for package services until they're sold through Stripe too. |
-| `subscription_plans` | plan you sell = Stripe product | `scripts/sync_stripe.py` | Prices are defined in `api/services/pricing.py`; the script copies them here with the Stripe ids. `service_ids = '{}'` means every service (All tools). |
-| `subscriptions` | client subscription | **Stripe webhook only** (`api/services/billing.py`) | `active`, `trialing`, `past_due` keep the plan on. Cancel = `cancel_at_period_end` until the period ends, then `canceled`. |
+| `subscription_plans` | thing you sell = Stripe product: each **tool**, and the All tools **bundle** | `scripts/sync_stripe.py` | Prices are defined in `api/services/pricing.py`; the script copies them here with the Stripe ids. `is_base` = Data Cleaning (in every package); `requires` = AI needs Data Engineering; `service_ids = '{}'` means every service (the bundle). |
+| `subscriptions` | client subscription | **Stripe webhook only** (`api/services/billing.py`) | One billing interval for all its tools. `active`, `trialing`, `past_due` keep it on. Cancel = `cancel_at_period_end` until the period ends, then `canceled`. |
+| `subscription_items` | tool in a subscription ("build your own package") | Stripe webhook (replaced as a whole on every change) | The total price is the sum of the items' prices. |
 | `consulting_purchases` | paid Checkout for consulting hours | Stripe webhook | The free 30-minute first call isn't a purchase; it's booked through `BOOKING_URL`. |
 | `usage_events` | cleaned-file download | download endpoint | Metadata only (name, row count, runtime, amount) — never the data. `consultant_id` set when a consultant downloaded for the client. Amount is $0 when a plan includes Data Cleaning. |
 | `intake_responses` | guest questionnaire | (not used yet) | Analytics: which sources and services people ask for. |
@@ -140,11 +149,11 @@ anything; the API connects with the database password.
 ## Subscriptions: how a plan gets turned on
 
 ```
-pricing.py SUBSCRIPTIONS ──(scripts/sync_stripe.py)──► Stripe products + prices
+pricing.py SUBSCRIPTIONS ──(scripts/sync_stripe.py)──► Stripe products + prices (per tool)
                                                        └─► subscription_plans (Stripe ids)
-Client picks a plan ──► POST /api/billing/checkout ──► Stripe Checkout (Stripe's page)
-Stripe ──(signed webhook)──► POST /api/billing/webhook ──► subscriptions row
-Workspace ──► entitlements.active_services ──► plan's services unlocked
+Client picks tools ──► POST /api/billing/checkout ──► Stripe Checkout (one line per tool)
+Stripe ──(signed webhook)──► POST /api/billing/webhook ──► subscriptions + subscription_items
+Workspace ──► entitlements.active_services ──► the picked tools unlocked
 ```
 
 Details and setup: [PAYMENTS.md](PAYMENTS.md). Prices: [PRICING.md](PRICING.md).

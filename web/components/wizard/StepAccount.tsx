@@ -26,6 +26,7 @@ import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
 import type { AccountType, AnalyzeResponse, CleaningInput, Industry, Subscription, SubscriptionChoice } from "@/lib/types";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
+import { packageTotal } from "@/components/billing/PackageBuilder";
 import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 
 
@@ -80,22 +81,23 @@ function DownloadPanel(props: {
   const [planNote, setPlanNote] = useState<string | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
   const [planStarted, setPlanStarted] = useState(false);
-  const chosen = props.subscription && props.plans.find((p) => p.id === props.subscription!.plan);
+  const chosen = props.subscription && props.subscription.plans.length ? props.subscription : null;
+  const chosenNames = chosen ? chosen.plans.map((id) => props.plans.find((p) => p.id === id)?.name).join(" + ") : "";
   useEffect(() => {
     getMyServices(props.session.token)
       .then((m) => {
         setIncluded(m.downloads_included);
-        setPlanStarted(m.subscriptions.some((s) => s.plan_id === props.subscription?.plan));
+        setPlanStarted(m.subscriptions.length > 0);
       })
       .catch(() => {});
-  }, [props.session.token, props.subscription?.plan]);
+  }, [props.session.token]);
 
   async function startPlan() {
     if (!props.subscription) return;
     setPlanBusy(true);
     setPlanNote(null);
     try {
-      const res = await startCheckout(props.session.token, props.subscription.plan, props.subscription.interval);
+      const res = await startCheckout(props.session.token, props.subscription.plans, props.subscription.interval);
       if (res.url) {
         window.location.assign(res.url); // Stripe's secure page; it returns to the workspace
         return;
@@ -103,7 +105,7 @@ function DownloadPanel(props: {
       const m = await getMyServices(props.session.token);
       setIncluded(m.downloads_included);
       setPlanStarted(true);
-      setPlanNote("Your plan is on (test mode — nothing was charged).");
+      setPlanNote("Your package is on (test mode — nothing was charged).");
     } catch (e) {
       setPlanNote(e instanceof Error ? e.message : "We couldn't start the plan.");
     } finally {
@@ -151,8 +153,8 @@ function DownloadPanel(props: {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm">
               <strong>
-                Start your {chosen.name} plan ({props.subscription.interval === "month" ? "monthly" : "yearly"}):{" "}
-                {props.subscription.interval === "month" ? `${fmtUsd(chosen.monthly_usd)}/month` : `${fmtUsd(chosen.annual_usd)}/year`}
+                Start your package — {chosenNames} ({chosen.interval === "month" ? "monthly" : "yearly"}):{" "}
+                {fmtUsd(packageTotal(props.plans, chosen.plans, chosen.interval))}/{chosen.interval === "month" ? "month" : "year"}
               </strong>
               <span className="block text-xs text-ink-muted">
                 Cancel anytime. Download your files first — paying opens Stripe&apos;s secure page, and your files stay
@@ -160,7 +162,7 @@ function DownloadPanel(props: {
               </span>
             </div>
             <Button onClick={startPlan} disabled={planBusy}>
-              {planBusy ? "One moment…" : "Start my plan"}
+              {planBusy ? "One moment…" : "Start my package"}
             </Button>
           </div>
         </Card>

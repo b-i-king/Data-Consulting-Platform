@@ -3,7 +3,9 @@ Payments with Stripe: subscriptions (monthly or annual) and prepaid consulting h
 
 WHAT THIS FILE DOES
 -------------------
-  start_checkout(account, plan, interval)  -> a Stripe Checkout page for a plan
+  start_checkout(account, tools, interval) -> a Stripe Checkout page for a "build your
+                                              own" package (or, if they already have a
+                                              subscription, change its tools in place)
   buy_consulting_hours(account, hours)     -> a Stripe Checkout page for hours
   billing_portal(account)                  -> Stripe's page to change card / CANCEL ANYTIME
   handle_webhook(payload, signature)       -> Stripe tells us what happened; we update
@@ -13,9 +15,11 @@ WHAT THIS FILE DOES
 
 HOW THE PIECES FIT
 ------------------
-1. scripts/sync_stripe.py creates one Stripe PRODUCT per plan in
-   api/services/pricing.py, each with two PRICES found by "lookup key":
-   dcp_<plan>_month and dcp_<plan>_year (plus dcp_consulting_hour).
+1. scripts/sync_stripe.py creates one Stripe PRODUCT per tool (and the All
+   tools bundle) in api/services/pricing.py, each with two PRICES found by
+   "lookup key": dcp_<tool>_month and dcp_<tool>_year (plus dcp_consulting_hour).
+   A client's subscription has one ITEM per tool they picked; the total is the
+   sum of those prices.
 2. The site asks for a Checkout page; the client pays on Stripe's own page
    (card details never touch our server).
 3. Stripe calls POST /api/billing/webhook. We check Stripe's signature
@@ -79,49 +83,85 @@ async def _customer_id(account: dict) -> str:
 
 
 async def ensure_plans() -> None:
-    """Make sure every plan in pricing.py has a subscription_plans row (subscriptions point at it).
+    """Make sure every item in pricing.py has a subscription_plans row (subscription items point at it).
     Missing rows are added without Stripe ids; scripts/sync_stripe.py fills those in."""
     await account_store.insert_missing_plans([
         {"id": plan.id, "name": plan.name, "description": plan.description, "service_ids": list(plan.service_ids),
-         "monthly_price_usd": plan.monthly_usd, "annual_price_usd": plan.annual_usd, "sort_order": order}
+         "monthly_price_usd": plan.monthly_usd, "annual_price_usd": plan.annual_usd, "sort_order": order,
+         "kind": plan.kind, "is_base": plan.base, "requires": list(plan.requires)}
         for order, plan in enumerate(pricing.SUBSCRIPTIONS)
     ])
 
 
-def _check_plan(plan_id: str, interval: str) -> pricing.Subscription:
-    plan = pricing.SUBSCRIPTIONS_BY_ID.get(plan_id)
-    if plan is None or interval not in pricing.INTERVALS:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown plan or billing interval.")
-    return plan
+def _selection(plan_ids: list[str], interval: str) -> list[str]:
+    """Validate a package (400 with a plain-English message if it doesn't make sense)."""
+    if interval not in pricing.INTERVALS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Choose monthly or yearly billing.")
+    try:
+        return pricing.normalize_selection(plan_ids)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
-async def start_checkout(account: dict, plan_id: str, interval: str) -> dict:
+def _as_dict(obj):
+    """Stripe objects -> plain dicts (newer stripe libraries return non-dict objects)."""
+    return obj.to_dict() if hasattr(obj, "to_dict") else obj
+
+
+async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> dict:
     """
-    Start a subscription. Returns {"url": <Stripe page>} with Stripe, or
-    {"url": None, "activated": True} in placeholder mode.
+    Subscribe to a package of tools, billed monthly or yearly.
+
+      * No live subscription -> Stripe Checkout with one line per billable tool
+        (test mode: switched on at once).
+      * Already subscribed   -> the subscription's tools (and interval) are
+        changed in place; Stripe prorates the difference on the next invoice.
+
+    Returns {"url", "activated", "updated", "test_mode"}.
     """
-    plan = _check_plan(plan_id, interval)
+    picked = _selection(plan_ids, interval)
+    billable = [p for p in picked if pricing.billable(p)]   # AI is free until it launches
     live = await account_store.list_subscriptions(str(account["id"]))
-    if any(s["plan_id"] == plan.id for s in live):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"You already have the {plan.name} plan.")
+    current = live[0] if live else None
+    if current and sorted(i["plan_id"] for i in current["items"]) == sorted(picked) \
+            and current["billing_interval"] == interval:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="That's already your package.")
+
     if not stripe_enabled():
         await ensure_plans()
-        await account_store.upsert_subscription(account_id=str(account["id"]), plan_id=plan.id,
-                                                billing_interval=interval, status="active")
-        return {"url": None, "activated": True, "test_mode": True}
+        await account_store.upsert_subscription(
+            account_id=str(account["id"]), billing_interval=interval, status="active",
+            items=[{"plan_id": p} for p in picked], subscription_id=str(current["id"]) if current else None)
+        return {"url": None, "activated": True, "updated": bool(current), "test_mode": True}
+
+    stripe = _stripe()
+    if current and current.get("stripe_subscription_id"):
+        # Change the existing subscription: remove items no longer wanted (or all
+        # of them when the interval changes), add the new ones.
+        keep = {i["plan_id"]: i for i in current["items"]} if current["billing_interval"] == interval else {}
+        changes = [{"id": i["stripe_subscription_item_id"], "deleted": True}
+                   for pid, i in {x["plan_id"]: x for x in current["items"]}.items()
+                   if pid not in keep or pid not in billable]
+        changes += [{"price": _price_id(pricing.lookup_key(pid, interval))} for pid in billable if pid not in keep]
+        sub = stripe.Subscription.modify(current["stripe_subscription_id"], items=changes,
+                                         proration_behavior="create_prorations",
+                                         metadata={"account_id": str(account["id"])})
+        await _save_subscription(_as_dict(sub))   # the webhook will confirm the same thing
+        return {"url": None, "activated": False, "updated": True, "test_mode": False}
+
     site = get_settings().site_url.rstrip("/")
-    session = _stripe().checkout.Session.create(
+    session = stripe.checkout.Session.create(
         mode="subscription",
         customer=await _customer_id(account),
-        line_items=[{"price": _price_id(pricing.lookup_key(plan.id, interval)), "quantity": 1}],
+        line_items=[{"price": _price_id(pricing.lookup_key(pid, interval)), "quantity": 1} for pid in billable],
         client_reference_id=str(account["id"]),
-        # Copied onto the subscription, so the webhook knows whose plan it is.
-        subscription_data={"metadata": {"account_id": str(account["id"]), "plan_id": plan.id}},
+        # Copied onto the subscription, so the webhook knows whose package it is.
+        subscription_data={"metadata": {"account_id": str(account["id"])}},
         allow_promotion_codes=True,
         success_url=f"{site}/app?checkout=success",
         cancel_url=f"{site}/app?checkout=canceled",
     )
-    return {"url": session.url, "activated": False, "test_mode": False}
+    return {"url": session.url, "activated": False, "updated": False, "test_mode": False}
 
 
 async def buy_consulting_hours(account: dict, hours: int, service_id: str | None = None) -> dict:
@@ -159,23 +199,24 @@ async def billing_portal(account: dict) -> dict:
     return {"url": session.url}
 
 
-async def cancel_placeholder(account: dict, plan_id: str) -> None:
-    """Test mode only: switch a plan off (with Stripe, the portal does this)."""
+async def cancel_placeholder(account: dict) -> None:
+    """Test mode only: switch the subscription off (with Stripe, the portal does this)."""
     if stripe_enabled():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Use “Manage billing” to cancel.")
-    match = [s for s in await account_store.list_subscriptions(str(account["id"])) if s["plan_id"] == plan_id]
-    if not match:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="There's no active plan to cancel.")
-    for s in match:
+    live = await account_store.list_subscriptions(str(account["id"]))
+    if not live:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="There's no active subscription to cancel.")
+    for s in live:
         await account_store.set_subscription_status(str(s["id"]), "canceled")
 
 
 async def live_plan_services(account_id: str) -> tuple[list[str], list[dict]]:
-    """(service ids unlocked by live subscriptions, the live subscriptions)."""
+    """(service ids unlocked by live subscriptions' tools, the live subscriptions)."""
     subs = await account_store.list_subscriptions(account_id)
     services: list[str] = []
     for s in subs:
-        services += pricing.plan_services(s["plan_id"])
+        for item in s["items"]:
+            services += pricing.plan_services(item["plan_id"])
     return list(dict.fromkeys(services)), subs
 
 
@@ -199,17 +240,23 @@ async def _save_subscription(sub) -> None:
     if not account_id:
         log.warning("Stripe subscription %s has no matching account; ignored.", sub.get("id"))
         return
-    item = ((sub.get("items") or {}).get("data") or [{}])[0]
-    price = item.get("price") or {}
-    key = price.get("lookup_key") or ""           # dcp_<plan>_<interval>
-    interval = (price.get("recurring") or {}).get("interval") or key.rsplit("_", 1)[-1]
-    plan_id = meta.get("plan_id") or key.removeprefix("dcp_").rsplit("_", 1)[0]
-    if plan_id not in pricing.SUBSCRIPTIONS_BY_ID or interval not in pricing.INTERVALS:
-        log.warning("Stripe subscription %s has an unknown plan (%s); ignored.", sub.get("id"), key)
+    # One item per tool; each price's lookup key says which tool and interval.
+    items, interval = [], None
+    for item in (sub.get("items") or {}).get("data") or []:
+        price = item.get("price") or {}
+        found = pricing.plan_from_lookup_key(price.get("lookup_key") or "")
+        if not found:
+            log.warning("Stripe subscription %s has an unknown price (%s); item ignored.",
+                        sub.get("id"), price.get("lookup_key"))
+            continue
+        items.append({"plan_id": found[0], "stripe_subscription_item_id": item.get("id")})
+        interval = found[1]
+    if not items or interval is None:
+        log.warning("Stripe subscription %s has no known tools; ignored.", sub.get("id"))
         return
     await ensure_plans()
     await account_store.upsert_subscription(
-        account_id=account_id, plan_id=plan_id, billing_interval=interval, status=sub.get("status"),
+        account_id=account_id, billing_interval=interval, status=sub.get("status"), items=items,
         stripe_subscription_id=sub.get("id"), stripe_customer_id=sub.get("customer"),
         cancel_at_period_end=bool(sub.get("cancel_at_period_end")), current_period_end=_period_end(sub),
     )

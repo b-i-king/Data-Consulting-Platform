@@ -259,11 +259,16 @@ async def _services_out(ctx: dict) -> dict:
 
 
 def _subscription_out(s: dict) -> dict:
-    plan = pricing.SUBSCRIPTIONS_BY_ID.get(s["plan_id"])
+    """One subscription: its tools, interval, status and what it costs per period."""
     end = s.get("current_period_end")
+    plan_ids = [i["plan_id"] for i in s["items"] if i["plan_id"] in pricing.SUBSCRIPTIONS_BY_ID]
+    price = pricing.selection_price(plan_ids, s["billing_interval"]) if plan_ids else {"total_usd": 0}
     return {
-        "id": str(s["id"]), "plan_id": s["plan_id"], "name": plan.name if plan else s["plan_id"],
+        "id": str(s["id"]),
+        "plan_ids": plan_ids,
+        "names": [pricing.SUBSCRIPTIONS_BY_ID[p].name for p in plan_ids],
         "interval": s["billing_interval"], "status": s["status"],
+        "total_usd": price["total_usd"],
         "cancel_at_period_end": bool(s.get("cancel_at_period_end")),
         "current_period_end": end.date().isoformat() if end else None,
     }
