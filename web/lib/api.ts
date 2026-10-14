@@ -121,10 +121,11 @@ export async function getMyServices(token: string): Promise<MyServices> {
 export const addMyService = (token: string, serviceId: string) =>
   postJson<MyServices>("/api/accounts/services", { service_id: serviceId }, token);
 
-/** The missing-value choices as form fields (same for analyze, download and skills). */
+/** The cleaning choices as form fields (same for analyze, download and skills). */
 const choiceFields = (c: CleaningInput) => ({
   missing_strategy: c.strategy,
   column_actions: JSON.stringify(c.columnActions),
+  column_names: JSON.stringify(c.columnNames ?? {}),
 });
 
 /**

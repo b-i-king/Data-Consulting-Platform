@@ -21,7 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
@@ -55,6 +55,7 @@ export default function Wizard() {
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   // Per-column missing-value choices, by table: {"0": {"amount": "median"}}.
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
+  const [columnNames, setColumnNames] = useState<ColumnNames>({});
   const [serviceIds, setServiceIds] = useState<string[]>(["data_cleaning"]);
   const [session, setSession] = useState<Session | null>(null);
 
@@ -76,14 +77,26 @@ export default function Wizard() {
 
   const bookingUrl = options?.booking_url ?? FALLBACK_BOOKING_URL;
   // Memoized so the dashboard and skills only re-run when the data really changes.
-  const input: CleaningInput = useMemo(() => ({ files, strategy, columnActions }), [files, strategy, columnActions]);
+  const input: CleaningInput = useMemo(
+    () => ({ files, strategy, columnActions, columnNames }),
+    [files, strategy, columnActions, columnNames],
+  );
 
   // Re-run the cleaning with new fill/remove choices for one table. The new
   // report replaces the old one only if the server accepts the choices.
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
-    setAnalysis(await analyzeFiles({ files, strategy, columnActions: next }));
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions: next, columnNames }));
     setColumnActions(next);
+  }
+  // Same for the client's own column names (and, optionally, column choices
+  // made at the same time — e.g. "remove all unnamed columns").
+  async function applyNames(groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) {
+    const nextNames = { ...columnNames, [String(groupId)]: names };
+    const nextActions = actions ? { ...columnActions, [String(groupId)]: actions } : columnActions;
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions: nextActions, columnNames: nextNames }));
+    setColumnNames(nextNames);
+    setColumnActions(nextActions);
   }
   // A service picked from a locked badge in Explore is added to the order —
   // after a confirmation that shows its price and the new total.
@@ -166,11 +179,13 @@ export default function Wizard() {
             setFiles(f);
             setAnalysis(null); // new files invalidate the old results
             setColumnActions({});
+            setColumnNames({});
           }}
           onStrategyChange={(s) => {
             setStrategy(s);
             setAnalysis(null);
             setColumnActions({});
+            setColumnNames({});
           }}
           onAnalyzed={(result) => {
             setAnalysis(result);
@@ -185,6 +200,7 @@ export default function Wizard() {
           analysis={analysis}
           input={input}
           onApplyActions={applyActions}
+          onApplyNames={applyNames}
           services={options.services}
           selectedServices={serviceIds}
           onAddService={addService}

@@ -12,6 +12,7 @@
 //     be blank, so the suggestion is "Remove rows with no ID". Those rows go
 //     on the "rows_missing_id" sheet of the Excel download for the client to fix.
 //   * the column's original name, when cleaning renamed it ("Order Date" -> order_date)
+// Choices are keyed by the column's stable `key`, so they survive a rename.
 //
 // Long tables are shown 10 columns per page (First / Previous / Next / Last);
 // choices made on one page are kept when you move to another.
@@ -50,8 +51,6 @@ export default function MissingValues(props: {
   onApply: (actions: Record<string, ColumnAction>) => Promise<void>;
 }) {
   const { report } = props;
-  // new name -> the name in the uploaded file
-  const originalName = Object.fromEntries(Object.entries(report.columns_renamed ?? {}).map(([o, n]) => [n, o]));
   const [draft, setDraft] = useState<Record<string, ColumnAction>>(props.applied);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +62,7 @@ export default function MissingValues(props: {
   const shown = all.slice(current * COLUMNS_PER_PAGE, (current + 1) * COLUMNS_PER_PAGE);
 
   const withGaps = report.column_reports.filter((c) => c.missing_count > 0);
-  const valueOf = (col: string) => draft[col] ?? "keep";
+  const valueOf = (key: string) => draft[key] ?? "keep";
   // Compare ignoring "keep" (the default) so an untouched form isn't "changed".
   const clean = (a: Record<string, ColumnAction>) =>
     JSON.stringify(Object.entries(a).filter(([, v]) => v !== "keep").sort());
@@ -75,10 +74,10 @@ export default function MissingValues(props: {
   function useSuggestions() {
     const next: Record<string, ColumnAction> = { ...draft };
     withGaps.forEach((c) => {
-      if (c.missing_level === "remove") next[c.column] = "drop";
+      if (c.missing_level === "remove") next[c.key] = "drop";
       // IDs must not be blank: remove those rows at any level below 90%.
-      else if (c.suggested_fill === "drop_rows") next[c.column] = "drop_rows";
-      else if (c.missing_level === "low" && c.suggested_fill) next[c.column] = c.suggested_fill;
+      else if (c.suggested_fill === "drop_rows") next[c.key] = "drop_rows";
+      else if (c.missing_level === "low" && c.suggested_fill) next[c.key] = c.suggested_fill;
     });
     setDraft(next);
   }
@@ -130,8 +129,12 @@ export default function MissingValues(props: {
                     )}
                     {c.action === "dropped" && <span className="text-xs text-ink-muted">(removed)</span>}
                   </div>
-                  {originalName[c.column] && (
-                    <div className="text-xs text-ink-muted">was &ldquo;{originalName[c.column]}&rdquo;</div>
+                  {c.original_name === "" ? (
+                    <div className="text-xs text-warn">no name in your file</div>
+                  ) : (
+                    c.original_name !== c.column && (
+                      <div className="text-xs text-ink-muted">was &ldquo;{c.original_name}&rdquo;</div>
+                    )
                   )}
                   {c.recommendation && <div className="mt-0.5 max-w-sm text-xs text-ink-muted">{c.recommendation}</div>}
                 </td>
@@ -159,8 +162,8 @@ export default function MissingValues(props: {
                     <>
                       <select
                         aria-label={`What to do with missing values in ${c.column}`}
-                        value={valueOf(c.column)}
-                        onChange={(e) => setDraft((d) => ({ ...d, [c.column]: e.target.value as ColumnAction }))}
+                        value={valueOf(c.key)}
+                        onChange={(e) => setDraft((d) => ({ ...d, [c.key]: e.target.value as ColumnAction }))}
                         className="w-full min-w-48 rounded-xl border border-line bg-surface px-2 py-1 text-sm"
                       >
                         <option value="keep">Keep the gaps</option>

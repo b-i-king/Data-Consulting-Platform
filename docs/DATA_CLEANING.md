@@ -52,7 +52,7 @@ columns than the header ("Row 3 … has 2 columns but the header has 1").
 - **Header row:** the first row is assumed to hold column names.
 - **Encodings tried:** UTF-8 (with/without BOM), Windows-1252, Latin-1 — covers
   most US exports, including older Excel "Save as CSV" files.
-- **Column names:** trimmed of spaces; duplicates made unique (`id`, `id.1`).
+- **Column names:** trimmed of spaces; a blank header becomes `unnamed_column_<position>`, and a repeated one becomes `amount`, `amount_2` (pandas' `amount.1` included). Both are flagged for the client to fix (see Step 0 below).
 
 ## 2. One file or many?
 
@@ -84,11 +84,29 @@ Entity labels are a keyword-based guess and are shown to clients as such.
 | 5b. Row strategy | **Keep** rows with gaps (default) or **remove** them (after 5a) | Client picks on the upload step |
 | 6. Profile | Type, unique values, examples per column | `order_date`: date (stored as text) |
 
+**Header problems** (Step 0 flags them; the results screen shows a warning and
+the fixes):
+
+| Problem | How it looks after reading | What the client can do |
+|---|---|---|
+| A blank header cell (one or several; common in Excel and CSV exports) | `unnamed_column_4` — the number is its position from the left | Type a name, **Remove all unnamed columns** (one button), or fix the header row in the file and upload again |
+| Two columns with the same name | `amount`, `amount_2` (pandas' own `amount.1` is turned into this) | Rename them so the analysis can tell them apart, e.g. `amount_paid`, `amount_refunded` |
+
+**Edit column names** (on the results screen) renames any column, 10 per page.
+The client's names are sent as `column_names` (`{"0": {"amount_2":
+"refund_amount"}}`, by column **key**), cleaned the same way (lowercase,
+underscores) and must be unique — a clash is refused with a clear message.
+Each column keeps its automatic name as a stable `key`, so missing-value
+choices made before a rename still apply. Renaming or removing a column marks
+its problem fixed (`name_problem`, `unnamed_columns`, `duplicate_columns` in the
+report). Nothing is stored: the names travel with every request, like the
+missing-value choices.
+
 Step 0 runs first, so every later step, the column choices (`column_actions`
 use the cleaned names), the preview, the skills and the download all use the
-new names. The report lists each change in `columns_renamed` (the app shows
-"was "Order Date"" under the column), and the platform's own `source_file`
-column keeps its name.
+new names. The report lists each change in `columns_renamed`, and each column
+carries its `original_name` (the app shows "was "Order Date"" under the column,
+or "no name in your file"). The platform's own `source_file` column keeps its name.
 
 Steps 2 and 3 ignore the platform's own `source_file` column, so a blank row is
 still blank and a record repeated across two overlapping exports is still a

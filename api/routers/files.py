@@ -38,7 +38,7 @@ from api.core.config import get_settings
 from api.core.security import get_current_account
 from api.services import account_store
 from api.services.cleaning import dataframe_to_records
-from api.services.pipeline import load_uploads, parse_column_actions, run_pipeline
+from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, run_pipeline
 from api.services.pricing import download_estimate, runtime_cost
 
 router = APIRouter(prefix="/files")
@@ -50,12 +50,15 @@ Strategy = Literal["keep", "drop_any"]
 async def analyze_files(
     files: Annotated[list[UploadFile], File(description="One or more flat files")],
     missing_strategy: Annotated[Strategy, Form()] = "keep",
-    # Per-column choices, JSON: {"<group_id>": {"<column>": "keep|drop|mean|median|mode|auto"}}
+    # Per-column choices, JSON: {"<group_id>": {"<column>": "keep|drop|mean|median|mode|auto|drop_rows"}}
     column_actions: Annotated[str, Form()] = "{}",
+    # The client's own column names, JSON: {"<group_id>": {"<column key>": "new name"}}
+    column_names: Annotated[str, Form()] = "{}",
 ):
     settings = get_settings()
     datasets = await load_uploads(files)
-    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions))
+    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
+                          parse_column_names(column_names))
 
     groups_out = []
     for g in result.groups:
@@ -100,9 +103,11 @@ async def download_cleaned(
     # The amount the client saw and confirmed (from download_estimate). The
     # charge never goes above it, even if this run takes a little longer.
     confirmed_amount_usd: Annotated[float | None, Form(ge=0)] = None,
+    column_names: Annotated[str, Form()] = "{}",
 ):
     datasets = await load_uploads(files)
-    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions))
+    result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
+                          parse_column_names(column_names))
 
     group = next((g for g in result.groups if g.group_id == group_id), None)
     if group is None:

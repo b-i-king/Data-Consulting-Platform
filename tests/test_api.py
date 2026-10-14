@@ -226,3 +226,29 @@ def test_excel_download_lists_rows_removed_for_a_missing_id():
     sheets = pd.read_excel(io.BytesIO(res.content), sheet_name=None)
     assert len(sheets["cleaned_data"]) == 36
     assert sheets["rows_missing_id"]["total_amount"].tolist() == [0, 10, 20, 30]
+
+
+def test_client_column_names_apply_to_analyze_and_skills():
+    rows = "".join(f"{i},{i * 2},{i * 3},\n" for i in range(40))
+    csv = f"order_id,amount,amount,\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("o.csv", csv))).json()
+    report = body["groups"][0]["report"]
+    assert report["duplicate_columns"] == [["amount", "amount_2"]]
+    assert report["unnamed_columns"] == ["unnamed_column_4"]
+
+    names = '{"0": {"amount": "Amount Paid", "amount_2": "Amount Refunded"}}'
+    actions = '{"0": {"unnamed_column_4": "drop"}}'
+    body = client.post("/api/files/analyze", files=_files(("o.csv", csv)),
+                       data={"column_names": names, "column_actions": actions}).json()
+    g = body["groups"][0]
+    assert g["preview"]["columns"] == ["order_id", "amount_paid", "amount_refunded"]
+    assert g["report"]["duplicate_columns"] == [] and g["report"]["unnamed_columns"] == []
+
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("o.csv", csv)),
+                      data={"column_names": names, "column_actions": actions})
+    assert res.status_code == 200, res.text
+    assert "amount_refunded" in res.text
+
+    bad = client.post("/api/files/analyze", files=_files(("o.csv", csv)),
+                      data={"column_names": '{"0": {"amount_2": "amount"}}'})
+    assert bad.status_code == 400 and "share a name" in bad.json()["detail"]

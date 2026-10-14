@@ -37,7 +37,7 @@ import { addMyService, analyzeFiles, downloadCleaned, getIntakeOptions, getMySer
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
@@ -98,6 +98,7 @@ export default function Workspace() {
   const [files, setFiles] = useState<File[]>([]);
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
+  const [columnNames, setColumnNames] = useState<ColumnNames>({});
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
@@ -141,7 +142,10 @@ export default function Workspace() {
   const current = section ?? open[0]?.id ?? null;
   const currentService = plan?.services.find((s) => s.id === current);
 
-  const input: CleaningInput = useMemo(() => ({ files, strategy: "keep", columnActions }), [files, columnActions]);
+  const input: CleaningInput = useMemo(
+    () => ({ files, strategy: "keep", columnActions, columnNames }),
+    [files, columnActions, columnNames],
+  );
   const group = analysis?.groups[groupIndex];
 
   // The current service's skill menu: built-in view first (if any), then its skills.
@@ -162,8 +166,9 @@ export default function Workspace() {
     try {
       setFiles(chosen);
       setColumnActions({});
+      setColumnNames({});
       setGroupIndex(0);
-      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {} }));
+      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {} }));
     } catch (e) {
       setAnalysis(null);
       setError(e instanceof Error ? e.message : "We couldn't read those files.");
@@ -174,9 +179,18 @@ export default function Workspace() {
 
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames }));
     setColumnActions(next);
     setResults({});
+  }
+
+  async function applyNames(groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) {
+    const nextNames = { ...columnNames, [String(groupId)]: names };
+    const nextActions = actions ? { ...columnActions, [String(groupId)]: actions } : columnActions;
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: nextActions, columnNames: nextNames }));
+    setColumnNames(nextNames);
+    setColumnActions(nextActions);
+    setResults({}); // skill results used the old names
   }
 
   // Every "Add" button opens a confirmation with the price first (pendingAdd);
@@ -453,6 +467,8 @@ export default function Workspace() {
                   bookingUrl={bookingUrl}
                   applied={columnActions[String(group.group_id)] ?? {}}
                   onApply={(actions) => applyActions(group.group_id, actions)}
+                  appliedNames={columnNames[String(group.group_id)] ?? {}}
+                  onApplyNames={(names, actions) => applyNames(group.group_id, names, actions)}
                 />
               </>
             )}

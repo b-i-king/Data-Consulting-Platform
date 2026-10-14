@@ -31,7 +31,7 @@ Run these steps in order. Each maps to a function or block in `cleaning.py`.
 
 | # | Step | pandas | Why |
 |---|---|---|---|
-| 0 | Clean column names | `clean_column_names(df.columns)`: lowercase, non-letters → `_`, split camelCase, unique | `Order Date` → `order_date`, `CustomerID` → `customer_id`; easy to use in Excel, SQL and Python (`columns_renamed`) |
+| 0 | Clean column names | `clean_column_names(df.columns)`: lowercase, non-letters → `_`, split camelCase, unique; then the client's own names (`column_names`) | `Order Date` → `order_date`, `CustomerID` → `customer_id`; easy to use in Excel, SQL and Python (`columns_renamed`). Flags blank headers (`unnamed_column_4`) and repeated ones (`amount`, `amount_2`) as `name_problem` until the client renames or removes them |
 | 1 | Tidy text | `s.str.strip()`; `""` → `NaN` | `" Acme "` and `"Acme"` are the same; blank text is really missing |
 | 2 | Drop fully empty rows | `df[data_cols].isna().all(axis=1)` | Excel exports often end in blank rows |
 | 3 | Remove exact duplicates | `df.duplicated(subset=data_cols, keep="first")` | All values equal = a copy |
@@ -76,6 +76,9 @@ exports is still a duplicate.
 
 - Do not impute (mean/median/mode/forward-fill) unless the client chooses it —
   then say exactly what was filled and with which value.
+- Do not analyze columns with no name or two columns with the same name
+  without flagging it: ask the client to name them, remove them, or fix the
+  header row and upload again.
 - Never fill IDs or codes, whatever is asked. Remove rows with a blank ID only
   when the client chooses it, and always hand those rows back (the
   `rows_missing_id` sheet) — don't silently lose them.
@@ -122,3 +125,4 @@ Input: one table. Runs on the data as uploaded, before cleaning.
 |---|---|---|---|
 | `missing_strategy` | choice (keep, drop_any) | keep | Keep rows with gaps, or drop them |
 | `column_actions` | json | auto | Per column (cleaned names): keep, drop, mean, median, mode, auto, or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"} |
+| `column_names` | json | auto | Your own column names, by cleaned name, e.g. {"unnamed_column_4": "store_code", "amount_2": "refund_amount"} |

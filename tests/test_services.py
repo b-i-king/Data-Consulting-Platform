@@ -37,9 +37,12 @@ def test_read_cp1252_csv():
 
 
 def test_duplicate_headers_are_made_unique():
-    # pandas itself renames a repeated CSV header to "id.1".
+    # pandas renames a repeated CSV header to "id.1"; we make it a clear second "id".
     [ds] = read_file("dup.csv", b"id,id,name\n1,2,a\n")
-    assert list(ds.df.columns) == ["id", "id.1", "name"]
+    assert list(ds.df.columns) == ["id", "id_2", "name"]
+    # Blank headers get their position, so the client can find them.
+    [ds] = read_file("blank.csv", b"a,,amount,amount,\n1,2,3,4,5\n")
+    assert list(ds.df.columns) == ["a", "unnamed_column_2", "amount", "amount_2", "unnamed_column_5"]
 
 
 def test_unsupported_extension():
@@ -286,3 +289,37 @@ def test_rows_missing_an_id_can_be_removed_and_are_set_aside():
     assert any("rows_missing_id" in n for n in report.notes)
     d = report.to_dict()                                              # JSON report leaves the DataFrame out
     assert "rows_missing_id" not in d and d["rows_missing_id_removed"] == 2
+
+
+def test_blank_and_repeated_headers_are_flagged_until_fixed():
+    [ds] = read_file("orders.csv", b"Order ID,,Amount,Amount,\n1,x,3,4,\n2,y,5,6,\n")
+    cleaned, report = clean_dataframe(ds.df)
+    assert list(cleaned.columns) == ["order_id", "unnamed_column_2", "amount", "amount_2", "unnamed_column_5"]
+    assert report.unnamed_columns == ["unnamed_column_2", "unnamed_column_5"]
+    assert report.duplicate_columns == [["amount", "amount_2"]]
+    by = {c.column: c for c in report.column_reports}
+    assert by["unnamed_column_2"].name_problem == "unnamed" and by["unnamed_column_2"].original_name == ""
+    assert by["amount_2"].name_problem == "duplicate" and by["amount_2"].original_name == "Amount"
+    assert any("no name" in n for n in report.notes) and any("same name" in n for n in report.notes)
+
+    # The client names one blank column and tells the two amounts apart.
+    # Choices made under the old (automatic) names still apply.
+    cleaned, report = clean_dataframe(
+        ds.df,
+        column_names={"unnamed_column_2": "Store Code", "amount_2": "Refund Amount"},
+        column_actions={"unnamed_column_5": "drop"},
+    )
+    assert list(cleaned.columns) == ["order_id", "store_code", "amount", "refund_amount"]
+    assert report.unnamed_columns == []          # one named, the other removed: both fixed
+    assert report.duplicate_columns == []
+    by = {c.column: c for c in report.column_reports}
+    assert by["refund_amount"].key == "amount_2" and by["refund_amount"].name_problem is None
+    assert by["unnamed_column_5"].action == "dropped"
+
+
+def test_client_names_must_be_usable_and_unique():
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    with pytest.raises(ValueError, match="share a name"):
+        clean_dataframe(df, column_names={"b": "A"})
+    with pytest.raises(ValueError, match="can't be used"):
+        clean_dataframe(df, column_names={"b": "  $$ "})

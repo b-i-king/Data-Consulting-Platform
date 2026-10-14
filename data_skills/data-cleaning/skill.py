@@ -27,14 +27,17 @@ SKILL = SkillSpec(
         "missing_strategy": Param("choice", "keep", "Keep rows with gaps, or drop them", ("keep", "drop_any")),
         "column_actions": Param("json", None, 'Per column (cleaned names): keep, drop, mean, median, mode, auto, '
                                               'or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"}'),
+        "column_names": Param("json", None, 'Your own column names, by cleaned name, '
+                                            'e.g. {"unnamed_column_4": "store_code", "amount_2": "refund_amount"}'),
     },
 )
 
 
-def run(df: pd.DataFrame, missing_strategy: str = "keep", column_actions=None) -> SkillResult:
+def run(df: pd.DataFrame, missing_strategy: str = "keep", column_actions=None, column_names=None) -> SkillResult:
     try:
-        cleaned, report = clean_dataframe(df, missing_strategy=missing_strategy, column_actions=column_actions)
-    except ValueError as exc:   # e.g. an unknown fill method
+        cleaned, report = clean_dataframe(df, missing_strategy=missing_strategy, column_actions=column_actions,
+                                          column_names=column_names)
+    except ValueError as exc:   # e.g. an unknown fill method, or two columns given one name
         raise SkillInputError(str(exc)) from exc
     worst = sorted(report.column_reports, key=lambda c: c.missing_pct, reverse=True)[:3]
     findings = list(report.notes)

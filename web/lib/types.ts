@@ -147,20 +147,29 @@ export interface ColumnReport {
   rows_dropped: number;
   /** Looks like an ID or code: never filled, and shouldn't be blank. */
   is_id: boolean;
+  /** Stable name for choices and renames (the automatic cleaned name). */
+  key: string;
+  /** The header in the uploaded file ("" when it was blank). */
+  original_name: string;
+  /** Header problem still to fix: a blank header, or a name shared with another column. */
+  name_problem: "unnamed" | "duplicate" | null;
   missing_after: number;
 }
 
 export type FillMethod = "mean" | "median" | "mode";
 /** A choice for one column's missing values ("auto" = our suggestion). */
 export type ColumnAction = "keep" | "drop" | "auto" | "drop_rows" | FillMethod;
-/** group id -> column -> choice; sent to analyze, download and skills alike. */
+/** group id -> column key -> choice; sent to analyze, download and skills alike. */
 export type ColumnActions = Record<string, Record<string, ColumnAction>>;
+/** group id -> column key -> the client's own name for it (cleaned to snake_case by the server). */
+export type ColumnNames = Record<string, Record<string, string>>;
 
 /** Everything needed to re-create the cleaned data on the server. */
 export interface CleaningInput {
   files: File[];
   strategy: MissingStrategy;
   columnActions: ColumnActions;
+  columnNames: ColumnNames;
 }
 
 export interface CleaningReport {
@@ -195,6 +204,10 @@ export interface CleaningReport {
   columns_renamed: Record<string, string>;
   /** Rows removed because an ID was blank (listed on the Excel download's "rows_missing_id" sheet). */
   rows_missing_id_removed: number;
+  /** Columns whose header was blank in the file, not yet named or removed. */
+  unnamed_columns: string[];
+  /** Groups of columns that had the same name (e.g. ["amount", "amount_2"]), not yet told apart. */
+  duplicate_columns: string[][];
 }
 
 export interface SampleSizeCheck {

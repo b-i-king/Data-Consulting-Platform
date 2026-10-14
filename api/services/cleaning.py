@@ -23,6 +23,19 @@ Step 0. Clean column names
         later step (and the download) uses the new names. The report lists
         each rename (`columns_renamed`).
 
+        Header problems are flagged so the client can fix them before
+        analyzing (`name_problem` on each column, plus a note):
+          * "unnamed"   — the header cell was blank (file_reader.py names it
+                          unnamed_column_<position>). Name it, remove it, or
+                          fix the header row and upload again.
+          * "duplicate" — two columns had the same name (amount, amount_2).
+                          Rename them so analysis can tell them apart
+                          (e.g. amount_paid, amount_refunded).
+        The client can rename any column ("column_names": {key: new name});
+        their names are cleaned the same way and must stay unique. Each column
+        keeps a stable `key` (its automatic name), so choices made before a
+        rename still apply after it. A renamed column's problem counts as fixed.
+
 Step 1. Tidy text cells
         Trim leading/trailing spaces in text columns (" Acme " -> "Acme")
         and turn blank text ("", "   ") into a real missing value (NaN).
@@ -125,6 +138,11 @@ CONSULT_PCT = 90.0   # at or above, for ALL cells: recommend a consultation
 SKEW_LIMIT = 0.5     # |skewness| at or above: fill numbers with the median, not the mean
 MIN_ROWS_FOR_ANALYSIS = 30   # Step 7: fewer rows (before OR after cleaning) = no analysis
 
+# A header cell that was blank in the file (named by file_reader.py).
+UNNAMED = re.compile(r"^unnamed_column_\d+$")
+# A repeated header made unique: "amount_2" when "amount" is also a column.
+REPEAT = re.compile(r"^(.+)_(\d+)$")
+
 # Column names that look like identifiers or codes (never averaged or filled).
 ID_NAME = re.compile(r"(^|_)(id|key|code|number|num|no|zip|zipcode|postal|sku|uuid|guid)$|^id_", re.IGNORECASE)
 
@@ -147,6 +165,9 @@ class ColumnReport:
     missing_pct: float          # 0–100, rounded to 2 decimals
     unique_count: int
     example_values: list[str]
+    key: str = ""               # stable name for choices (the automatic Step 0 name)
+    original_name: str = ""     # the header in the file ("" when it was blank)
+    name_problem: str | None = None   # "unnamed", "duplicate", or None (fine / fixed)
     # Missing-value advice (Step 4). missing_count / missing_pct describe the
     # column BEFORE the user's missing-value choices, so the advice stays visible.
     missing_level: str = "none"          # "none", "low" (<20%), "review" (20-90%), "remove" (90%+)
@@ -189,6 +210,8 @@ class CleaningReport:
     analysis_ready: bool = True          # Step 7: at least 30 rows before AND after cleaning
     analysis_note: str = ""              # why not, in plain English (empty when ready)
     columns_renamed: dict[str, str] = field(default_factory=dict)   # Step 0: old name -> new name
+    unnamed_columns: list[str] = field(default_factory=list)       # Step 0: blank headers, still unfixed
+    duplicate_columns: list[list[str]] = field(default_factory=list)  # Step 0: same-name groups, still unfixed
     rows_missing_id_removed: int = 0     # Step 5a "drop_rows": rows set aside because an ID was missing
     notes: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
@@ -202,6 +225,8 @@ class CleaningReport:
         out["column_reports"] = [asdict(c) for c in self.column_reports]
         out["columns_renamed"] = dict(self.columns_renamed)
         out["columns_fully_empty"] = list(self.columns_fully_empty)
+        out["unnamed_columns"] = list(self.unnamed_columns)
+        out["duplicate_columns"] = [list(g) for g in self.duplicate_columns]
         return out
 
 
@@ -237,6 +262,53 @@ def clean_column_names(columns) -> list[str]:
         seen.setdefault(name, 1)
         out.append(name)
     return out
+
+
+def _header_problems(auto: list[str], fixed: set[str]) -> dict[str, str]:
+    """
+    Step 0 checks on the automatic names: which columns had a blank header
+    ("unnamed") or share a name with another column ("duplicate"). A column
+    the client renamed or removed (`fixed`) is fine. A duplicate group is fixed once at most one
+    of its columns still has its automatic name.
+    """
+    problems: dict[str, str] = {}
+    names = set(auto)
+    groups: dict[str, list[str]] = {}
+    for name in auto:
+        if UNNAMED.match(name):
+            if name not in fixed:
+                problems[name] = "unnamed"
+            continue
+        m = REPEAT.match(name)
+        if m and int(m.group(2)) >= 2 and m.group(1) in names:
+            groups.setdefault(m.group(1), [m.group(1)]).append(name)
+    for members in groups.values():
+        unfixed = [n for n in members if n not in fixed]
+        if len(unfixed) > 1:
+            problems.update({n: "duplicate" for n in unfixed})
+    return problems
+
+
+def _apply_client_names(auto: list[str], column_names: dict[str, str] | None) -> list[str]:
+    """
+    Step 0: the client's own names ({automatic name or current name: new name}),
+    cleaned like every other name. Raises ValueError (shown to the client) for
+    an empty name or a name used twice.
+    """
+    final = list(auto)
+    for key, new in (column_names or {}).items():
+        if key not in auto:
+            continue                       # a column that's no longer in the file
+        clean = snake_case(new)
+        if not clean:
+            raise ValueError(f"'{new}' can't be used as a column name — use letters or numbers.")
+        if clean[0].isdigit():
+            clean = f"col_{clean}"
+        final[auto.index(key)] = clean
+    repeats = sorted({n for n in final if final.count(n) > 1})
+    if repeats:
+        raise ValueError(f"Two columns can't share a name: {', '.join(repeats)}. Pick a different name.")
+    return final
 
 
 def _infer_type(series: pd.Series) -> str:
@@ -424,12 +496,15 @@ def clean_dataframe(
     dataset_name: str = "dataset",
     missing_strategy: MissingStrategy = "keep",
     column_actions: dict[str, str] | None = None,
+    column_names: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, CleaningReport]:
     """
-    Run the full cleaning pipeline (Steps 1–6 above).
+    Run the full cleaning pipeline (Steps 0–7 above).
 
-    `column_actions` maps column name -> "keep" | "drop" | "mean" | "median" |
-    "mode" | "auto" (Step 5a). Leave it out to change nothing.
+    `column_actions` maps column (its key or current name) -> "keep" | "drop" |
+    "mean" | "median" | "mode" | "auto" | "drop_rows" (Step 5a).
+    `column_names` maps column key -> the client's new name (Step 0).
+    Leave them out to change nothing.
 
     Returns (cleaned_dataframe, report). `report.runtime_seconds` is the
     wall-clock processing time, which is what runtime billing is based on.
@@ -439,14 +514,46 @@ def clean_dataframe(
     rows_before = int(len(df))
     out = df.copy()  # never touch the caller's data
 
-    # Step 0 — lowercase snake_case column names (our own metadata columns keep theirs).
-    new_names = [c if c in METADATA_COLUMNS else n
-                 for c, n in zip(out.columns, clean_column_names(out.columns))]
-    renamed = {str(old): new for old, new in zip(out.columns, new_names) if str(old) != new}
-    out.columns = new_names
+    # Step 0 — lowercase snake_case column names (our own metadata columns keep
+    # theirs), then the client's own names, then the header checks.
+    originals = [str(c) for c in out.columns]
+    auto = [c if c in METADATA_COLUMNS else n for c, n in zip(originals, clean_column_names(originals))]
+    final = _apply_client_names(auto, column_names)
+    key_of = dict(zip(final, auto))                 # final name -> stable key
+    final_of = dict(zip(auto, final))               # key -> final name
+    # Renaming a column or removing it both fix its header problem.
+    removing = {key_of.get(c, c) for c, a in (column_actions or {}).items() if a == "drop"}
+    problems = _header_problems(auto, {a for a, f in zip(auto, final) if a != f} | removing)
+    def as_in_file(o: str) -> str:
+        """The header as the client typed it: "" if blank, "Amount" for a second "Amount"."""
+        if UNNAMED.match(o):
+            return ""
+        m = REPEAT.match(o)
+        return m.group(1) if m and int(m.group(2)) >= 2 and m.group(1) in originals else o
+    shown_original = {f: as_in_file(o) for f, o in zip(final, originals)}
+    renamed = {o: f for o, f in zip(originals, final) if o != f and not UNNAMED.match(o)}
+    out.columns = final
     if renamed:
         notes.append(f"Column names cleaned (lowercase, underscores instead of spaces) for "
                      f"{len(renamed):,} column{'s' if len(renamed) != 1 else ''}.")
+    unnamed_cols = [final_of[a] for a, p in problems.items() if p == "unnamed"]
+    dup_groups: dict[str, list[str]] = {}
+    for a, p in problems.items():
+        if p == "duplicate":
+            m = REPEAT.match(a)
+            base = m.group(1) if m and m.group(1) in final_of else a
+            dup_groups.setdefault(base, []).append(final_of[a])
+    duplicate_cols = [sorted(g, key=final.index) for g in dup_groups.values()]
+    if unnamed_cols:
+        notes.append(f"{len(unnamed_cols)} column{' has' if len(unnamed_cols) == 1 else 's have'} no name in your "
+                     f"file ({', '.join(unnamed_cols)}). Name {'it' if len(unnamed_cols) == 1 else 'them'}, remove "
+                     f"{'it' if len(unnamed_cols) == 1 else 'them'}, or fix the header row and upload again.")
+    for g in duplicate_cols:
+        notes.append(f"These columns had the same name: {', '.join(g)}. Rename them so the analysis can tell them "
+                     "apart (for example amount_paid and amount_refunded).")
+    # Choices may name a column by its key or its current name.
+    if column_actions:
+        column_actions = {final_of.get(c, c): a for c, a in column_actions.items()}
 
     # Step 1 — tidy text.
     out, blanks_converted = _tidy_text(out)
@@ -497,6 +604,9 @@ def clean_dataframe(
             "unique_count": int(series.nunique(dropna=True)),
             "example_values": [str(v) for v in series.dropna().unique()[:3]],
             "is_id": bool(ID_NAME.search(str(col))),
+            "key": key_of.get(str(col), str(col)),
+            "original_name": shown_original.get(str(col), str(col)),
+            "name_problem": problems.get(key_of.get(str(col), str(col))),
             **_missing_advice(series, pct),
         }
     total_cells_pre = n_pre * columns_before
@@ -593,6 +703,8 @@ def clean_dataframe(
         analysis_ready=not analysis_note,
         analysis_note=analysis_note,
         columns_renamed=renamed,
+        unnamed_columns=unnamed_cols,
+        duplicate_columns=duplicate_cols,
         rows_missing_id_removed=rows_missing_id,
         rows_missing_id=removed_for_id,
         notes=notes,
