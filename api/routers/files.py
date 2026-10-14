@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from api.core.config import get_settings
 from api.core.security import get_acting_context
-from api.services import account_store
+from api.services import account_store, entitlements
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import (
     load_uploads,
@@ -129,6 +129,8 @@ async def download_cleaned(
     if confirmed_amount_usd is not None:
         # Safeguard: never charge more than the total the client confirmed.
         cost["amount_usd"] = min(cost["amount_usd"], round(confirmed_amount_usd, 2))
+    if await entitlements.downloads_included(ctx["account"]):
+        cost["amount_usd"] = 0.0   # their plan includes Data Cleaning: no per-minute charge
     await account_store.record_usage(
         account_id=str(ctx["account"]["id"]),
         consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,

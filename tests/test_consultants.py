@@ -123,17 +123,6 @@ def test_a_consultants_download_is_billed_to_the_client():
     assert event["account_id"] == ana and event["consultant_id"]
 
 
-def test_subscription_unlocks_everything_and_cancels_anytime():
-    res = _signup("pat@example.com", "Pat", subscription={"plan": "all_tools", "interval": "year"})
-    token = res.json()["access_token"]
-    plan = client.get("/api/accounts/services", headers=_auth(token)).json()
-    assert len(plan["active"]) > 1 and plan["subscription"] == {"plan": "all_tools", "interval": "year", "status": "active"}
-    sub = plan["subscriptions"][0]
-    assert sub["annual_usd"] < sub["monthly_usd"] * 12 and sub["annual_savings_pct"] > 0
-    after = client.post("/api/accounts/subscription/cancel", headers=_auth(token), json={}).json()
-    assert after["subscription"]["status"] == "canceled" and after["active"] == ["data_cleaning"]
-
-
 def test_other_industry_is_saved_and_empty_means_nothing():
     res = client.post("/api/accounts/signup", json={
         "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",

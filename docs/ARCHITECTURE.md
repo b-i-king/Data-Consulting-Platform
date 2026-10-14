@@ -161,7 +161,14 @@ Downloads a consultant makes are billed to the client (`usage_events.consultant_
 records who did it). **Client data is still never stored** — the consultant
 works on files the client shares, in the same in-memory way.
 
-### 6. Database optional in development
+### 6. Payments through Stripe, decided by the webhook
+
+Plans (monthly or annual) and consulting hours are paid on Stripe's own
+Checkout page; Stripe's signed webhook is the only thing that turns a plan on
+or off (`subscriptions` table). Without Stripe keys the site runs in test
+mode. Full design: [PAYMENTS.md](PAYMENTS.md); every table: [DATABASE.md](DATABASE.md).
+
+### 7. Database optional in development
 
 Without `DATABASE_URL`, accounts live in memory so you can run everything
 locally in two commands. In production, always set `DATABASE_URL`.

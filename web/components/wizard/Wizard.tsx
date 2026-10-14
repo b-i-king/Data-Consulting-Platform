@@ -49,7 +49,7 @@ export default function Wizard() {
     company_size: null,
     industry_other: null,
   });
-  // "Your needs": the All tools subscription (or none), and "do it for me".
+  // "Your needs": a plan (monthly / yearly, or none), and "do it for me".
   const [subscription, setSubscription] = useState<SubscriptionChoice | null>(null);
   const [wantsConsultant, setWantsConsultant] = useState(false);
   const [location, setLocation] = useState<string | null>(null);
@@ -236,6 +236,7 @@ export default function Wizard() {
           subscription={subscription}
           onSubscription={setSubscription}
           consultantName={options.consultant?.name ?? null}
+          consultingRate={options.consulting_rate_per_hour_usd ?? 80}
           wantsConsultant={wantsConsultant}
           onWantsConsultant={setWantsConsultant}
           onBack={() => go(3)}
@@ -249,6 +250,7 @@ export default function Wizard() {
           industry={industry}
           serviceIds={serviceIds}
           subscription={subscription}
+          plans={options.subscriptions ?? []}
           wantsConsultant={wantsConsultant}
           consultantName={options.consultant?.name ?? null}
           session={session}

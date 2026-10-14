@@ -12,6 +12,9 @@ pydantic-settings>=2.0.0
 email-validator>=2.0.0
 PyJWT>=2.8.0
 
+# Payments (subscriptions, consulting hours) — api/services/billing.py
+stripe>=10.0.0
+
 # Database (Supabase / PostgreSQL)
 asyncpg>=0.30.0
 

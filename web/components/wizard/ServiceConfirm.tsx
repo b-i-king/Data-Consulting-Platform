@@ -9,7 +9,8 @@
 //                      so the person sees the new total before confirming.
 //
 // Package prices are starting prices (the final price is set once the work is
-// scoped); consultation services start with a free call; Data Cleaning is
+// scoped); consulting starts with a free 30-minute call, then the hourly rate
+// (Data Strategy & Discovery is paid from the first hour); Data Cleaning is
 // billed by processing time when you download.
 
 "use client";

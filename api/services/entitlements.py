@@ -16,10 +16,16 @@ only the owner can add more.
 
 EVERY SERVICE AT ONCE
 ---------------------
-Three kinds of accounts get every available service (not "early access" ones):
+Two kinds of accounts get every available service (not "early access" ones):
   * consultants (they work on any service for their clients, and test the app)
   * clients assigned to a consultant ("I'd like a consultant to do this for me")
-  * clients on an active "All tools" subscription (api/services/pricing.py)
+
+SUBSCRIPTIONS
+-------------
+A live subscription (table `subscriptions`, kept in sync by Stripe — see
+api/services/billing.py) unlocks its plan's services ("All tools" = all of
+them). A plan that includes Data Cleaning also makes downloads free
+(`downloads_included`).
 
 PLACEHOLDER UNTIL PAYMENTS
 --------------------------
@@ -31,7 +37,7 @@ are added, add_services() should be called from the payment confirmation
 
 from __future__ import annotations
 
-from api.services import account_store
+from api.services import account_store, billing
 from api.services.pricing import SERVICES, SERVICES_BY_ID
 
 ALWAYS_INCLUDED = "data_cleaning"
@@ -52,24 +58,30 @@ async def plan_holder_id(account: dict) -> str:
 
 
 async def gets_everything(account: dict) -> bool:
-    """True for consultants, consultant-managed clients, and "All tools" subscribers."""
+    """True for consultants and consultant-managed clients."""
     if await account_store.get_consultant_by_account(str(account["id"])):
         return True
     holder_id = await plan_holder_id(account)
     holder = account if holder_id == str(account["id"]) else await account_store.get_account(holder_id)
     if not holder:
         return False
-    return bool(holder.get("consultant_id")) or (
-        holder.get("subscription_plan") == "all_tools" and holder.get("subscription_status") == "active")
+    return bool(holder.get("consultant_id"))
 
 
 async def active_services(account: dict) -> list[str]:
     """Service ids this account can use, in catalog order (Data Cleaning always included)."""
     if await gets_everything(account):
         return [s.id for s in SERVICES if s.available]
-    stored = set(await account_store.list_services(await plan_holder_id(account)))
+    holder = await plan_holder_id(account)
+    stored = set(await account_store.list_services(holder))
+    stored |= set((await billing.live_plan_services(holder))[0])     # from subscriptions
     stored.add(ALWAYS_INCLUDED)
     return [s.id for s in SERVICES if s.id in stored]
+
+
+async def downloads_included(account: dict) -> bool:
+    """True when a live plan includes Data Cleaning: downloads cost nothing extra."""
+    return ALWAYS_INCLUDED in (await billing.live_plan_services(await plan_holder_id(account)))[0]
 
 
 async def add_services(account: dict, service_ids: list[str], source: str = "added") -> list[str]:

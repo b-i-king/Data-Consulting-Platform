@@ -11,6 +11,11 @@
 --   * consultants   the people who do the work for clients (a "dim" table);
 --                   each signs in with their own account
 --   * usage_events  one row per download, for runtime-based billing
+--   * subscription_plans  the plans you sell (= Stripe products), each with a
+--                   monthly and an annual price
+--   * subscriptions one row per client subscription, kept in sync by Stripe
+--   * consulting_purchases  prepaid consulting hours bought through Stripe
+--   Full design, ER diagram and planned tables: docs/DATABASE.md
 --   * intake_responses  optional, anonymous answers to the guest questionnaire
 --                       (helps you see which data sources people use)
 --
@@ -99,13 +104,8 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_accounts_consultant ON accounts (consultant_id);
 
--- Subscription choice ("All tools" plan, monthly or yearly; cancel anytime).
--- PLACEHOLDER UNTIL PAYMENTS: recorded at signup, not charged.
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscription_plan TEXT;          -- e.g. 'all_tools'
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscription_interval TEXT
-    CHECK (subscription_interval IN ('month', 'year'));
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscription_status TEXT
-    CHECK (subscription_status IN ('active', 'canceled'));
+-- Stripe customer id (cus_...), set the first time the account pays.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT UNIQUE;
 
 -- ── Teams ───────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS teams (
@@ -160,6 +160,66 @@ CREATE TABLE IF NOT EXISTS account_services (
     PRIMARY KEY (account_id, service_id)
 );
 
+-- ── Subscription plans (= Stripe products) ───────────────────────────────────
+-- One row per plan you sell. Each is a Stripe PRODUCT with two PRICES: monthly
+-- and annual. The rows are written by `python scripts/sync_stripe.py`, which
+-- reads the plans from api/services/pricing.py (SUBSCRIPTIONS), creates or
+-- updates them in Stripe, and stores the Stripe ids here.
+CREATE TABLE IF NOT EXISTS subscription_plans (
+    id                       TEXT PRIMARY KEY,          -- 'all_tools', 'data_visualization', ...
+    name                     TEXT NOT NULL,             -- 'All tools'
+    description              TEXT,
+    service_ids              TEXT[] NOT NULL DEFAULT '{}',   -- services it unlocks ('{}' = every service)
+    monthly_price_usd        NUMERIC(10, 2) NOT NULL,
+    annual_price_usd         NUMERIC(10, 2) NOT NULL,
+    stripe_product_id        TEXT UNIQUE,               -- prod_...
+    stripe_monthly_price_id  TEXT UNIQUE,               -- price_... (lookup key dcp_<id>_month)
+    stripe_annual_price_id   TEXT UNIQUE,               -- price_... (lookup key dcp_<id>_year)
+    active                   BOOLEAN NOT NULL DEFAULT true,
+    sort_order               INTEGER NOT NULL DEFAULT 0,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── Subscriptions (kept in sync by Stripe) ──────────────────────────────────
+-- One row per subscription a client starts. Written by the Stripe webhook
+-- (api/services/billing.py) — never edited by hand. Held by the account that
+-- holds the plan (an individual, or a business's team owner).
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id               UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    plan_id                  TEXT NOT NULL REFERENCES subscription_plans (id),
+    billing_interval         TEXT NOT NULL CHECK (billing_interval IN ('month', 'year')),
+    -- Stripe's statuses. 'active' and 'trialing' unlock the plan; 'past_due'
+    -- keeps it on while Stripe retries the card; the rest switch it off.
+    status                   TEXT NOT NULL CHECK (status IN ('active', 'trialing', 'past_due', 'unpaid',
+                                                             'canceled', 'incomplete', 'incomplete_expired',
+                                                             'paused')),
+    cancel_at_period_end     BOOLEAN NOT NULL DEFAULT false,   -- "canceled, but paid through ..."
+    current_period_end       TIMESTAMPTZ,
+    stripe_subscription_id   TEXT UNIQUE,               -- sub_... (NULL in placeholder mode)
+    stripe_customer_id       TEXT,                      -- cus_...
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions (account_id, status);
+
+-- ── Consulting hours (prepaid through Stripe) ───────────────────────────────
+-- The first 30-minute consultation is free (except Data Strategy & Discovery);
+-- after that, clients prepay hours at CONSULTING_RATE_PER_HOUR_USD. One row
+-- per paid Stripe Checkout, written by the webhook.
+CREATE TABLE IF NOT EXISTS consulting_purchases (
+    id                       BIGSERIAL PRIMARY KEY,
+    account_id               UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+    service_id               TEXT,                      -- what it's for, e.g. 'data_strategy_discovery'
+    hours                    NUMERIC(6, 2) NOT NULL CHECK (hours > 0),
+    rate_per_hour_usd        NUMERIC(10, 2) NOT NULL,
+    amount_usd               NUMERIC(10, 2) NOT NULL,
+    stripe_checkout_session_id TEXT UNIQUE,             -- cs_... (NULL in placeholder mode)
+    status                   TEXT NOT NULL DEFAULT 'paid' CHECK (status IN ('paid', 'refunded')),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_consulting_purchases_account ON consulting_purchases (account_id, created_at DESC);
+
 -- ── Intake responses (optional analytics, not used by the API yet) ─────────
 -- Anonymous answers to the guest questionnaire. Useful for deciding which
 -- connector (Snowflake? QuickBooks?) to build next.
@@ -184,6 +244,9 @@ CREATE TABLE IF NOT EXISTS intake_responses (
 ALTER TABLE accounts         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE consultants      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account_services ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscriptions    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE consulting_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_events     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE intake_responses ENABLE ROW LEVEL SECURITY;

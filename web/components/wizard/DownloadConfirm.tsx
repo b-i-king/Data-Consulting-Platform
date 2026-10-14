@@ -8,6 +8,7 @@
 //   * the total charge
 // The confirmed total is sent with the download, and the server never charges
 // more than it — even if this run takes a little longer than the estimate.
+// With a plan that includes Data Cleaning (`included`), the total is $0.00.
 
 "use client";
 
@@ -28,15 +29,18 @@ export default function DownloadConfirm(props: {
   tableLabel: string;
   format: DownloadFormat;
   estimate: DownloadEstimate;
+  /** The account's plan includes Data Cleaning: no per-minute charge. */
+  included?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const { estimate: est, format } = props;
   const wait = est.formats[format];
+  const total = props.included ? 0 : est.amount_usd;
   return (
     <ConfirmDialog
       title="Confirm your download"
-      confirmLabel={`Download ${FORMAT_NAME[format]} · ${fmtUsd(est.amount_usd)}`}
+      confirmLabel={`Download ${FORMAT_NAME[format]} · ${fmtUsd(total)}`}
       onConfirm={props.onConfirm}
       onCancel={props.onCancel}
     >
@@ -47,10 +51,14 @@ export default function DownloadConfirm(props: {
       <div className="space-y-1 rounded-xl bg-surface-2 p-3">
         <TotalRow label="Estimated time" value={wait.label} />
         <TotalRow
-          label={`Processing (${est.billable_minutes} billable minute${est.billable_minutes === 1 ? "" : "s"})`}
-          value={fmtUsd(est.amount_usd)}
+          label={
+            props.included
+              ? "Processing — included in your plan"
+              : `Processing (${est.billable_minutes} billable minute${est.billable_minutes === 1 ? "" : "s"})`
+          }
+          value={fmtUsd(total)}
         />
-        <TotalRow label="Total you'll pay" value={fmtUsd(est.amount_usd)} strong />
+        <TotalRow label="Total you'll pay" value={fmtUsd(total)} strong />
       </div>
       {!wait.under_five_minutes && (
         <p className="text-warn">

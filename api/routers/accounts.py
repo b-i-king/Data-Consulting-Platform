@@ -6,14 +6,14 @@ Account endpoints.
     GET  /api/accounts/me             who am I? (requires token)
     GET  /api/accounts/services       services on my plan + the full catalog (requires token)
     POST /api/accounts/services       add a service to my plan (requires token; see entitlements.py)
-    POST /api/accounts/subscription/cancel   cancel the "All tools" subscription (anytime)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
 
 Guests only need an account at the DOWNLOAD step. Signup asks for:
   * individual: first name, last name, email
   * business:   first name, last name, email, company name (+ optional team members)
-  * optional:   "I'd like a consultant to do this for me", a subscription
+  * optional:   "I'd like a consultant to do this for me"
+(Subscriptions are bought after signup: api/routers/billing.py.)
 
 CONSULTANTS sign up and sign in here too: their email must be in
 CONSULTANT_EMAILS and they must send CONSULTANT_ACCESS_CODE. Their token says
@@ -40,12 +40,11 @@ from api.models.accounts import (
     AccountOut,
     AddServiceIn,
     AuthOut,
-    CancelSubscriptionIn,
     SigninIn,
     SignupIn,
     TeamMemberIn,
 )
-from api.services import account_store, consultants, entitlements, locations
+from api.services import account_store, billing, consultants, entitlements, locations, pricing
 from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
@@ -80,9 +79,6 @@ def _account_out(acc: dict, role: str = "client", consultant_name: str | None = 
         role=role,
         wants_consultant=bool(acc.get("wants_consultant")),
         consultant_name=consultant_name,
-        subscription_plan=acc.get("subscription_plan"),
-        subscription_interval=acc.get("subscription_interval"),
-        subscription_status=acc.get("subscription_status"),
     )
 
 
@@ -152,8 +148,6 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
             industry_other=body.industry_other,
             wants_consultant=wants,
             consultant_id=consultant_id,
-            subscription_plan=body.subscription.plan if body.subscription else None,
-            subscription_interval=body.subscription.interval if body.subscription else None,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -242,7 +236,7 @@ async def _services_out(ctx: dict) -> dict:
     acc = ctx["account"]
     active = await entitlements.active_services(acc)
     holder_id = await entitlements.plan_holder_id(acc)
-    holder = acc if holder_id == str(acc["id"]) else await account_store.get_account(holder_id)
+    subs = await account_store.list_subscriptions(holder_id)
     return {
         "active": active,
         # True when this person may add services (individuals and team owners).
@@ -251,12 +245,27 @@ async def _services_out(ctx: dict) -> dict:
         # Whose workspace this is (a consultant may be working on a client's).
         "account": (await _full_account_out(acc)).model_dump(),
         "acting": ctx["acting"],
-        "subscription": {
-            "plan": holder.get("subscription_plan") if holder else None,
-            "interval": holder.get("subscription_interval") if holder else None,
-            "status": holder.get("subscription_status") if holder else None,
+        # Live subscriptions (kept in sync by Stripe) and the plans on sale.
+        "subscriptions": [_subscription_out(s) for s in subs],
+        "plans": subscription_catalog(),
+        "billing": {"stripe": billing.stripe_enabled()},   # False = test mode, nothing is charged
+        "downloads_included": await entitlements.downloads_included(acc),
+        "consulting": {
+            "rate_per_hour_usd": pricing.consulting_rate(),
+            "free_minutes": pricing.FREE_CONSULTATION_MINUTES,
+            "hours_bought": await account_store.consulting_hours(holder_id),
         },
-        "subscriptions": subscription_catalog(),
+    }
+
+
+def _subscription_out(s: dict) -> dict:
+    plan = pricing.SUBSCRIPTIONS_BY_ID.get(s["plan_id"])
+    end = s.get("current_period_end")
+    return {
+        "id": str(s["id"]), "plan_id": s["plan_id"], "name": plan.name if plan else s["plan_id"],
+        "interval": s["billing_interval"], "status": s["status"],
+        "cancel_at_period_end": bool(s.get("cancel_at_period_end")),
+        "current_period_end": end.date().isoformat() if end else None,
     }
 
 
@@ -275,17 +284,3 @@ async def add_service(body: AddServiceIn, ctx: Annotated[dict, Depends(get_actin
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return await _services_out(ctx)
-
-
-@router.post("/subscription/cancel")
-async def cancel_subscription(body: CancelSubscriptionIn, ctx: Annotated[dict, Depends(get_acting_context)]):
-    """Cancel anytime. Services already on the plan stay; the "everything" unlock ends."""
-    acc = ctx["account"]
-    holder_id = await entitlements.plan_holder_id(acc)
-    if holder_id != str(acc["id"]):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can change the subscription.")
-    if not acc.get("subscription_plan") or acc.get("subscription_status") != "active":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="There's no active subscription to cancel.")
-    await account_store.set_subscription(holder_id, plan=acc["subscription_plan"],
-                                         interval=acc.get("subscription_interval"), status="canceled")
-    return await _services_out({**ctx, "account": await account_store.get_account(holder_id)})

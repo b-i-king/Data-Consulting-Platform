@@ -89,6 +89,19 @@ class Settings(BaseSettings):
     # Shown whenever a guest picks a service that needs a human consultant.
     booking_url: str = Field(default="https://calendly.com/your-link", alias="BOOKING_URL")
 
+    # Hourly consulting rate after the free 30-minute first consultation (and
+    # from the first hour for Data Strategy & Discovery). Placeholder: $80.
+    consulting_rate_per_hour_usd: float = Field(default=80.0, alias="CONSULTING_RATE_PER_HOUR_USD")
+
+    # ── Payments (Stripe) ─────────────────────────────────────────────────────
+    # Empty = PLACEHOLDER mode: choosing a plan turns it on right away, with no
+    # charge (fine for testing). Set both to take real payments (see
+    # docs/PAYMENTS.md). Use test keys (sk_test_...) until you go live.
+    stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
+    stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
+    # The website's address, for "back to the site" links after paying at Stripe.
+    site_url: str = Field(default="http://localhost:3000", alias="SITE_URL")
+
     # ── Consultants ───────────────────────────────────────────────────────────
     # Email addresses that sign in as CONSULTANTS (comma-separated). The FIRST
     # one is the default consultant: clients who tick "I'd like a consultant to

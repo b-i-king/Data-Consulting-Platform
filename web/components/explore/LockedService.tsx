@@ -15,10 +15,11 @@ import { fmtUsd } from "@/lib/format";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { Service } from "@/lib/types";
 
-/** "from $500", "Free call", "Early access", "Included". */
+/** "from $500", "Free 30-min call", "$80/hour", "Early access", "Included". */
 export function priceLabel(s: Service): string {
   if (s.pricing_model === "package") return `from ${fmtUsd(s.starting_price_usd)}`;
-  if (s.pricing_model === "consultation") return "Free call";
+  if (s.pricing_model === "consultation") return `Free ${s.consultation.free_minutes}-min call`;
+  if (s.pricing_model === "hourly") return `${fmtUsd(s.consultation.rate_per_hour_usd)}/hour`;
   if (s.pricing_model === "early_access") return "Early access";
   return "Included";
 }

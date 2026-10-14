@@ -29,8 +29,10 @@
 // X-Acting-As, and the server checks the client is assigned to this consultant.
 // "Book a call" prompts are hidden for consultants.
 //
-// PLAN BOX (bottom of the left pane): the "All tools" subscription, if any,
-// with "Cancel anytime".
+// PLAN & BILLING (💳, bottom of the left pane): plans (monthly / yearly via
+// Stripe Checkout), "Manage billing · cancel anytime", the free 30-minute
+// consultation and prepaid consulting hours — components/billing/BillingPanel.tsx.
+// Coming back from Stripe (?checkout=success) shows a thank-you note.
 //
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
 // Until payments exist, "Add to my plan" unlocks a service right away, after
@@ -45,7 +47,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   addMyService,
   analyzeFiles,
-  cancelSubscription,
   downloadCleaned,
   getIntakeOptions,
   getMyClients,
@@ -58,6 +59,7 @@ import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
 import type { ConsultantClient, IntakeOptions } from "@/lib/types";
 import ClientPicker, { AddClientForm } from "./ClientPicker";
+import BillingPanel from "@/components/billing/BillingPanel";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
@@ -69,6 +71,7 @@ import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
+const BILLING = "__billing"; // the "Plan & billing" page (not a service)
 const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard)
 // The skill each built-in view already shows, so it isn't listed twice in the menu.
 const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
@@ -81,10 +84,11 @@ const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
 
 /** Plain-English "how do I get this?" for a locked service. */
 function howToGet(s: Service): string {
-  if (s.pricing_model === "consultation") return "Starts with a free call with a consultant, then a quote for the work.";
+  if (s.pricing_model === "consultation") return `${s.consultation.text}. A plan (Plan & billing) unlocks the do-it-yourself tools.`;
+  if (s.pricing_model === "hourly") return `${s.consultation.text} — buy hours in Plan & billing, then book a time.`;
   if (s.pricing_model === "early_access") return "Free while in early access — add it to try it.";
   if (s.pricing_model === "package")
-    return `A one-time package from ${fmtUsd(s.starting_price_usd)}. Add it to your plan; online checkout is coming soon, so for now we'll confirm the price with you before any charge.`;
+    return `Unlock the tools with a plan (Plan & billing), or have a consultant do it: a package from ${fmtUsd(s.starting_price_usd)}. ${s.consultation.text}.`;
   return "Included with every account.";
 }
 
@@ -129,7 +133,7 @@ export default function Workspace() {
   const [clients, setClients] = useState<ConsultantClient[]>([]);
   const [actingId, setActingId] = useState<string | null>(null);
   const [addingClient, setAddingClient] = useState(false);
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [returnNote, setReturnNote] = useState<string | null>(null); // after paying at Stripe
 
   // Skill menu: every skill, the choice per service, and results kept for this visit.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -160,6 +164,15 @@ export default function Workspace() {
     getSkills()
       .then(setSkills)
       .catch(() => {});
+    // Back from Stripe: say what happened (the webhook may take a few seconds).
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("checkout") === "success" || q.get("consulting") === "success") {
+      setReturnNote("Thank you! Your payment went through — it can take a few seconds to show here.");
+      setSection(BILLING);
+    } else if (q.get("checkout") === "canceled" || q.get("consulting") === "canceled") {
+      setReturnNote("Payment canceled — nothing was charged.");
+      setSection(BILLING);
+    }
     getIntakeOptions()
       .then((o) => {
         setBookingUrl(o.booking_url);
@@ -190,15 +203,10 @@ export default function Workspace() {
     }
   }
 
-  async function cancelPlan() {
-    if (!session) return;
-    setConfirmCancel(false);
-    try {
-      setPlan(await cancelSubscription(session.token));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "We couldn't cancel the plan.");
-    }
+  async function reloadPlan() {
+    if (session) setPlan(await getMyServices(session.token));
   }
+
 
   // Left-pane order: Dashboard (if on the plan) or Data Cleaning first, then the
   // rest of the plan, then everything not on the plan (grayed out).
@@ -333,8 +341,6 @@ export default function Workspace() {
   const isConsultant = session.account.role === "consultant";
   // Whose workspace is on screen: the client a consultant is working on, or me.
   const who = plan?.account ?? session.account;
-  const sub = plan?.subscription;
-  const subPlan = plan?.subscriptions?.find((s) => s.id === sub?.plan);
 
   const item = (s: Service, isLocked: boolean) => (
     <li key={s.id} className="shrink-0 lg:shrink">
@@ -405,38 +411,16 @@ export default function Workspace() {
             {locked.map((s) => item(s, true))}
           </ul>
         </nav>
-        {subPlan && sub?.status && (
-          <div className="mx-1 mt-4 hidden rounded-xl border border-line bg-surface p-3 text-xs lg:block">
-            <p className="font-semibold">
-              {subPlan.name} plan · {sub.interval === "year" ? "yearly" : "monthly"}
-            </p>
-            {sub.status === "active" ? (
-              <>
-                <p className="text-ink-muted">Every available service is on. No contract.</p>
-                {plan?.can_add && (
-                  <button type="button" onClick={() => setConfirmCancel(true)} className="mt-1 text-ink-muted underline hover:text-bad">
-                    Cancel anytime
-                  </button>
-                )}
-              </>
-            ) : (
-              <p className="text-ink-muted">Canceled — services you added stay on your plan.</p>
-            )}
-          </div>
-        )}
-        {confirmCancel && subPlan && (
-          <ConfirmDialog
-            title={`Cancel the ${subPlan.name} plan?`}
-            confirmLabel="Cancel the plan"
-            onConfirm={cancelPlan}
-            onCancel={() => setConfirmCancel(false)}
-          >
-            <p>
-              No fees and no questions. Services you added one by one stay on your plan; the rest are grayed out again.
-              Your downloaded files are yours to keep.
-            </p>
-          </ConfirmDialog>
-        )}
+        <button
+          type="button"
+          onClick={() => setSection(BILLING)}
+          aria-current={current === BILLING ? "page" : undefined}
+          className={`mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
+            current === BILLING ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+          }`}
+        >
+          <span aria-hidden>💳</span> Plan &amp; billing
+        </button>
         <button type="button" onClick={signOut} className="mt-4 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
           Sign out
         </button>
@@ -446,6 +430,11 @@ export default function Workspace() {
       <section className="min-w-0 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">
+            {current === BILLING && (
+              <>
+                <span aria-hidden>💳</span> Plan &amp; billing
+              </>
+            )}
             {currentService && (
               <>
                 <span aria-hidden>{categoryEmoji(currentService.id)}</span> {navName(currentService)}
@@ -493,6 +482,17 @@ export default function Workspace() {
         )}
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
 
+        {current === BILLING && plan && (
+          <>
+            {returnNote && (
+              <p role="status" className="rounded-2xl border border-good/40 bg-good/10 p-3 text-sm">
+                {returnNote}
+              </p>
+            )}
+            <BillingPanel token={session.token} plan={plan} bookingUrl={bookingUrl} onChanged={reloadPlan} />
+          </>
+        )}
+
         {currentService && !currentService.active ? (
           // A grayed-out service: what it adds, and how to get it.
           <Card>
@@ -503,11 +503,14 @@ export default function Workspace() {
               ) : (
                 <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this service.</p>
               )}
-              {currentService.pricing_model === "consultation" && !isConsultant && (
+              {!isConsultant && currentService.consultation.free_minutes > 0 && (
                 <a href={bookingUrl} target="_blank" rel="noreferrer" className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
-                  Book a free call
+                  Book a free {currentService.consultation.free_minutes}-minute call
                 </a>
               )}
+              <Button variant="secondary" onClick={() => setSection(BILLING)}>
+                See plans
+              </Button>
             </div>
           </Card>
         ) : currentService && !analysis ? (
@@ -595,6 +598,7 @@ export default function Workspace() {
                     tableLabel={group.label}
                     format={askDownload}
                     estimate={group.download_estimate}
+                    included={plan?.downloads_included}
                     onConfirm={() => download(askDownload)}
                     onCancel={() => setAskDownload(null)}
                   />

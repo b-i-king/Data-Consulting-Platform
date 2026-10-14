@@ -86,6 +86,10 @@ the create page):
 | `DATABASE_URL` | Supabase pooler connection string — **leave it out for the free test** (accounts are kept in memory) |
 | `BOOKING_URL` | optional: your Calendly / Cal.com link |
 | `PRICE_PER_RUNTIME_MINUTE_USD` | optional: your rate (default `0.50`) |
+| `CONSULTING_RATE_PER_HOUR_USD` | optional: consulting after the free 30 minutes (default `80`) |
+| `STRIPE_SECRET_KEY` | optional: `sk_test_...` / `sk_live_...` — empty = test mode, nothing charged ([PAYMENTS.md](PAYMENTS.md)) |
+| `STRIPE_WEBHOOK_SECRET` | with Stripe: the webhook's signing secret `whsec_...` |
+| `SITE_URL` | with Stripe: your Vercel URL (where Stripe sends people back after paying) |
 | `CONSULTANT_EMAILS` | your email (and any other consultants', comma-separated). The **first** is the default consultant that "do it for me" clients go to |
 | `CONSULTANT_ACCESS_CODE` | a long secret you type when signing in as a consultant (generate it like `JWT_SECRET_KEY`). Empty = consultant sign-in off |
 
@@ -130,8 +134,9 @@ after each restart (accounts live in memory).
 
 - [ ] Replace email-only sign-in with verified sign-in (see ROADMAP → Security) —
       including consultants, who can open every assigned client.
-- [ ] Run the latest `db/schema.sql` in Supabase (adds `consultants` and the new account columns).
-- [ ] Set real prices in `api/services/pricing.py` and env vars.
+- [ ] Run the latest `db/schema.sql` in Supabase (consultants, plans, subscriptions, consulting hours).
+- [ ] Payments: set real prices, run `scripts/sync_stripe.py`, add the Stripe webhook and keys ([PAYMENTS.md](PAYMENTS.md)).
+- [ ] Set real prices in `api/services/pricing.py` (plans, packages) and env vars.
 - [ ] Set `BOOKING_URL`.
 - [ ] Add Terms of Service and Privacy Policy pages (the template repo has examples).
 - [ ] Move Vercel to a commercial plan once you charge clients.
