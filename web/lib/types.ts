@@ -60,6 +60,8 @@ export interface Industry {
   naics_subsector: string | null;
   /** LinkedIn company size code "A"–"I" (e.g. "C" = 11–50 employees). */
   company_size: string | null;
+  /** "Other": what they typed when nothing in the list fit (saved instead of a NAICS code). */
+  industry_other?: string | null;
 }
 
 /** One employee-count band (LinkedIn company size codes). */
@@ -88,6 +90,29 @@ export interface IntakeOptions {
   limits: { max_upload_mb: number; max_files_per_upload: number };
   pricing: { price_per_runtime_minute_usd: number; billing_increment_seconds: number };
   booking_url: string;
+  /** The "All tools" plan, monthly or yearly. */
+  subscriptions: Subscription[];
+  /** The default consultant ("I'd like Brandon to do this for me"); null when none is set up. */
+  consultant: { name: string } | null;
+}
+
+/** A recurring plan (api/services/pricing.py SUBSCRIPTIONS). Cancel anytime. */
+export interface Subscription {
+  id: "all_tools";
+  name: string;
+  description: string;
+  monthly_usd: number;
+  annual_usd: number;
+  annual_per_month_usd: number;
+  annual_savings_usd: number;
+  annual_savings_pct: number;
+  includes: string[];
+}
+
+export type BillingInterval = "month" | "year";
+export interface SubscriptionChoice {
+  plan: "all_tools";
+  interval: BillingInterval;
 }
 
 // ── /api/files/analyze ────────────────────────────────────────────────────────
@@ -483,6 +508,29 @@ export interface Account {
   location_id: number | null;
   /** "Atlanta, Georgia, United States" */
   location: string | null;
+  industry_other: string | null;
+  /** "consultant" accounts see the "Working on" client picker and every service. */
+  role: "client" | "consultant";
+  wants_consultant: boolean;
+  /** The assigned consultant's first name, e.g. "Brandon". */
+  consultant_name: string | null;
+  subscription_plan: string | null;
+  subscription_interval: BillingInterval | null;
+  subscription_status: "active" | "canceled" | null;
+}
+
+/** GET /api/consultant/clients — one row in the consultant's "Working on" picker. */
+export interface ConsultantClient {
+  id: string;
+  /** Business name, or the person's name for individuals. */
+  label: string;
+  person: string;
+  email: string;
+  account_type: AccountType;
+  company_name: string | null;
+  location: string | null;
+  naics_sector: string | null;
+  industry_other: string | null;
 }
 
 /** GET /api/locations — one city in the location picker. */
@@ -523,6 +571,12 @@ export interface SignupInput {
   location_id?: number | null;
   /** Services chosen in the questionnaire; put on the new account's plan. */
   service_ids?: string[];
+  industry_other?: string | null;
+  /** "I'd like a consultant to do this for me." */
+  wants_consultant?: boolean;
+  subscription?: SubscriptionChoice | null;
+  /** Consultants only (CONSULTANT_ACCESS_CODE). */
+  access_code?: string;
 }
 
 /** GET /api/accounts/services — the plan behind the workspace's left pane. */
@@ -532,4 +586,10 @@ export interface MyServices {
   /** Individuals and team owners can add services; team members can't. */
   can_add: boolean;
   services: (Service & { active: boolean })[];
+  /** Whose workspace this is — the client when a consultant is working on one. */
+  account: Account;
+  /** True when a consultant is working on a client's account. */
+  acting: boolean;
+  subscription: { plan: string | null; interval: BillingInterval | null; status: "active" | "canceled" | null };
+  subscriptions: Subscription[];
 }

@@ -23,6 +23,26 @@ Each service is also a **skill category**: the skills behind it
 Clients can pick several. If any selected service needs a consultant, the quote
 includes your `BOOKING_URL`.
 
+## Subscription: the "All tools" plan (monthly or yearly)
+
+Code: `SUBSCRIPTIONS` in `api/services/pricing.py` (`subscription_catalog()` is
+sent to the site in `/api/intake/options` and `/api/accounts/services`).
+
+| Plan | Monthly | Yearly | What it includes |
+|---|---|---|---|
+| All tools | $49 / month | $490 / year ($40.83 / month — save $98, 17%) | Every available service and data skill unlocked |
+
+**Placeholder prices.** Yearly = 10 × monthly ("2 months free"); change both
+numbers together. **Cancel anytime:** no contract — the workspace's plan box has
+a "Cancel anytime" link (`POST /api/accounts/subscription/cancel`). Services
+added one by one stay; the "everything" unlock ends. The choice is stored on
+the account (`subscription_plan`, `subscription_interval`, `subscription_status`)
+but **not charged yet** — Stripe subscriptions would replace this (ROADMAP → Payments).
+
+**Done for you** (a consultant does the work, every tool included) is priced
+after a free discovery call, like Data Strategy & Discovery. Downloads a
+consultant makes for a client are billed to that client.
+
 ## Runtime billing for cleaning
 
 ```
@@ -85,6 +105,8 @@ The signed-in workspace (`/app`) opens the services on the account's **plan**
 (table `account_services`, code `api/services/entitlements.py`):
 
 - **Data Cleaning** is always included.
+- **Every available service** for consultants, consultant-managed ("done for
+  you") clients, and active "All tools" subscribers (`entitlements.gets_everything`).
 - Services chosen in the guest questionnaire are put on the plan at signup.
 - Other services appear grayed out in the left pane, with an ⓘ explaining what
   they add, the price, and how to get them; **Add to my plan** adds one after

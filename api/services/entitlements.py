@@ -14,6 +14,13 @@ An individual holds their own plan. In a business, the team OWNER holds it
 and every team member shares it — so a colleague sees the same services, and
 only the owner can add more.
 
+EVERY SERVICE AT ONCE
+---------------------
+Three kinds of accounts get every available service (not "early access" ones):
+  * consultants (they work on any service for their clients, and test the app)
+  * clients assigned to a consultant ("I'd like a consultant to do this for me")
+  * clients on an active "All tools" subscription (api/services/pricing.py)
+
 PLACEHOLDER UNTIL PAYMENTS
 --------------------------
 There's no checkout yet, so services chosen in the guest questionnaire (sent
@@ -44,8 +51,22 @@ async def plan_holder_id(account: dict) -> str:
     return str(account["id"])
 
 
+async def gets_everything(account: dict) -> bool:
+    """True for consultants, consultant-managed clients, and "All tools" subscribers."""
+    if await account_store.get_consultant_by_account(str(account["id"])):
+        return True
+    holder_id = await plan_holder_id(account)
+    holder = account if holder_id == str(account["id"]) else await account_store.get_account(holder_id)
+    if not holder:
+        return False
+    return bool(holder.get("consultant_id")) or (
+        holder.get("subscription_plan") == "all_tools" and holder.get("subscription_status") == "active")
+
+
 async def active_services(account: dict) -> list[str]:
     """Service ids this account can use, in catalog order (Data Cleaning always included)."""
+    if await gets_everything(account):
+        return [s.id for s in SERVICES if s.available]
     stored = set(await account_store.list_services(await plan_holder_id(account)))
     stored.add(ALWAYS_INCLUDED)
     return [s.id for s in SERVICES if s.id in stored]

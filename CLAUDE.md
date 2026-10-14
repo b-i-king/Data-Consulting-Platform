@@ -34,6 +34,9 @@ coding, so **understanding the code matters as much as the code itself**.
 - **Never store client data** without an explicit design change documented in
   `docs/ARCHITECTURE.md`.
 - **Routers thin, services thick.** Logic in `api/services/`, HTTP in `api/routers/`.
+- **Client access goes through `get_acting_context`** (`api/core/security.py`)
+  for anything that reads or changes a client's plan or billing, so a consultant
+  can only reach their own clients (`api/services/consultants.py`).
 - Add or update a test in `tests/` for every behavior change.
 
 ## Git

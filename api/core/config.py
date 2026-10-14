@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     # Shown whenever a guest picks a service that needs a human consultant.
     booking_url: str = Field(default="https://calendly.com/your-link", alias="BOOKING_URL")
 
+    # ── Consultants ───────────────────────────────────────────────────────────
+    # Email addresses that sign in as CONSULTANTS (comma-separated). The FIRST
+    # one is the default consultant: clients who tick "I'd like a consultant to
+    # do this for me" are assigned to them. Empty = no consultants.
+    consultant_emails: str = Field(default="", alias="CONSULTANT_EMAILS")
+    # A secret code a consultant must enter to sign in (or sign up). Sign-in is
+    # by email only for now, so without this anyone who knows a consultant's
+    # email could see every client. Empty = consultant sign-in is switched off.
+    consultant_access_code: str = Field(default="", alias="CONSULTANT_ACCESS_CODE")
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore",
@@ -96,6 +106,11 @@ class Settings(BaseSettings):
     }
 
     # ── Convenience helpers (computed, not read from the environment) ─────────
+    @property
+    def consultant_email_list(self) -> list[str]:
+        """CONSULTANT_EMAILS as a clean lowercase list, default consultant first."""
+        return [e.strip().lower() for e in self.consultant_emails.split(",") if e.strip()]
+
     @property
     def origins_list(self) -> list[str]:
         """ALLOWED_ORIGINS split into a clean Python list."""

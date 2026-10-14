@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from api.core.config import get_settings
 from api.models.accounts import QuoteIn
-from api.services import intake, locations, pricing
+from api.services import consultants, intake, locations, pricing
 from api.services.file_reader import EXCLUDED_FORMATS, SUPPORTED_EXTENSIONS, formats_for_ui
 
 router = APIRouter()
@@ -41,6 +41,11 @@ async def intake_options():
             "billing_increment_seconds": settings.billing_increment_seconds,
         },
         "booking_url": settings.booking_url,
+        # Monthly / yearly "All tools" plan (cancel anytime).
+        "subscriptions": pricing.subscription_catalog(),
+        # The default consultant's first name, for "I'd like Brandon to do this
+        # for me" at signup (None until a consultant has signed in once).
+        "consultant": {"name": c["display_name"]} if (c := await consultants.default_consultant()) else None,
         # Business funnel: goods/services -> NAICS sector -> subsector.
         "industries": intake.naics_tree(),
         # Business size bands (LinkedIn company size codes A–I).

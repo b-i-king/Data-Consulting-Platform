@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import StreamingResponse
 
 from api.core.config import get_settings
-from api.core.security import get_current_account
+from api.core.security import get_acting_context
 from api.services import account_store
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import (
@@ -102,7 +102,9 @@ async def analyze_files(
 
 @router.post("/download")
 async def download_cleaned(
-    account: Annotated[dict, Depends(get_current_account)],
+    # Whose download this is: the signed-in client, or the client a consultant
+    # is working on (X-Acting-As) — then it's billed to that client.
+    ctx: Annotated[dict, Depends(get_acting_context)],
     files: Annotated[list[UploadFile], File()],
     group_id: Annotated[int, Form()] = 0,
     missing_strategy: Annotated[Strategy, Form()] = "keep",
@@ -128,7 +130,8 @@ async def download_cleaned(
         # Safeguard: never charge more than the total the client confirmed.
         cost["amount_usd"] = min(cost["amount_usd"], round(confirmed_amount_usd, 2))
     await account_store.record_usage(
-        account_id=account["sub"],
+        account_id=str(ctx["account"]["id"]),
+        consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
         dataset_name=group.label,
         rows=len(group.cleaned),
         runtime_seconds=cost["runtime_seconds"],

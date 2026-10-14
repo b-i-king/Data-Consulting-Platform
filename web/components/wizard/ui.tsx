@@ -4,7 +4,8 @@
 
 "use client";
 
-import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { loadSession } from "@/lib/session";
 
 export function StepHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -126,8 +127,14 @@ export function Progress({ step, total, labels }: { step: number; total: number;
   );
 }
 
-/** Call-to-action box that sends people to the consultant's booking page. */
+/**
+ * Call-to-action box that sends people to the consultant's booking page.
+ * Hidden when a CONSULTANT is signed in — they are the consultant.
+ */
 export function ConsultantCta({ bookingUrl, children }: { bookingUrl: string; children: ReactNode }) {
+  const [isConsultant, setIsConsultant] = useState(false);
+  useEffect(() => setIsConsultant(loadSession()?.account.role === "consultant"), []);
+  if (isConsultant) return null;
   return (
     <div className="rounded-2xl border border-brand/40 bg-brand-soft p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

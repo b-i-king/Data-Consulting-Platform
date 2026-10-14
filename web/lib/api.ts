@@ -7,6 +7,7 @@
 // never put secrets in a NEXT_PUBLIC_ variable.
 
 import type {
+  ConsultantClient,
   AnalyzeResponse,
   SkillInfo,
   SkillResult,
@@ -67,6 +68,20 @@ export function warmUpApi() {
   fetch(`${API_URL}/health`).catch(() => {});
 }
 
+// ── Consultant mode ───────────────────────────────────────────────────────────
+// When a consultant picks a client in the workspace's "Working on" menu, every
+// signed-in request carries `X-Acting-As: <client id>`. The server checks that
+// the client is assigned to this consultant (api/services/consultants.py).
+let actingAs: string | null = null;
+export function setActingAs(clientId: string | null) {
+  actingAs = clientId;
+}
+/** Authorization (+ acting) headers for a signed-in request. */
+const authHeaders = (token: string): Record<string, string> => ({
+  Authorization: `Bearer ${token}`,
+  ...(actingAs ? { "X-Acting-As": actingAs } : {}),
+});
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(`${API_URL}${path}`);
   await raiseForStatus(res);
@@ -78,7 +93,7 @@ async function postJson<T>(path: string, body: unknown, token?: string): Promise
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token ? authHeaders(token) : {}),
     },
     body: JSON.stringify(body),
   });
@@ -103,7 +118,9 @@ export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
 
 export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
 
-export const signin = (email: string) => postJson<AuthResponse>("/api/accounts/signin", { email });
+/** Sign in by email; consultants also send their access code. */
+export const signin = (email: string, accessCode?: string) =>
+  postJson<AuthResponse>("/api/accounts/signin", { email, ...(accessCode ? { access_code: accessCode } : {}) });
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
 
@@ -112,7 +129,29 @@ export const searchLocations = (q: string) => getJson<Location[]>(`/api/location
 
 /** Services on the signed-in account's plan (drives the workspace's left pane). */
 export async function getMyServices(token: string): Promise<MyServices> {
-  const res = await apiFetch(`${API_URL}/api/accounts/services`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await apiFetch(`${API_URL}/api/accounts/services`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Cancel the "All tools" subscription (anytime). */
+export const cancelSubscription = (token: string) =>
+  postJson<MyServices>("/api/accounts/subscription/cancel", {}, token);
+
+/** Consultants: the clients assigned to me (the "Working on" picker). */
+export async function getMyClients(token: string): Promise<{ consultant: { id: string; name: string }; clients: ConsultantClient[] }> {
+  const res = await apiFetch(`${API_URL}/api/consultant/clients`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Consultants: create an account for a client and assign it to me. */
+export async function addClient(token: string, input: SignupInput): Promise<ConsultantClient> {
+  const res = await apiFetch(`${API_URL}/api/consultant/clients`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
   await raiseForStatus(res);
   return res.json();
 }
@@ -183,7 +222,7 @@ export async function downloadCleaned(opts: {
 }): Promise<{ amountUsd: string | null }> {
   const res = await apiFetch(`${API_URL}/api/files/download`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${opts.token}` },
+    headers: authHeaders(opts.token), // a consultant downloads for the client they are working on
     body: filesForm(opts.input.files, {
       group_id: String(opts.groupId),
       file_format: opts.format,

@@ -86,6 +86,8 @@ the create page):
 | `DATABASE_URL` | Supabase pooler connection string — **leave it out for the free test** (accounts are kept in memory) |
 | `BOOKING_URL` | optional: your Calendly / Cal.com link |
 | `PRICE_PER_RUNTIME_MINUTE_USD` | optional: your rate (default `0.50`) |
+| `CONSULTANT_EMAILS` | your email (and any other consultants', comma-separated). The **first** is the default consultant that "do it for me" clients go to |
+| `CONSULTANT_ACCESS_CODE` | a long secret you type when signing in as a consultant (generate it like `JWT_SECRET_KEY`). Empty = consultant sign-in off |
 
 Click **Deploy Web Service**. The first build installs pandas and
 scikit-learn (~5–10 minutes). Then open `https://<your-api>.onrender.com/health`:
@@ -115,9 +117,20 @@ ever use Render's Blueprint option instead).
 
 4. Deploy. Add the resulting URL to `ALLOWED_ORIGINS` on Render.
 
+### Signing in as the consultant
+
+After setting `CONSULTANT_EMAILS` and `CONSULTANT_ACCESS_CODE` on Render (and
+redeploying), open the site → **Sign in** → **Create an account** with your
+consultant email → click **I'm a consultant** and enter the access code. The
+header shows a lavender **Consultant** badge, and the workspace has a
+**Working on** picker. On a free test server without a database, sign up again
+after each restart (accounts live in memory).
+
 ## Checklist before real clients
 
-- [ ] Replace email-only sign-in with verified sign-in (see ROADMAP → Security).
+- [ ] Replace email-only sign-in with verified sign-in (see ROADMAP → Security) —
+      including consultants, who can open every assigned client.
+- [ ] Run the latest `db/schema.sql` in Supabase (adds `consultants` and the new account columns).
 - [ ] Set real prices in `api/services/pricing.py` and env vars.
 - [ ] Set `BOOKING_URL`.
 - [ ] Add Terms of Service and Privacy Policy pages (the template repo has examples).

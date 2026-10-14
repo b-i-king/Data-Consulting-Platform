@@ -4,7 +4,7 @@
 // questions here, up front in the funnel:
 //   * company size — LinkedIn's employee-count bands (codes A–I), so the
 //     answers line up with LinkedIn data and feel familiar
-//   * industry     — goods/services -> NAICS sector -> subsector (IndustryPicker)
+//   * industry     — one search box over NAICS sectors and subsectors, or "Other" (IndustryPicker)
 
 "use client";
 

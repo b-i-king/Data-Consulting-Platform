@@ -132,7 +132,36 @@ browser and applied by a tiny inline script before the page paints (no flash).
 Colors are CSS variables in `web/app/globals.css`: VGST's palette (navy-black,
 gold, Fira Code) with Copilot Money-inspired rounded cards and category colors.
 
-### 5. Database optional in development
+### 5. Consultants: do it yourself, or done for you
+
+The same platform serves clients who use the tools themselves and clients who
+would rather hire a consultant. A **consultant** signs in with their own account
+(email listed in `CONSULTANT_EMAILS`, plus the secret `CONSULTANT_ACCESS_CODE`)
+and sees a lavender "Consultant" badge and a **"Working on"** picker in the
+workspace. Picking a client shows that client's workspace: every signed-in
+request then carries `X-Acting-As: <client id>`.
+
+**The access rule** (`api/services/consultants.py`, used through
+`get_acting_context` in `api/core/security.py`):
+
+| Caller | Can open |
+|---|---|
+| A client | Only their own account (and their team's shared plan) |
+| A consultant | Their own account, and clients whose `accounts.consultant_id` is them (for a business, the team owner's) |
+| Anyone else | 403 — never another consultant's client |
+
+Data model (`db/schema.sql`): a `consultants` dimension table (one row per
+consultant, linked to their account; `is_default` marks who new "do it for me"
+clients go to), and on `accounts`: `wants_consultant` (boolean) and
+`consultant_id` (NULL unless `wants_consultant` is true — enforced by a CHECK).
+Clients can tick "I'd like a consultant to do this for me" at signup, or the
+consultant creates their account ("Add a client"). Consultant-managed clients,
+consultants, and "All tools" subscribers get every available service.
+Downloads a consultant makes are billed to the client (`usage_events.consultant_id`
+records who did it). **Client data is still never stored** — the consultant
+works on files the client shares, in the same in-memory way.
+
+### 6. Database optional in development
 
 Without `DATABASE_URL`, accounts live in memory so you can run everything
 locally in two commands. In production, always set `DATABASE_URL`.
