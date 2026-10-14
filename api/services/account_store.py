@@ -73,6 +73,7 @@ async def create_account(
     naics_sector: str | None = None,
     naics_subsector: str | None = None,
     company_size: str | None = None,
+    location: dict | None = None,
 ) -> dict:
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
@@ -100,6 +101,12 @@ async def create_account(
         "last_login_at": _now() if status == "active" else None,
         "industry_supersector": industry_supersector, "naics_sector": naics_sector,
         "naics_subsector": naics_subsector, "company_size": company_size,
+        # Optional location from the signup picker (api/services/locations.py).
+        "location_geoname_id": location["id"] if location else None,
+        "location_city": location["city"] if location else None,
+        "location_region": (location["region"] or None) if location else None,
+        "location_country_code": location["country_code"] if location else None,
+        "location_label": location["label"] if location else None,
     }
 
     if database.pool is None:
@@ -116,12 +123,15 @@ async def create_account(
                 """INSERT INTO accounts (id, account_type, first_name, last_name, email,
                                          company_name, team_id, team_role, status, last_login_at,
                                          industry_supersector, naics_sector, naics_subsector,
-                                         company_size)
-                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13)""",
+                                         company_size, location_geoname_id, location_city,
+                                         location_region, location_country_code, location_label)
+                   VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13,
+                           $14, $15, $16, $17, $18)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
                 company_name, team_role, status, account["last_login_at"],
                 industry_supersector, naics_sector, naics_subsector,
-                company_size,
+                company_size, account["location_geoname_id"], account["location_city"],
+                account["location_region"], account["location_country_code"], account["location_label"],
             )
             if team:
                 await conn.execute(

@@ -121,17 +121,21 @@ def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not():
     assert dup_check["status"] == "pass"
 
 
+# 40 rows: enough for analysis (the minimum is 30).
+BIG = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(40))
+
+
 def test_skill_errors_are_friendly():
-    assert client.post("/api/skills/nope/run", files=_files(("s.csv", CSV))).status_code == 404
-    res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", CSV)), data={"params": "{}"})
+    assert client.post("/api/skills/nope/run", files=_files(("s.csv", BIG))).status_code == 404
+    res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", BIG)), data={"params": "{}"})
     assert res.status_code == 400 and "outcome" in res.json()["detail"]
-    res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", CSV)),
+    res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", BIG)),
                       data={"params": '{"db_path": "/tmp/evil.db"}'})
     assert res.status_code == 400 and "command line" in res.json()["detail"]
 
 
 GAPS = b"order_date,qty,city,notes\n2026-01-01,1,A,\n2026-01-02,2,A,\n2026-01-03,,,\n2026-01-04,4,B,x\n" + \
-       b"".join(f"2026-02-{d:02d},{d},A,\n".encode() for d in range(1, 11))
+       b"".join(f"2026-02-{d:02d},{d},A,\n".encode() for d in range(1, 29))   # 32 rows in all
 
 
 def test_analyze_applies_column_actions_and_previews_first_rows():
@@ -142,7 +146,7 @@ def test_analyze_applies_column_actions_and_previews_first_rows():
     assert g["report"]["columns_dropped"] == ["notes"] and g["report"]["columns"] == 3
     assert g["report"]["cells_filled"] == 1
     assert g["preview"]["columns"] == ["order_date", "qty", "city"]
-    assert len(g["preview"]["rows"]) == 5 and g["preview"]["total_rows"] == 14 and g["preview"]["truncated"]
+    assert len(g["preview"]["rows"]) == 5 and g["preview"]["total_rows"] == 32 and g["preview"]["truncated"]
     notes = next(c for c in g["report"]["column_reports"] if c["column"] == "notes")
     assert notes["missing_level"] == "remove"
 
@@ -160,3 +164,21 @@ def test_skills_see_the_same_cleaning_choices():
                       data={"column_actions": '{"0": {"notes": "drop"}}'})
     assert res.status_code == 200, res.text
     assert '"notes"' not in res.text
+
+
+def test_analysis_needs_30_rows_before_and_after_cleaning():
+    # 3 rows: cleaning works, analysis is refused with a clear reason.
+    small = client.post("/api/files/analyze", files=_files(("s.csv", CSV))).json()["groups"][0]["report"]
+    assert small["analysis_ready"] is False and "at least 30" in small["analysis_note"]
+    assert client.post("/api/skills/data-cleaning/run", files=_files(("s.csv", CSV))).status_code == 200
+    res = client.post("/api/skills/explore-data/run", files=_files(("s.csv", CSV)))
+    assert res.status_code == 400 and "at least 30" in res.json()["detail"]
+    # 35 rows uploaded, but 10 are duplicates: 25 left AFTER cleaning -> still refused.
+    dupes = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(25)) + b"C1,1\n" * 10
+    rep = client.post("/api/files/analyze", files=_files(("d.csv", dupes))).json()["groups"][0]["report"]
+    assert rep["rows_before"] == 35 and rep["rows_after"] == 25
+    assert rep["analysis_ready"] is False and "After cleaning" in rep["analysis_note"]
+    assert client.post("/api/skills/build-dashboard/run", files=_files(("d.csv", dupes))).status_code == 400
+    # 40 rows: ready.
+    big = client.post("/api/files/analyze", files=_files(("b.csv", BIG))).json()["groups"][0]["report"]
+    assert big["analysis_ready"] is True and big["analysis_note"] == ""

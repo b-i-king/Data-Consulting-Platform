@@ -43,6 +43,8 @@ api/                      FastAPI backend (Python)
   services/skills_runner.py cleans uploads, then hands them to a data skill
   services/pricing.py       service catalog, runtime billing, quotes
   services/entitlements.py  which services an account has (drives the workspace)
+  services/validation.py    signup input rules: names, business names, emails
+  services/locations.py     city search for the signup location picker
   services/intake.py        questionnaire answer choices
   services/account_store.py accounts/teams/usage (Postgres or in-memory)
 db/schema.sql             platform tables: accounts, teams, usage (run once in Supabase)
@@ -56,7 +58,8 @@ web/                      Next.js frontend (TypeScript + Tailwind CSS)
   app/start/page.tsx      the guest wizard page
   app/signin/page.tsx     sign in / create an account by email
   app/app/page.tsx        the signed-in workspace (Copilot-style left pane)
-  components/auth/        sign-in form, header sign-in links
+  components/auth/        sign-in form (+ LocationPicker), header sign-in links
+  lib/validation.ts       the same signup rules, checked while typing
   components/workspace/   the workspace: left pane of services + each service's page
   components/wizard/      one component per wizard step + shared UI (MissingValues: fill/remove choices)
   components/explore/     Explore your data: Dashboard (+ TimeBar) + Run a skill (+ locked service badges)

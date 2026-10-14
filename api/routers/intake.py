@@ -4,6 +4,7 @@ Intake + pricing endpoints (no sign-in required).
     GET  /api/intake/options   everything the guest questionnaire needs to render
     GET  /api/services         the service catalog with starting prices
     POST /api/quote            price a selection of services
+    GET  /api/locations?q=atl  city search for the signup form's location picker
 
 The frontend loads `/api/intake/options` once when the wizard opens, so the
 questions and answer choices are controlled from the backend. A future iOS /
@@ -14,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from api.core.config import get_settings
 from api.models.accounts import QuoteIn
-from api.services import intake, pricing
+from api.services import intake, locations, pricing
 from api.services.file_reader import EXCLUDED_FORMATS, SUPPORTED_EXTENSIONS, formats_for_ui
 
 router = APIRouter()
@@ -45,6 +46,12 @@ async def intake_options():
         # Business size bands (LinkedIn company size codes A–I).
         "company_sizes": intake.COMPANY_SIZES,
     }
+
+
+@router.get("/locations")
+async def search_locations(q: str = "", limit: int = 8):
+    # Typeahead: at least 2 letters; "paris, fr" narrows by state/country.
+    return locations.search(q, max(1, min(limit, 20)))
 
 
 @router.get("/services")

@@ -10,17 +10,35 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from api.services import locations, validation
 from api.services.intake import COMPANY_SIZE_CODES, validate_industry
 
 
 class TeamMemberIn(BaseModel):
     """A colleague a business owner wants to add to their team."""
 
-    first_name: str = Field(min_length=1, max_length=100)
-    last_name: str = Field(min_length=1, max_length=100)
+    first_name: str = Field(min_length=1, max_length=200)
+    last_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
+
+    # Format rules live in api/services/validation.py (letters only, capital
+    # first letter, valid email stored in lowercase).
+    @field_validator("first_name")
+    @classmethod
+    def _first(cls, v: str) -> str:
+        return validation.clean_person_name(v, "First name")
+
+    @field_validator("last_name")
+    @classmethod
+    def _last(cls, v: str) -> str:
+        return validation.clean_person_name(v, "Last name")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        return validation.clean_email(v)
 
 
 class SignupIn(BaseModel):
@@ -31,10 +49,10 @@ class SignupIn(BaseModel):
     """
 
     account_type: Literal["individual", "business"]
-    first_name: str = Field(min_length=1, max_length=100)
-    last_name: str = Field(min_length=1, max_length=100)
+    first_name: str = Field(min_length=1, max_length=200)
+    last_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
-    company_name: str | None = Field(default=None, max_length=200)
+    company_name: str | None = Field(default=None, max_length=300)
     team_members: list[TeamMemberIn] = Field(default_factory=list, max_length=25)
     # Industry (business accounts only) — see api/services/intake.py.
     #   industry_supersector: "goods_producing" or "service_providing"
@@ -49,6 +67,36 @@ class SignupIn(BaseModel):
     # Services picked in the guest questionnaire ("Your needs"), put on the
     # new account's plan. See api/services/entitlements.py.
     service_ids: list[str] = Field(default_factory=list, max_length=20)
+    # Optional location, chosen from the picker (a GeoNames city id). Only the
+    # id is trusted; the city/state/country are looked up on the server.
+    location_id: int | None = None
+
+    @field_validator("first_name")
+    @classmethod
+    def _first(cls, v: str) -> str:
+        return validation.clean_person_name(v, "First name")
+
+    @field_validator("last_name")
+    @classmethod
+    def _last(cls, v: str) -> str:
+        return validation.clean_person_name(v, "Last name")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        return validation.clean_email(v)
+
+    @field_validator("company_name")
+    @classmethod
+    def _company(cls, v: str | None) -> str | None:
+        return validation.clean_company_name(v) if v and v.strip() else None
+
+    @field_validator("location_id")
+    @classmethod
+    def _location(cls, v: int | None) -> int | None:
+        if v is not None and locations.get(v) is None:
+            raise ValueError("Choose your city from the list.")
+        return v
 
     @model_validator(mode="after")
     def _business_rules(self) -> "SignupIn":
@@ -62,14 +110,26 @@ class SignupIn(BaseModel):
                 raise ValueError("Company size applies to business accounts only.")
         if self.company_size and self.company_size not in COMPANY_SIZE_CODES:
             raise ValueError("Unknown company size.")
+        if self.account_type == "business" and not self.company_name:
+            raise ValueError("Business name is required for a business account.")
         error = validate_industry(self.industry_supersector, self.naics_sector, self.naics_subsector)
         if error:
             raise ValueError(error)
+        # One email = one person: no repeats within this form.
+        emails = [self.email, *(m.email for m in self.team_members)]
+        repeats = sorted({e for e in emails if emails.count(e) > 1})
+        if repeats:
+            raise ValueError(f"Each person needs their own email address — used more than once: {', '.join(repeats)}")
         return self
 
 
 class SigninIn(BaseModel):
     email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        return validation.clean_email(v)
 
 
 class AccountOut(BaseModel):
@@ -86,6 +146,8 @@ class AccountOut(BaseModel):
     naics_sector: str | None = None
     naics_subsector: str | None = None
     company_size: str | None = None
+    location_id: int | None = None
+    location: str | None = None       # "Atlanta, Georgia, United States"
 
 
 class AuthOut(BaseModel):

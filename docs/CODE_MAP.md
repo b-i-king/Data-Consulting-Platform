@@ -115,6 +115,9 @@ services the client chose are offered; the rest are badges from
 | `web/components/explore/TimeBar.tsx` | Floating range + comparison panels, short labels | Changing the time controls |
 | `web/components/workspace/Workspace.tsx` | Signed-in workspace and left pane | Changing the workspace |
 | `api/services/entitlements.py` | Services on an account's plan | Adding payments (unlock on payment) |
+| `api/services/validation.py` + `web/lib/validation.ts` | Signup rules (names, business names, emails) — server + browser copies | Changing what the form accepts (change both) |
+| `api/services/locations.py` + `api/data/locations.json` | City search for the location picker | Rebuild the list with `scripts/build_locations.py` |
+| `web/components/auth/LocationPicker.tsx` | Type-ahead city picker (signup only) | Changing the location field |
 
 ## Patterns worth knowing
 

@@ -69,6 +69,15 @@ Step 5. What to do about missing values (chosen by the user)
             * "drop_any" — drop every row that STILL has a missing value after
                            5a. Can remove a lot of data — the report shows how much.
 
+Step 7. Enough rows to analyze?
+        Analysis needs at least 30 rows (MIN_ROWS_FOR_ANALYSIS) — fewer, and
+        averages, trends and tests are too unreliable to show. Checked BEFORE
+        cleaning (the file as uploaded) and AFTER cleaning (duplicates and
+        empty rows removed, the user's row choices applied). Below 30 at either
+        point, the data can still be cleaned and downloaded, but the dashboard
+        and every non-cleaning skill are switched off for that table
+        (`analysis_ready` = False, with `analysis_note` saying why).
+
 Step 6. Column profile
         The inferred type of each column (number, date, text, true/false)
         and a few example values, to help the user sanity-check the result.
@@ -96,6 +105,7 @@ REVIEW_PCT = 20.0    # at or above: think about removing the column
 REMOVE_PCT = 90.0    # at or above: remove the column
 CONSULT_PCT = 90.0   # at or above, for ALL cells: recommend a consultation
 SKEW_LIMIT = 0.5     # |skewness| at or above: fill numbers with the median, not the mean
+MIN_ROWS_FOR_ANALYSIS = 30   # Step 7: fewer rows (before OR after cleaning) = no analysis
 
 # Column names that look like identifiers or codes (never averaged or filled).
 ID_NAME = re.compile(r"(^|_)(id|key|code|number|num|no|zip|zipcode|postal|sku|uuid|guid)$|^id_", re.IGNORECASE)
@@ -156,6 +166,8 @@ class CleaningReport:
     columns_to_review: list[str] = field(default_factory=list)  # 20%+ missing
     columns_to_remove: list[str] = field(default_factory=list)  # 90%+ missing
     consultation_recommended: bool = False   # 90%+ of all cells missing
+    analysis_ready: bool = True          # Step 7: at least 30 rows before AND after cleaning
+    analysis_note: str = ""              # why not, in plain English (empty when ready)
     notes: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
 
@@ -448,6 +460,11 @@ def clean_dataframe(
     total_cells = n * len(out.columns)
     total_missing = int(out.isna().sum().sum())
 
+    # Step 7 — enough rows to analyze, before and after cleaning?
+    analysis_note = analysis_readiness(rows_before, n)
+    if analysis_note:
+        notes.append(analysis_note)
+
     report = CleaningReport(
         dataset_name=dataset_name,
         rows_before=rows_before,
@@ -469,10 +486,26 @@ def clean_dataframe(
         columns_to_review=to_review,
         columns_to_remove=to_remove,
         consultation_recommended=consult,
+        analysis_ready=not analysis_note,
+        analysis_note=analysis_note,
         notes=notes,
         runtime_seconds=round(time.perf_counter() - started, 4),
     )
     return out, report
+
+
+def analysis_readiness(rows_before: int, rows_after: int) -> str:
+    """Step 7: "" when there are enough rows to analyze, else the reason (shown to the user)."""
+    m = MIN_ROWS_FOR_ANALYSIS
+    if rows_before < m:
+        return (f"This file has only {rows_before:,} row{'s' if rows_before != 1 else ''} — analysis needs at least "
+                f"{m}, so the dashboard and analysis skills are off. You can still clean and download it; "
+                "add more rows (or book a consultation) to analyze it.")
+    if rows_after < m:
+        return (f"After cleaning, only {rows_after:,} row{'s' if rows_after != 1 else ''} remain — analysis needs at "
+                f"least {m}, so the dashboard and analysis skills are off. Try keeping rows with missing values, "
+                "or add more data.")
+    return ""
 
 
 def dataframe_to_records(df: pd.DataFrame, limit: int | None = None) -> list[dict]:

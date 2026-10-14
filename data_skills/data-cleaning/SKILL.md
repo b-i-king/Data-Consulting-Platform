@@ -39,6 +39,7 @@ Run these steps in order. Each maps to a function or block in `cleaning.py`.
 | 5a | Column choices (client) | `df.drop(columns=…)`, `s.fillna(s.mean() / s.median() / s.mode()[0])` | Keep (default), remove, or fill — `column_actions` |
 | 5b | Row strategy (client) | `keep` (default) or `dropna(how="any")` after 5a | Warn if > 20% of rows drop |
 | 6 | Column profile | inferred type, unique count, 3 example values | Sanity-check for the client |
+| 7 | Enough rows? | `rows_before >= 30 and rows_after >= 30` | Under 30 rows (before OR after cleaning) = clean and download only; no analysis (`analysis_ready`, `analysis_note`) |
 
 ### Missing-value rules of thumb (Step 4)
 
