@@ -1,18 +1,26 @@
 // Table showing the first rows of the cleaned data (like pandas' df.head()).
-// The backend sends the first PREVIEW_MAX_ROWS rows (5 by default); if that
-// setting is raised, this component pages through them 50 at a time.
+// The backend sends the first PREVIEW_MAX_ROWS rows (5 by default).
+//
+// Wide tables are shown 10 fields (columns) at a time, with First / Previous /
+// Next / Last buttons — like df.iloc[:, 0:10], then 10:20, and so on. If
+// PREVIEW_MAX_ROWS is raised, rows are paged 50 at a time the same way.
 
 "use client";
 
 import { useState } from "react";
 import { fmtInt } from "@/lib/format";
 import type { GroupOutput } from "@/lib/types";
-import { Button } from "./ui";
+import { Pager } from "./ui";
+import { COLUMNS_PER_PAGE } from "./MissingValues";
 
 const PAGE_SIZE = 50;
 
 export default function DataPreview({ preview }: { preview: GroupOutput["preview"] }) {
   const [page, setPage] = useState(0);
+  const [colPage, setColPage] = useState(0);
+  const colPages = Math.max(1, Math.ceil(preview.columns.length / COLUMNS_PER_PAGE));
+  const colCurrent = Math.min(colPage, colPages - 1);
+  const columns = preview.columns.slice(colCurrent * COLUMNS_PER_PAGE, (colCurrent + 1) * COLUMNS_PER_PAGE);
   const pages = Math.max(1, Math.ceil(preview.rows.length / PAGE_SIZE));
   const rows = preview.rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const first = page * PAGE_SIZE + 1;
@@ -38,7 +46,7 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
           <thead className="sticky top-0 bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted shadow-[0_1px_0_var(--color-line)]">
             <tr>
               <th className="px-3 py-2 text-right">#</th>
-              {preview.columns.map((c) => (
+              {columns.map((c) => (
                 <th key={c} className="whitespace-nowrap px-3 py-2">
                   {c}
                 </th>
@@ -49,7 +57,7 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
             {rows.map((row, i) => (
               <tr key={first + i}>
                 <td className="px-3 py-1.5 text-right text-ink-muted tabular-nums">{fmtInt(first + i)}</td>
-                {preview.columns.map((c) => {
+                {columns.map((c) => {
                   const v = row[c];
                   return (
                     <td key={c} className="whitespace-nowrap px-3 py-1.5">
@@ -66,19 +74,20 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
           </tbody>
         </table>
       </div>
-      {pages > 1 && (
-        <div className="mt-3 flex items-center justify-end gap-2 text-sm">
-          <Button variant="secondary" onClick={() => setPage((p) => p - 1)} disabled={page === 0}>
-            Previous
-          </Button>
-          <span className="text-ink-muted">
-            Page {fmtInt(page + 1)} of {fmtInt(pages)}
-          </span>
-          <Button variant="secondary" onClick={() => setPage((p) => p + 1)} disabled={page >= pages - 1}>
-            Next
-          </Button>
-        </div>
-      )}
+      <Pager
+        label="Field pages"
+        page={colCurrent}
+        pages={colPages}
+        onPage={setColPage}
+        summary={`Fields ${fmtInt(colCurrent * COLUMNS_PER_PAGE + 1)}–${fmtInt(colCurrent * COLUMNS_PER_PAGE + columns.length)} of ${fmtInt(preview.columns.length)}`}
+      />
+      <Pager
+        label="Row pages"
+        page={page}
+        pages={pages}
+        onPage={setPage}
+        summary={`Rows ${fmtInt(first)}–${fmtInt(last)}`}
+      />
     </div>
   );
 }

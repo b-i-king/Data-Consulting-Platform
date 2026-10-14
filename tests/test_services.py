@@ -13,7 +13,7 @@ import pytest
 from api.services.categorizer import categorize, combine_group, normalize_column
 from api.services.cleaning import clean_dataframe
 from api.services.file_reader import LoadedDataset, UnsupportedFileError, read_file
-from api.services.pricing import build_quote, runtime_cost
+from api.services.pricing import build_quote, download_estimate, runtime_cost, wait_label
 from api.services.sample_size import sample_size_snapshot
 
 
@@ -239,3 +239,22 @@ def test_id_columns_are_never_filled():
     assert cid.fill_options == {} and cid.suggested_fill is None and "ID" in cid.recommendation
     assert cleaned["customer_id"].isna().sum() == 3            # the request is refused, gaps kept
     assert any("IDs" in n for n in report.notes)
+
+
+def test_download_estimate_scales_with_rows_times_fields():
+    small = download_estimate(0.2, rows=100, columns=5)
+    big = download_estimate(0.2, rows=400_000, columns=20)
+    assert small["cells"] == 500 and big["cells"] == 8_000_000
+    # Excel is slower to write than CSV, and more cells take longer.
+    assert big["formats"]["xlsx"]["estimated_seconds"] > big["formats"]["csv"]["estimated_seconds"]
+    assert big["formats"]["csv"]["estimated_seconds"] > small["formats"]["csv"]["estimated_seconds"]
+    assert small["formats"]["csv"]["under_five_minutes"]
+    assert not big["formats"]["xlsx"]["under_five_minutes"]   # 8M cells / 20k per second = 400 s
+    # The charge is the processing time only (1 started minute here).
+    assert small["amount_usd"] == runtime_cost(0.2)["amount_usd"]
+
+
+def test_wait_label_reads_like_plain_english():
+    assert wait_label(4) == "under 10 seconds"
+    assert wait_label(34) == "about 40 seconds"
+    assert wait_label(61) == "about 2 minutes"

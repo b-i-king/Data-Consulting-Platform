@@ -41,6 +41,10 @@ def test_guest_analyze_then_signup_then_download():
     assert group["report"]["duplicate_rows_removed"] == 1
     assert group["preview"]["total_rows"] == 2
     assert body["runtime"]["billable_minutes"] == 1
+    est = group["download_estimate"]
+    assert est["rows"] == 2 and est["columns"] == 2
+    assert est["amount_usd"] == body["runtime"]["amount_usd"]
+    assert est["formats"]["csv"]["label"] == "under 10 seconds"
 
     # 2. Download without an account is refused.
     res = client.post("/api/files/download", files=_files(("sales.csv", CSV)))
@@ -66,6 +70,12 @@ def test_guest_analyze_then_signup_then_download():
     df = pd.read_csv(io.BytesIO(res.content), encoding="utf-8-sig")
     assert len(df) == 2
     assert "X-Amount-USD" in res.headers
+
+    # 5. The charge never goes above the total the client confirmed.
+    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV)),
+                      data={"file_format": "csv", "confirmed_amount_usd": "0.25"})
+    assert res.status_code == 200
+    assert res.headers["X-Amount-USD"] == "0.25"
 
 
 def test_individual_cannot_add_team_members():

@@ -9,6 +9,9 @@
 //       mean for roughly symmetric numbers, median for skewed numbers,
 //       mode (most common value) for text
 //
+// Long tables are shown 10 columns per page (First / Previous / Next / Last);
+// choices made on one page are kept when you move to another.
+//
 // The user picks an action per column, then "Apply" re-runs the cleaning on
 // the server with those choices (the files are re-sent from browser memory —
 // nothing is stored). The same choices are used by the dashboard, the skills
@@ -19,7 +22,10 @@
 import { useState } from "react";
 import { fmtInt, fmtPct } from "@/lib/format";
 import type { CleaningReport, ColumnAction, ColumnReport, FillMethod } from "@/lib/types";
-import { Button, ErrorBox } from "./ui";
+import { Button, ErrorBox, Pager } from "./ui";
+
+/** Columns shown per page. */
+export const COLUMNS_PER_PAGE = 10;
 
 const FILL_LABEL: Record<FillMethod, string> = { mean: "mean (average)", median: "median (middle value)", mode: "mode (most common)" };
 
@@ -43,6 +49,12 @@ export default function MissingValues(props: {
   const [draft, setDraft] = useState<Record<string, ColumnAction>>(props.applied);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+
+  const all = report.column_reports;
+  const pages = Math.max(1, Math.ceil(all.length / COLUMNS_PER_PAGE));
+  const current = Math.min(page, pages - 1); // a removed column can shrink the list
+  const shown = all.slice(current * COLUMNS_PER_PAGE, (current + 1) * COLUMNS_PER_PAGE);
 
   const withGaps = report.column_reports.filter((c) => c.missing_count > 0);
   const valueOf = (col: string) => draft[col] ?? "keep";
@@ -97,7 +109,7 @@ export default function MissingValues(props: {
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {report.column_reports.map((c) => (
+            {shown.map((c) => (
               <tr key={c.column} className="align-top">
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2 font-medium">
@@ -159,6 +171,14 @@ export default function MissingValues(props: {
         </table>
       </div>
 
+      <Pager
+        label="Missing values pages"
+        page={current}
+        pages={pages}
+        onPage={setPage}
+        summary={`Columns ${fmtInt(current * COLUMNS_PER_PAGE + 1)}–${fmtInt(current * COLUMNS_PER_PAGE + shown.length)} of ${fmtInt(all.length)}`}
+      />
+
       {withGaps.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={useSuggestions} disabled={busy}>
@@ -170,7 +190,7 @@ export default function MissingValues(props: {
           <span className="text-xs text-ink-muted" aria-live="polite">
             {changed
               ? "You have changes that aren't applied yet."
-              : "Nothing is filled unless you choose to. Suggestions fill small gaps (under 20%) and remove 90%+ columns; the rest is your call."}
+              : "Nothing is filled unless you choose to. Suggestions (for every page) fill small gaps (under 20%) and remove 90%+ columns; the rest is your call."}
           </span>
         </div>
       )}

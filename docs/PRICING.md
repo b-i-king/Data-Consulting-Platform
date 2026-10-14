@@ -43,6 +43,42 @@ files finish in well under a second, so in practice the first minute is a flat
 fee — consider whether `MINIMUM_CHARGE_USD` or a free tier fits your goals of
 keeping costs low for small businesses.
 
+## Estimates and confirmations (before anything is charged)
+
+Every step that costs money asks first, with the amount on screen:
+
+| Where | What the confirmation shows |
+|---|---|
+| **Your needs → Continue to download** | Each chosen service with its price, and the estimated total (from `POST /api/quote`). Nothing is charged on this step. |
+| **Add** on a locked service (Explore badges, the dashboard card, the workspace's "Add to my plan") | The service's price and the plan's **new** total with it added. |
+| **Download CSV / Excel** | Rows × fields, the estimated wait, and the total to pay. |
+
+**How long will the download take?** `download_estimate()` in `pricing.py`,
+returned per table by `POST /api/files/analyze` as `download_estimate`:
+
+```
+estimated seconds = cleaning time just measured (the download re-runs it)
+                  + rows × fields / cells-per-second (CSV 300,000 · Excel 20,000)
+                  + 3 seconds (re-sending the files, starting up)
+```
+
+The writing speeds are laptop measurements divided by about 3 for Render's
+smaller free CPU, so the real wait should be shorter than promised. The wait is
+shown as "under 10 seconds", "about 40 seconds" or "about 3 minutes"; past
+**five minutes** the box warns the client to keep the page open (and suggests
+CSV over Excel for big tables).
+
+| Table | CSV | Excel |
+|---|---|---|
+| 18,210 rows × 13 fields (`samples/sales.csv`) | under 10 seconds | about 20 seconds |
+| 100,000 rows × 20 fields (≈1 s of cleaning) | about 20 seconds | about 2 minutes |
+| 400,000 rows × 20 fields (≈4 s of cleaning) | about 40 seconds | about 7 minutes |
+
+**The charge never goes above what the client confirmed.** The confirmed amount
+is sent with the download (`confirmed_amount_usd`), and the server records the
+smaller of that and the real runtime charge. (The re-run could, rarely, cross a
+minute boundary the analysis didn't — the client doesn't pay for that.)
+
 ## Which services an account has (the workspace)
 
 The signed-in workspace (`/app`) opens the services on the account's **plan**
@@ -51,7 +87,8 @@ The signed-in workspace (`/app`) opens the services on the account's **plan**
 - **Data Cleaning** is always included.
 - Services chosen in the guest questionnaire are put on the plan at signup.
 - Other services appear grayed out in the left pane, with an ⓘ explaining what
-  they add, the price, and how to get them; **Add to my plan** adds one.
+  they add, the price, and how to get them; **Add to my plan** adds one after
+  a confirmation showing the price and new total.
 - In a business, the team **owner** holds the plan; team members share it but
   can't change it.
 

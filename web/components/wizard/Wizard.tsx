@@ -27,6 +27,7 @@ import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
 import StepUpload from "./StepUpload";
 import StepResults from "./StepResults";
+import { AddServiceConfirm } from "./ServiceConfirm";
 import StepServices from "./StepServices";
 import StepAccount from "./StepAccount";
 
@@ -84,8 +85,14 @@ export default function Wizard() {
     setAnalysis(await analyzeFiles({ files, strategy, columnActions: next }));
     setColumnActions(next);
   }
-  // A service picked from a locked badge in Explore is added to the order.
-  const addService = (id: string) => setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  // A service picked from a locked badge in Explore is added to the order —
+  // after a confirmation that shows its price and the new total.
+  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  const addService = (id: string) => setPendingAdd(id);
+  const confirmAdd = (id: string) => {
+    setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    setPendingAdd(null);
+  };
   const go = (n: number) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -111,6 +118,16 @@ export default function Wizard() {
   return (
     <div>
       <Progress step={step} total={LABELS.length} labels={LABELS} />
+
+      {pendingAdd && options.services.find((s) => s.id === pendingAdd) && (
+        <AddServiceConfirm
+          service={options.services.find((s) => s.id === pendingAdd)!}
+          currentIds={serviceIds}
+          runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
+          onConfirm={() => confirmAdd(pendingAdd)}
+          onCancel={() => setPendingAdd(null)}
+        />
+      )}
 
       {step === 0 && (
         <StepAccountType

@@ -24,7 +24,9 @@
 //   kept while the files stay the same, so switching back is instant.
 //
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
-// Until payments exist, "Add to my plan" unlocks a service right away.
+// Until payments exist, "Add to my plan" unlocks a service right away, after
+// a confirmation showing its price and the plan's new total. Downloads also
+// ask first, with the estimated wait and charge (DownloadConfirm.tsx).
 
 "use client";
 
@@ -39,6 +41,8 @@ import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, MySer
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
+import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
+import { AddServiceConfirm } from "@/components/wizard/ServiceConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 
@@ -175,8 +179,14 @@ export default function Workspace() {
     setResults({});
   }
 
+  // Every "Add" button opens a confirmation with the price first (pendingAdd);
+  // only "Add" in that box calls add().
+  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  const [askDownload, setAskDownload] = useState<DownloadFormat | null>(null);
+
   async function add(id: string) {
     if (!session) return;
+    setPendingAdd(null);
     setError(null);
     try {
       setPlan(await addMyService(session.token, id));
@@ -187,11 +197,18 @@ export default function Workspace() {
     }
   }
 
-  async function download(format: "csv" | "xlsx") {
+  async function download(format: DownloadFormat) {
+    setAskDownload(null);
     if (!session || !group) return;
     setError(null);
     try {
-      await downloadCleaned({ input, token: session.token, groupId: group.group_id, format });
+      await downloadCleaned({
+        input,
+        token: session.token,
+        groupId: group.group_id,
+        format,
+        confirmedAmountUsd: group.download_estimate.amount_usd, // never charge more than confirmed
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
     }
@@ -313,6 +330,15 @@ export default function Workspace() {
           </div>
         </div>
         <ErrorBox message={error} />
+        {pendingAdd && plan?.services.find((s) => s.id === pendingAdd) && (
+          <AddServiceConfirm
+            service={plan.services.find((s) => s.id === pendingAdd)!}
+            currentIds={plan.active}
+            runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
+            onConfirm={() => add(pendingAdd)}
+            onCancel={() => setPendingAdd(null)}
+          />
+        )}
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
 
         {currentService && !currentService.active ? (
@@ -321,7 +347,7 @@ export default function Workspace() {
             <ServiceInfo service={currentService} />
             <div className="mt-4 flex flex-wrap gap-3">
               {plan?.can_add ? (
-                <Button onClick={() => add(currentService.id)}>Add {currentService.name} to my plan</Button>
+                <Button onClick={() => setPendingAdd(currentService.id)}>Add {currentService.name} to my plan</Button>
               ) : (
                 <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this service.</p>
               )}
@@ -403,12 +429,24 @@ export default function Workspace() {
 
             {current === CLEANING && choice === VIEW && (
               <>
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={() => download("csv")}>Download CSV</Button>
-                  <Button variant="secondary" onClick={() => download("xlsx")}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button onClick={() => setAskDownload("csv")}>Download CSV</Button>
+                  <Button variant="secondary" onClick={() => setAskDownload("xlsx")}>
                     Download Excel
                   </Button>
+                  <span className="text-xs text-ink-muted">
+                    CSV {estimateLine(group.download_estimate, "csv")} · Excel {estimateLine(group.download_estimate, "xlsx")}
+                  </span>
                 </div>
+                {askDownload && (
+                  <DownloadConfirm
+                    tableLabel={group.label}
+                    format={askDownload}
+                    estimate={group.download_estimate}
+                    onConfirm={() => download(askDownload)}
+                    onCancel={() => setAskDownload(null)}
+                  />
+                )}
                 <GroupDetails
                   key={group.group_id}
                   group={group}
@@ -438,7 +476,7 @@ export default function Workspace() {
                 columns={group.preview.columns}
                 services={plan.services}
                 selectedServices={plan.active}
-                onAddService={add}
+                onAddService={setPendingAdd}
                 fixedSkill={choice}
                 autoRun
                 initialResult={results[`${group.group_id}:${choice}`] ?? null}

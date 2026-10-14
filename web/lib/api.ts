@@ -176,6 +176,8 @@ export async function downloadCleaned(opts: {
   token: string;
   groupId: number;
   format: "csv" | "xlsx";
+  /** The total the person confirmed; the server never charges more than this. */
+  confirmedAmountUsd?: number;
 }): Promise<{ amountUsd: string | null }> {
   const res = await apiFetch(`${API_URL}/api/files/download`, {
     method: "POST",
@@ -183,6 +185,7 @@ export async function downloadCleaned(opts: {
     body: filesForm(opts.input.files, {
       group_id: String(opts.groupId),
       file_format: opts.format,
+      ...(opts.confirmedAmountUsd !== undefined ? { confirmed_amount_usd: opts.confirmedAmountUsd.toFixed(2) } : {}),
       ...choiceFields(opts.input),
     }),
   });

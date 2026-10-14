@@ -211,11 +211,24 @@ export interface SampleSize {
 
 export type Cell = string | number | boolean | null;
 
+/** Wait + charge for downloading one table (api/services/pricing.py download_estimate). */
+export interface DownloadEstimate {
+  rows: number;
+  columns: number;
+  /** rows × fields — what the wait is based on. */
+  cells: number;
+  /** The processing charge the client confirms; the download never charges more. */
+  amount_usd: number;
+  billable_minutes: number;
+  formats: Record<"csv" | "xlsx", { estimated_seconds: number; label: string; under_five_minutes: boolean }>;
+}
+
 export interface GroupOutput {
   group_id: number;
   label: string;
   report: CleaningReport;
   sample_size: SampleSize;
+  download_estimate: DownloadEstimate;
   preview: {
     columns: string[];
     rows: Record<string, Cell>[];

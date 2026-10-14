@@ -10,6 +10,9 @@ WHAT THIS FILE DOES
    runtime is rounded UP to the billing increment (1 minute by default)
    and multiplied by the per-minute rate.
 3. Builds a QUOTE for the services a client selected.
+4. ESTIMATES how long a download will take and what it will cost, from the
+   table's rows × fields (see download_estimate), so the site can show the
+   amount and ask the client to confirm before anything is charged.
 
 ALL PRICES BELOW ARE PLACEHOLDERS. Edit them here (or move them into the
 database later) once you settle on your packages. The per-minute cleaning
@@ -167,6 +170,59 @@ def runtime_cost(runtime_seconds: float) -> dict:
         "rate_per_minute_usd": settings.price_per_runtime_minute_usd,
         "amount_usd": amount,
     }
+
+
+# How many cells (rows × fields) per second the server writes into the
+# download file. Measured on a laptop (CSV ~1,000,000/s, Excel ~65,000/s) and
+# divided by about 3 to allow for Render's smaller free CPU — an estimate
+# should err on the slow side so the real wait is never longer than promised.
+CELLS_PER_SECOND = {"csv": 300_000, "xlsx": 20_000}
+# Fixed time for the request itself: sending the files again, starting up.
+DOWNLOAD_OVERHEAD_SECONDS = 3.0
+
+
+def download_estimate(runtime_seconds: float, rows: int, columns: int) -> dict:
+    """
+    Estimate the wait and the charge for downloading one cleaned table.
+
+    The download re-runs the same cleaning (so it takes about `runtime_seconds`
+    again — the time the analysis just measured) and then writes the file,
+    which scales with the number of cells (rows × fields).
+
+    The CHARGE is only the processing time (runtime_cost), the same rule as
+    everywhere else, so the estimate here is what the client is asked to
+    confirm. Example: 18,210 rows × 13 fields = 236,730 cells
+        CSV:   0.2 s cleaning + 0.8 s writing + 3 s overhead ≈ 4 seconds
+        Excel: 0.2 s cleaning + 11.8 s writing + 3 s overhead ≈ 15 seconds
+    """
+    cells = max(int(rows), 0) * max(int(columns), 0)
+    cost = runtime_cost(runtime_seconds)
+    by_format = {}
+    for fmt, speed in CELLS_PER_SECOND.items():
+        seconds = runtime_seconds + cells / speed + DOWNLOAD_OVERHEAD_SECONDS
+        by_format[fmt] = {
+            "estimated_seconds": round(seconds, 1),
+            "label": wait_label(seconds),
+            "under_five_minutes": seconds < 300,
+        }
+    return {
+        "rows": int(rows),
+        "columns": int(columns),
+        "cells": cells,
+        "amount_usd": cost["amount_usd"],
+        "billable_minutes": cost["billable_minutes"],
+        "formats": by_format,
+    }
+
+
+def wait_label(seconds: float) -> str:
+    """Plain-English wait time: 'under 10 seconds', 'about 40 seconds', 'about 3 minutes'."""
+    if seconds < 10:
+        return "under 10 seconds"
+    if seconds < 60:
+        return f"about {int(math.ceil(seconds / 10.0) * 10)} seconds"
+    minutes = int(math.ceil(seconds / 60))
+    return f"about {minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def build_quote(service_ids: list[str], runtime_seconds: float | None = None) -> dict:

@@ -145,9 +145,13 @@ services.
 - **Preview:** the first 5 cleaned rows, like pandas' `df.head()`
   (`PREVIEW_MAX_ROWS`, default 5 — raise it to page through more on screen).
   Kept short because the cleaning re-runs each time a missing-value choice is applied.
+- **10 fields per page:** the "Missing values by column" table and the preview
+  show 10 columns at a time, with First / Previous / Next / Last buttons.
 - **Download:** requires an account. CSV (UTF-8 with BOM so Excel shows accents
   correctly) or Excel (with a second sheet holding the missing-value report).
-  Downloads always contain every row.
+  Downloads always contain every row. Before it starts, a confirmation shows
+  rows × fields, the estimated wait and the total charge (see
+  [PRICING.md](PRICING.md) → Estimates and confirmations).
 
 ## 5. "Is there enough data?"
 

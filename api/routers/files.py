@@ -6,7 +6,8 @@ Flat-file endpoints: analyze (guest) and download (signed in).
                                  * a cleaning report per group
                                  * a preview of the cleaned data (first rows)
                                  * a sample-size snapshot
-                                 * the runtime-based price to download
+                                 * the runtime-based price to download, and per table an
+                                   estimate of the wait (CSV / Excel) from rows × fields
     POST /api/files/download   SIGNED IN — upload the same files again and
                                receive the cleaned file (CSV or Excel).
 
@@ -36,7 +37,7 @@ from api.core.security import get_current_account
 from api.services import account_store
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import load_uploads, parse_column_actions, run_pipeline
-from api.services.pricing import runtime_cost
+from api.services.pricing import download_estimate, runtime_cost
 
 router = APIRouter(prefix="/files")
 
@@ -64,6 +65,11 @@ async def analyze_files(
                 "label": g.label,
                 "report": g.report.to_dict(),
                 "sample_size": g.sample_size,
+                # Wait + charge for downloading this table, shown in the
+                # confirmation before the download starts.
+                "download_estimate": download_estimate(
+                    result.total_runtime_seconds, total_rows, len(g.cleaned.columns)
+                ),
                 "preview": {
                     "columns": [str(c) for c in g.cleaned.columns],
                     "rows": dataframe_to_records(g.cleaned, limit=limit),
@@ -89,6 +95,9 @@ async def download_cleaned(
     missing_strategy: Annotated[Strategy, Form()] = "keep",
     file_format: Annotated[Literal["csv", "xlsx"], Form()] = "csv",
     column_actions: Annotated[str, Form()] = "{}",
+    # The amount the client saw and confirmed (from download_estimate). The
+    # charge never goes above it, even if this run takes a little longer.
+    confirmed_amount_usd: Annotated[float | None, Form(ge=0)] = None,
 ):
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions))
@@ -99,6 +108,9 @@ async def download_cleaned(
 
     # Record the billable runtime (metadata only — the data is not stored).
     cost = runtime_cost(result.total_runtime_seconds)
+    if confirmed_amount_usd is not None:
+        # Safeguard: never charge more than the total the client confirmed.
+        cost["amount_usd"] = min(cost["amount_usd"], round(confirmed_amount_usd, 2))
     await account_store.record_usage(
         account_id=account["sub"],
         dataset_name=group.label,
