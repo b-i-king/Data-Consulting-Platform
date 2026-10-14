@@ -16,13 +16,6 @@ from api.services import locations, validation
 from api.services.intake import COMPANY_SIZE_CODES, validate_industry
 
 
-class SubscriptionIn(BaseModel):
-    """The subscription chosen at signup (placeholder until payments)."""
-
-    plan: Literal["all_tools"]
-    interval: Literal["month", "year"]
-
-
 class TeamMemberIn(BaseModel):
     """A colleague a business owner wants to add to their team."""
 
@@ -82,8 +75,6 @@ class SignupIn(BaseModel):
     industry_other: str | None = Field(default=None, max_length=120)
     # "I'd like a consultant to do this for me" -> assigned to the default consultant.
     wants_consultant: bool = False
-    # Subscription choice: {"plan": "all_tools", "interval": "month" | "year"}.
-    subscription: SubscriptionIn | None = None
     # Only consultants (CONSULTANT_EMAILS) send this; see api/services/consultants.py.
     access_code: str | None = Field(default=None, max_length=200)
 
@@ -179,9 +170,6 @@ class AccountOut(BaseModel):
     role: Literal["client", "consultant"] = "client"
     wants_consultant: bool = False
     consultant_name: str | None = None    # the assigned consultant's first name
-    subscription_plan: str | None = None
-    subscription_interval: str | None = None
-    subscription_status: str | None = None
 
 
 class AuthOut(BaseModel):
@@ -203,7 +191,25 @@ class AddServiceIn(BaseModel):
     service_id: str
 
 
-class CancelSubscriptionIn(BaseModel):
-    """Cancel anytime: no reason required (an optional note helps us improve)."""
+class CheckoutIn(BaseModel):
+    """Subscribe to (or change) a package: the tools picked, billed monthly or yearly.
+    ["all_tools"] = the bundle. Data Cleaning is always added; AI needs Data Engineering."""
 
-    note: str | None = Field(default=None, max_length=500)
+    plan_ids: list[str] = Field(min_length=1, max_length=10)
+    interval: Literal["month", "year"]
+
+
+class PriceIn(BaseModel):
+    """Price a package before subscribing (the selector's running total)."""
+
+    plan_ids: list[str] = Field(default_factory=list, max_length=10)
+    interval: Literal["month", "year"] = "month"
+
+
+class ConsultingHoursIn(BaseModel):
+    """Prepay consulting hours (after the free 30-minute consultation)."""
+
+    hours: int = Field(ge=1, le=40)
+    service_id: str | None = Field(default=None, max_length=60)
+
+

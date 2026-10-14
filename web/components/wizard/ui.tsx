@@ -145,7 +145,7 @@ export function ConsultantCta({ bookingUrl, children }: { bookingUrl: string; ch
           rel="noopener noreferrer"
           className="shrink-0 rounded-full bg-brand px-5 py-2 text-center text-sm font-semibold text-on-brand hover:bg-brand-strong"
         >
-          Book a free consultation
+          Book a free 30-minute consultation
         </a>
       </div>
     </div>

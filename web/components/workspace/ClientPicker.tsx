@@ -2,7 +2,8 @@
 //
 // Shown at the top of the workspace's left pane, in lavender, only for
 // consultants. The list is GET /api/consultant/clients (only the clients
-// assigned to this consultant). Choosing one makes every signed-in request
+// assigned to this consultant), in a searchable dropdown: type part of a
+// business name, a person's name or an email. Choosing one makes every signed-in request
 // carry X-Acting-As, so the workspace shows THAT client's plan, and downloads
 // are billed to them. "My own workspace" is the consultant's own account,
 // with every service on — handy for testing.
@@ -12,12 +13,13 @@
 
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { addClient } from "@/lib/api";
 import type { AccountType, ConsultantClient, Industry, IntakeOptions, Location } from "@/lib/types";
 import { capitalizeFirst, companyNameError, emailError, personNameError } from "@/lib/validation";
 import LocationPicker from "@/components/auth/LocationPicker";
 import IndustryPicker from "@/components/wizard/IndustryPicker";
+import SearchSelect from "@/components/ui/SearchSelect";
 import { Button, ErrorBox } from "@/components/wizard/ui";
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-consultant";
@@ -28,41 +30,24 @@ export default function ClientPicker(props: {
   onChoose: (id: string | null) => void;
   onAddClient: () => void;
 }) {
-  const [query, setQuery] = useState("");
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q
-      ? props.clients.filter((c) => `${c.label} ${c.person} ${c.email}`.toLowerCase().includes(q))
-      : props.clients;
-  }, [props.clients, query]);
   const current = props.clients.find((c) => c.id === props.actingId);
 
   return (
     <div className="mb-3 rounded-2xl border border-consultant/40 bg-consultant-soft p-3">
-      <label className="block space-y-1 text-xs font-semibold uppercase tracking-wide text-consultant">
-        <span>Working on</span>
-        {props.clients.length > 8 && (
-          <input
-            className={`${field} normal-case`}
-            placeholder="Search clients…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        )}
-        <select
-          className={`${field} font-normal normal-case tracking-normal text-ink`}
-          value={props.actingId ?? ""}
-          onChange={(e) => props.onChoose(e.target.value || null)}
-        >
-          <option value="">Choose a business or person…</option>
-          {matches.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-              {c.company_name ? ` — ${c.person}` : ""}
-            </option>
-          ))}
-        </select>
-      </label>
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-consultant">Working on</p>
+      <SearchSelect
+        label="Working on"
+        accent="consultant"
+        placeholder="Choose a business or person…"
+        value={props.actingId}
+        onChange={props.onChoose}
+        options={props.clients.map((c) => ({
+          value: c.id,
+          label: c.label,
+          detail: c.company_name ? `${c.person} · ${c.email}` : c.email,
+          keywords: `${c.person} ${c.email} ${c.location ?? ""} ${c.industry_other ?? ""}`,
+        }))}
+      />
       <p className="mt-1.5 text-xs text-ink-muted">
         {current
           ? `${current.person} · ${current.email}`

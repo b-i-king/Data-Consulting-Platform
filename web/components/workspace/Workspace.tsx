@@ -29,12 +29,14 @@
 // X-Acting-As, and the server checks the client is assigned to this consultant.
 // "Book a call" prompts are hidden for consultants.
 //
-// PLAN BOX (bottom of the left pane): the "All tools" subscription, if any,
-// with "Cancel anytime".
+// PLAN & BILLING (💳, bottom of the left pane): plans (monthly / yearly via
+// Stripe Checkout), "Manage billing · cancel anytime", the free 30-minute
+// consultation and prepaid consulting hours — components/billing/BillingPanel.tsx.
+// Coming back from Stripe (?checkout=success) shows a thank-you note.
 //
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
-// Until payments exist, "Add to my plan" unlocks a service right away, after
-// a confirmation showing its price and the plan's new total. Downloads also
+// Tools unlock only through a package: "Add to my package" opens Plan &
+// billing with that tool ticked (the package selector shows the new total). Downloads also
 // ask first, with the estimated wait and charge (DownloadConfirm.tsx).
 
 "use client";
@@ -43,9 +45,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  addMyService,
   analyzeFiles,
-  cancelSubscription,
   downloadCleaned,
   getIntakeOptions,
   getMyClients,
@@ -58,17 +58,18 @@ import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
 import type { ConsultantClient, IntakeOptions } from "@/lib/types";
 import ClientPicker, { AddClientForm } from "./ClientPicker";
+import BillingPanel from "@/components/billing/BillingPanel";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
-import { AddServiceConfirm } from "@/components/wizard/ServiceConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
+const BILLING = "__billing"; // the "Plan & billing" page (not a service)
 const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard)
 // The skill each built-in view already shows, so it isn't listed twice in the menu.
 const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
@@ -81,11 +82,14 @@ const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
 
 /** Plain-English "how do I get this?" for a locked service. */
 function howToGet(s: Service): string {
-  if (s.pricing_model === "consultation") return "Starts with a free call with a consultant, then a quote for the work.";
-  if (s.pricing_model === "early_access") return "Free while in early access — add it to try it.";
-  if (s.pricing_model === "package")
-    return `A one-time package from ${fmtUsd(s.starting_price_usd)}. Add it to your plan; online checkout is coming soon, so for now we'll confirm the price with you before any charge.`;
-  return "Included with every account.";
+  if (s.id === CLEANING) return "Included with every account.";
+  if (s.tool_monthly_usd != null) {
+    const needs = s.tool_requires.length ? " Needs Data Engineering in your package." : "";
+    const soon = s.available ? "" : " Free until it launches.";
+    return `Add it to your package: ${fmtUsd(s.tool_monthly_usd)}/month or ${fmtUsd(s.tool_annual_usd ?? 0)}/year, cancel anytime.${needs}${soon} Rather have it done for you? ${s.consultation.text}.`;
+  }
+  if (s.pricing_model === "hourly") return `${s.consultation.text} — buy hours in Plan & billing, then book a time.`;
+  return `${s.consultation.text}.`;
 }
 
 function ServiceInfo({ service, small = false }: { service: Service; small?: boolean }) {
@@ -129,7 +133,7 @@ export default function Workspace() {
   const [clients, setClients] = useState<ConsultantClient[]>([]);
   const [actingId, setActingId] = useState<string | null>(null);
   const [addingClient, setAddingClient] = useState(false);
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [returnNote, setReturnNote] = useState<string | null>(null); // after paying at Stripe
 
   // Skill menu: every skill, the choice per service, and results kept for this visit.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -160,6 +164,15 @@ export default function Workspace() {
     getSkills()
       .then(setSkills)
       .catch(() => {});
+    // Back from Stripe: say what happened (the webhook may take a few seconds).
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("checkout") === "success" || q.get("consulting") === "success") {
+      setReturnNote("Thank you! Your payment went through — it can take a few seconds to show here.");
+      setSection(BILLING);
+    } else if (q.get("checkout") === "canceled" || q.get("consulting") === "canceled") {
+      setReturnNote("Payment canceled — nothing was charged.");
+      setSection(BILLING);
+    }
     getIntakeOptions()
       .then((o) => {
         setBookingUrl(o.booking_url);
@@ -190,15 +203,10 @@ export default function Workspace() {
     }
   }
 
-  async function cancelPlan() {
-    if (!session) return;
-    setConfirmCancel(false);
-    try {
-      setPlan(await cancelSubscription(session.token));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "We couldn't cancel the plan.");
-    }
+  async function reloadPlan() {
+    if (session) setPlan(await getMyServices(session.token));
   }
+
 
   // Left-pane order: Dashboard (if on the plan) or Data Cleaning first, then the
   // rest of the plan, then everything not on the plan (grayed out).
@@ -272,22 +280,15 @@ export default function Workspace() {
   }
 
 
-  // Every "Add" button opens a confirmation with the price first (pendingAdd);
-  // only "Add" in that box calls add().
-  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  // Every "Add" button opens Plan & billing with that tool already ticked in the
+  // package selector: tools unlock only through a package (entitlements.py).
+  const [suggestTool, setSuggestTool] = useState<string | null>(null);
   const [askDownload, setAskDownload] = useState<DownloadFormat | null>(null);
 
-  async function add(id: string) {
-    if (!session) return;
-    setPendingAdd(null);
-    setError(null);
-    try {
-      setPlan(await addMyService(session.token, id));
-      setSection(id);
-      setInfoOpen(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "We couldn't add that service.");
-    }
+  function add(id: string) {
+    setSuggestTool(id);
+    setInfoOpen(null);
+    setSection(BILLING);
   }
 
   async function download(format: DownloadFormat) {
@@ -333,8 +334,6 @@ export default function Workspace() {
   const isConsultant = session.account.role === "consultant";
   // Whose workspace is on screen: the client a consultant is working on, or me.
   const who = plan?.account ?? session.account;
-  const sub = plan?.subscription;
-  const subPlan = plan?.subscriptions?.find((s) => s.id === sub?.plan);
 
   const item = (s: Service, isLocked: boolean) => (
     <li key={s.id} className="shrink-0 lg:shrink">
@@ -405,38 +404,16 @@ export default function Workspace() {
             {locked.map((s) => item(s, true))}
           </ul>
         </nav>
-        {subPlan && sub?.status && (
-          <div className="mx-1 mt-4 hidden rounded-xl border border-line bg-surface p-3 text-xs lg:block">
-            <p className="font-semibold">
-              {subPlan.name} plan · {sub.interval === "year" ? "yearly" : "monthly"}
-            </p>
-            {sub.status === "active" ? (
-              <>
-                <p className="text-ink-muted">Every available service is on. No contract.</p>
-                {plan?.can_add && (
-                  <button type="button" onClick={() => setConfirmCancel(true)} className="mt-1 text-ink-muted underline hover:text-bad">
-                    Cancel anytime
-                  </button>
-                )}
-              </>
-            ) : (
-              <p className="text-ink-muted">Canceled — services you added stay on your plan.</p>
-            )}
-          </div>
-        )}
-        {confirmCancel && subPlan && (
-          <ConfirmDialog
-            title={`Cancel the ${subPlan.name} plan?`}
-            confirmLabel="Cancel the plan"
-            onConfirm={cancelPlan}
-            onCancel={() => setConfirmCancel(false)}
-          >
-            <p>
-              No fees and no questions. Services you added one by one stay on your plan; the rest are grayed out again.
-              Your downloaded files are yours to keep.
-            </p>
-          </ConfirmDialog>
-        )}
+        <button
+          type="button"
+          onClick={() => setSection(BILLING)}
+          aria-current={current === BILLING ? "page" : undefined}
+          className={`mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
+            current === BILLING ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+          }`}
+        >
+          <span aria-hidden>💳</span> Plan &amp; billing
+        </button>
         <button type="button" onClick={signOut} className="mt-4 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
           Sign out
         </button>
@@ -446,6 +423,11 @@ export default function Workspace() {
       <section className="min-w-0 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">
+            {current === BILLING && (
+              <>
+                <span aria-hidden>💳</span> Plan &amp; billing
+              </>
+            )}
             {currentService && (
               <>
                 <span aria-hidden>{categoryEmoji(currentService.id)}</span> {navName(currentService)}
@@ -468,6 +450,12 @@ export default function Workspace() {
             <span className="mr-2 rounded-full bg-consultant px-2 py-0.5 text-xs font-semibold text-on-consultant">Consultant</span>
             You&apos;re working on <strong>{who.company_name ?? `${who.first_name} ${who.last_name}`}</strong>
             {who.company_name && ` (${who.first_name} ${who.last_name})`}. Downloads are billed to them.
+            {plan.interests.length > 0 && (
+              <span className="mt-1 block text-xs text-ink-muted">
+                Asked for help with:{" "}
+                {plan.interests.map((id) => plan.services.find((s) => s.id === id)?.name ?? id).join(", ")}
+              </span>
+            )}
           </p>
         )}
         {isConsultant && addingClient && (
@@ -482,32 +470,44 @@ export default function Workspace() {
           />
         )}
         <ErrorBox message={error} />
-        {pendingAdd && plan?.services.find((s) => s.id === pendingAdd) && (
-          <AddServiceConfirm
-            service={plan.services.find((s) => s.id === pendingAdd)!}
-            currentIds={plan.active}
-            runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
-            onConfirm={() => add(pendingAdd)}
-            onCancel={() => setPendingAdd(null)}
-          />
-        )}
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
+
+        {current === BILLING && plan && (
+          <>
+            {returnNote && (
+              <p role="status" className="rounded-2xl border border-good/40 bg-good/10 p-3 text-sm">
+                {returnNote}
+              </p>
+            )}
+            <BillingPanel
+              key={suggestTool ?? "billing"}
+              token={session.token}
+              plan={plan}
+              bookingUrl={bookingUrl}
+              onChanged={reloadPlan}
+              suggestTool={suggestTool}
+            />
+          </>
+        )}
 
         {currentService && !currentService.active ? (
           // A grayed-out service: what it adds, and how to get it.
           <Card>
             <ServiceInfo service={currentService} />
             <div className="mt-4 flex flex-wrap gap-3">
-              {plan?.can_add ? (
-                <Button onClick={() => setPendingAdd(currentService.id)}>Add {currentService.name} to my plan</Button>
+              {!plan?.can_add ? (
+                <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this tool.</p>
+              ) : currentService.tool_monthly_usd != null ? (
+                <Button onClick={() => add(currentService.id)}>Add {navName(currentService)} to my package</Button>
               ) : (
-                <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this service.</p>
+                <Button onClick={() => setSection(BILLING)}>Buy consulting hours</Button>
               )}
-              {currentService.pricing_model === "consultation" && !isConsultant && (
+              {!isConsultant && currentService.consultation.free_minutes > 0 && (
                 <a href={bookingUrl} target="_blank" rel="noreferrer" className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
-                  Book a free call
+                  Book a free {currentService.consultation.free_minutes}-minute call
                 </a>
               )}
+
             </div>
           </Card>
         ) : currentService && !analysis ? (
@@ -595,6 +595,7 @@ export default function Workspace() {
                     tableLabel={group.label}
                     format={askDownload}
                     estimate={group.download_estimate}
+                    included={plan?.downloads_included}
                     onConfirm={() => download(askDownload)}
                     onCancel={() => setAskDownload(null)}
                   />
@@ -632,7 +633,7 @@ export default function Workspace() {
                 columns={group.preview.columns}
                 services={plan.services}
                 selectedServices={plan.active}
-                onAddService={setPendingAdd}
+                onAddService={add}
                 fixedSkill={choice}
                 autoRun
                 initialResult={results[`${group.group_id}:${choice}`] ?? null}

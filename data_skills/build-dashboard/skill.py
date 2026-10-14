@@ -54,7 +54,7 @@ from data_skills._core import (
 ROWS = "__rows__"          # every row counted ("Transactions")
 TOTAL = "__total__"        # the value column over all rows ("Total amount")
 MAX_DAILY_POINTS = 400     # skip day-over-day charts on windows longer than this
-MAX_FILTERS = 4            # filter dropdowns offered
+MAX_FILTERS = 9            # filter dropdowns offered (the site lays them out in rows of up to 3)
 MAX_FILTER_VALUES = 12     # values per filter dropdown (most common first)
 
 SKILL = SkillSpec(
@@ -72,8 +72,8 @@ SKILL = SkillSpec(
         "top_kpis": Param("int", 4, "How many KPIs (types) to show, 1–6"),
         "filters": Param("json", None, 'Only use matching rows, e.g. {"customer_type": "Wholesale"} '
                                        'or {"age_group": ["25–34", "35–44"]}'),
-        "filter_columns": Param("columns", None, "Columns offered as filters (default: customer and "
-                                                "demographic columns, auto-detected)"),
+        "filter_columns": Param("columns", None, "Columns offered as filters, up to 9 (default: customer, "
+                                                "demographic and place columns, auto-detected)"),
         "value_columns": Param("columns", None, "KPIs when there is no type column: number columns to chart "
                                                "(default: up to 3 detected)"),
         "dimension_column": Param("column", None, "Category column for a breakdown (e.g. product)"),
@@ -212,6 +212,8 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
     elif not value_columns:
         kpi_column = find_kpi_column(data, exclude={date_col})
     if filter_columns:
+        if len(filter_columns) > MAX_FILTERS:
+            raise SkillInputError(f"Choose up to {MAX_FILTERS} filters.")
         for c in filter_columns:
             require_column(data, c, "filter", [])
     else:

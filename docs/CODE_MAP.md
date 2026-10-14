@@ -99,8 +99,10 @@ services the client chose are offered; the rest are badges from
 | `api/services/sample_size.py` | Adequacy snapshot | Adding rules of thumb |
 | `api/services/pricing.py` | Services & prices | Changing packages/prices |
 | `api/services/intake.py` | Questionnaire choices | Launching a connector |
-| `api/services/account_store.py` | Account/usage storage | Changing tables |
-| `db/schema.sql` | Database tables | Any table change (also update `account_store.py`) |
+| `api/services/account_store.py` | Account, consultant, subscription and usage storage | Changing tables |
+| `db/schema.sql` | Database tables ([DATABASE.md](DATABASE.md)) | Any table change (also update `account_store.py` and DATABASE.md) |
+| `api/services/billing.py` + `api/routers/billing.py` | Stripe: plans, Checkout, webhook, portal, consulting hours | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
+| `api/services/consultants.py` + `api/routers/consultants.py` | Consultants, their clients, the "acting as" access rule | Consultant features |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
 | `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its README.md in step) |
@@ -110,11 +112,14 @@ services the client chose are offered; the rest are badges from
 | `web/components/explore/*.tsx` | Dashboard + skills panel | Changing the Explore UI |
 | `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
 | `scripts/sync_skill_docs.py` | Regenerates each README.md "Run it" section | After changing a skill's options |
+| `scripts/sync_stripe.py` | Creates/updates Stripe products and prices from `pricing.py` | After changing a plan or price |
+| `web/components/billing/` | Build-your-own package selector and Plan & billing panel | Billing screens |
+| `web/components/ui/SearchSelect.tsx` | Searchable dropdown (business size, "Working on") | Adding another searchable picker |
 | `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |
 | `web/components/explore/LockedService.tsx` | Locked-service badges | Changing how services unlock skills |
 | `web/components/explore/TimeBar.tsx` | Floating range + comparison panels, short labels | Changing the time controls |
 | `web/components/workspace/Workspace.tsx` | Signed-in workspace and left pane | Changing the workspace |
-| `api/services/entitlements.py` | Services on an account's plan | Adding payments (unlock on payment) |
+| `api/services/entitlements.py` | Services on an account's plan (one-off services, live subscriptions, consultants) | Changing who gets what |
 | `api/services/validation.py` + `web/lib/validation.ts` | Signup rules (names, business names, emails) — server + browser copies | Changing what the form accepts (change both) |
 | `api/services/locations.py` + `api/data/locations.json` | City search for the location picker | Rebuild the list with `scripts/build_locations.py` |
 | `web/components/auth/LocationPicker.tsx` | Type-ahead city picker (signup only) | Changing the location field |

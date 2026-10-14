@@ -6,6 +6,10 @@
 // The services chosen on "Your needs" are saved on the new account's plan,
 // so the signed-in workspace (/app) opens them.
 //
+// If a plan was picked on "Your needs", a card offers to start it here
+// (Stripe Checkout; in test mode it switches on at once). Download first:
+// paying at Stripe leaves this page, and files live only in this tab.
+//
 // Once signed in, each dataset group gets CSV and Excel download buttons,
 // with the estimated wait and charge. Clicking one first asks for
 // confirmation (DownloadConfirm.tsx: rows × fields, time, total to pay);
@@ -15,13 +19,14 @@
 
 "use client";
 
-import { useState } from "react";
-import { downloadCleaned } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { downloadCleaned, getMyServices, startCheckout } from "@/lib/api";
 import AuthForm from "@/components/auth/AuthForm";
 import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, Industry, SubscriptionChoice } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, Industry, Subscription, SubscriptionChoice } from "@/lib/types";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
+import { packageTotal } from "@/components/billing/PackageBuilder";
 import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 
 
@@ -29,7 +34,8 @@ export default function StepAccount(props: {
   defaultType: AccountType;
   industry: Industry;
   serviceIds: string[]; // chosen on "Your needs"; saved on the new account's plan
-  subscription: SubscriptionChoice | null; // "All tools" plan picked on "Your needs"
+  subscription: SubscriptionChoice | null; // plan picked on "Your needs" (started on this step)
+  plans: Subscription[];
   wantsConsultant: boolean; // "do it for me" picked on "Your needs"
   consultantName: string | null;
   session: Session | null;
@@ -42,13 +48,12 @@ export default function StepAccount(props: {
   return (
     <section>
       {props.session ? (
-        <DownloadPanel {...props} session={props.session} />
+        <DownloadPanel {...props} session={props.session} subscription={props.subscription} plans={props.plans} />
       ) : (
         <AuthForm
           defaultType={props.defaultType}
           industry={props.industry}
           serviceIds={props.serviceIds}
-          subscription={props.subscription}
           wantsConsultant={props.wantsConsultant}
           consultantName={props.consultantName}
           onSignedIn={props.onSignedIn}
@@ -68,7 +73,45 @@ function DownloadPanel(props: {
   onSignOut: () => void;
   input: CleaningInput;
   analysis: AnalyzeResponse;
+  subscription: SubscriptionChoice | null;
+  plans: Subscription[];
 }) {
+  // Downloads are free when the account's plan includes Data Cleaning.
+  const [included, setIncluded] = useState(false);
+  const [planNote, setPlanNote] = useState<string | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planStarted, setPlanStarted] = useState(false);
+  const chosen = props.subscription && props.subscription.plans.length ? props.subscription : null;
+  const chosenNames = chosen ? chosen.plans.map((id) => props.plans.find((p) => p.id === id)?.name).join(" + ") : "";
+  useEffect(() => {
+    getMyServices(props.session.token)
+      .then((m) => {
+        setIncluded(m.downloads_included);
+        setPlanStarted(m.subscriptions.length > 0);
+      })
+      .catch(() => {});
+  }, [props.session.token]);
+
+  async function startPlan() {
+    if (!props.subscription) return;
+    setPlanBusy(true);
+    setPlanNote(null);
+    try {
+      const res = await startCheckout(props.session.token, props.subscription.plans, props.subscription.interval);
+      if (res.url) {
+        window.location.assign(res.url); // Stripe's secure page; it returns to the workspace
+        return;
+      }
+      const m = await getMyServices(props.session.token);
+      setIncluded(m.downloads_included);
+      setPlanStarted(true);
+      setPlanNote("Your package is on (test mode — nothing was charged).");
+    } catch (e) {
+      setPlanNote(e instanceof Error ? e.message : "We couldn't start the plan.");
+    } finally {
+      setPlanBusy(false);
+    }
+  }
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [charged, setCharged] = useState<string | null>(null);
@@ -105,6 +148,26 @@ function DownloadPanel(props: {
         title={`You're all set, ${account.first_name}.`}
         subtitle="Download your cleaned data below. Processing is billed by the minute."
       />
+      {chosen && props.subscription && !planStarted && (
+        <Card className="mb-4 border-brand/40">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm">
+              <strong>
+                Start your package — {chosenNames} ({chosen.interval === "month" ? "monthly" : "yearly"}):{" "}
+                {fmtUsd(packageTotal(props.plans, chosen.plans, chosen.interval))}/{chosen.interval === "month" ? "month" : "year"}
+              </strong>
+              <span className="block text-xs text-ink-muted">
+                Cancel anytime. Download your files first — paying opens Stripe&apos;s secure page, and your files stay
+                only in this tab.
+              </span>
+            </div>
+            <Button onClick={startPlan} disabled={planBusy}>
+              {planBusy ? "One moment…" : "Start my package"}
+            </Button>
+          </div>
+        </Card>
+      )}
+      {planNote && <p className="mb-4 text-sm text-good" role="status">{planNote}</p>}
       <div className="space-y-3">
         {props.analysis.groups.map((g) => (
           <Card key={g.group_id} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -141,6 +204,7 @@ function DownloadPanel(props: {
           tableLabel={askingGroup.label}
           format={asking.format}
           estimate={askingGroup.download_estimate}
+          included={included}
           onConfirm={() => download(asking.groupId, asking.format)}
           onCancel={() => setAsking(null)}
         />

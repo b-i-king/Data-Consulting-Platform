@@ -19,9 +19,11 @@ coding, so **understanding the code matters as much as the code itself**.
   - `api/services/cleaning.py` or `api/services/transforms.py` → update `data_skills/data-cleaning/README.md` and `docs/DATA_CLEANING.md`
   - `api/services/categorizer.py` → update `data_skills/flat-file-intake/README.md` and `docs/DATA_CLEANING.md`
   - `api/services/sample_size.py` → update `data_skills/sample-size/README.md`
-  - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)
+  - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids);
+    plan or price changes also need `python scripts/sync_stripe.py` (Stripe products)
+  - `api/services/billing.py` or `api/routers/billing.py` → update `docs/PAYMENTS.md`
   - any API response → update `web/lib/types.ts`
-  - any table → update `db/schema.sql` and `api/services/account_store.py`
+  - any table → update `db/schema.sql`, `api/services/account_store.py` and `docs/DATABASE.md` (ER diagram too)
   - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
   - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`

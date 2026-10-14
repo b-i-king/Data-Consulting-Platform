@@ -6,8 +6,10 @@
 // the estimated total they can expect to pay.
 //
 // Two ways to work, above the services:
-//   * ALL TOOLS — one subscription for every available service, billed
-//     monthly or yearly (yearly is cheaper). Cancel anytime.
+//   * BUILD YOUR OWN PACKAGE — pick tools (each has a fixed monthly / yearly
+//     price; the total is the sum) or the All tools bundle; cancel anytime
+//     (components/billing/PackageBuilder.tsx). It starts after signup, on the
+//     download step (Stripe Checkout).
 //   * DONE FOR YOU — a consultant (lavender card) signs in and does the work.
 
 "use client";
@@ -17,6 +19,7 @@ import { getQuote } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
 import { fmtUsd } from "@/lib/format";
 import type { BillingInterval, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
+import PackageBuilder, { packageTotal } from "@/components/billing/PackageBuilder";
 import { QuoteSummary } from "./ServiceConfirm";
 import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader, TotalRow } from "./ui";
 
@@ -30,16 +33,18 @@ export default function StepServices(props: {
   subscription: SubscriptionChoice | null;
   onSubscription: (s: SubscriptionChoice | null) => void;
   consultantName: string | null;
+  consultingRate: number;
   wantsConsultant: boolean;
   onWantsConsultant: (v: boolean) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
-  const plan = props.subscriptions[0];
-  const [interval, setBilling] = useState<BillingInterval>(props.subscription?.interval ?? "month");
+  const picked = props.subscription?.plans ?? [];
+  const pickedNames = picked.map((id) => props.subscriptions.find((p) => p.id === id)?.name).filter(Boolean);
+  const [interval, setBilling] = useState<BillingInterval>(props.subscription?.interval ?? "year");
   const pickInterval = (i: BillingInterval) => {
     setBilling(i);
-    if (props.subscription) props.onSubscription({ plan: "all_tools", interval: i });
+    if (props.subscription) props.onSubscription({ ...props.subscription, interval: i });
   };
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,81 +73,55 @@ export default function StepServices(props: {
         subtitle="Choose as many as you like — or none. Your cleaned data is ready to download either way."
       />
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2">
-        {plan && (
-          <div
-            className={`rounded-2xl border p-4 shadow-[var(--shadow-card)] ${
-              props.subscription ? "border-brand bg-brand-soft" : "border-line bg-surface"
-            }`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <span className="font-semibold">{plan.name} plan</span>
-              <div role="radiogroup" aria-label="Billing" className="flex gap-1 rounded-full border border-line bg-surface p-0.5 text-xs">
-                {(["month", "year"] as const).map((i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    role="radio"
-                    aria-checked={interval === i}
-                    onClick={() => pickInterval(i)}
-                    className={`rounded-full px-2.5 py-1 ${interval === i ? "bg-brand font-semibold text-on-brand" : "text-ink-muted"}`}
-                  >
-                    {i === "month" ? "Monthly" : "Yearly"}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p className="mt-1 text-sm text-ink-muted">{plan.description}</p>
-            <p className="mt-3 font-mono text-lg font-semibold">
-              {interval === "month" ? `${fmtUsd(plan.monthly_usd)}/month` : `${fmtUsd(plan.annual_usd)}/year`}
-            </p>
-            <p className="text-xs text-ink-muted">
-              {interval === "year"
-                ? `${fmtUsd(plan.annual_per_month_usd)}/month · save ${fmtUsd(plan.annual_savings_usd)} (${plan.annual_savings_pct}%)`
-                : `or ${fmtUsd(plan.annual_usd)}/year — save ${plan.annual_savings_pct}%`}{" "}
-              · Cancel anytime
-            </p>
-            <Button
-              variant={props.subscription ? "secondary" : "primary"}
-              className="mt-3"
-              onClick={() => props.onSubscription(props.subscription ? null : { plan: "all_tools", interval })}
+      <div className="mb-8">
+        <PackageBuilder
+          plans={props.subscriptions}
+          interval={interval}
+          onInterval={pickInterval}
+          value={picked}
+          onChange={(plans) => props.onSubscription(plans.length ? { plans, interval } : null)}
+          consultantSlot={
+            // "Done for you": wide, in lavender, right under All tools.
+            <div
+              className={`flex flex-col gap-3 rounded-2xl border-2 p-5 shadow-[var(--shadow-card)] sm:flex-row sm:items-center sm:justify-between ${
+                props.wantsConsultant ? "border-consultant bg-consultant-soft" : "border-consultant/40 bg-surface"
+              }`}
             >
-              {props.subscription ? "Remove plan" : `Choose ${interval === "month" ? "monthly" : "yearly"}`}
-            </Button>
-          </div>
-        )}
-        <div
-          className={`rounded-2xl border p-4 shadow-[var(--shadow-card)] ${
-            props.wantsConsultant ? "border-consultant bg-consultant-soft" : "border-consultant/40 bg-surface"
-          }`}
-        >
-          <span className="font-semibold">Done for you</span>
-          <p className="mt-1 text-sm text-ink-muted">
-            Rather not learn a new platform? {props.consultantName ?? "A consultant"} signs in to your account and does the
-            cleaning, dashboards and analysis for you — every tool included. Priced after a free discovery call.
-          </p>
-          <button
-            type="button"
-            aria-pressed={props.wantsConsultant}
-            onClick={() => props.onWantsConsultant(!props.wantsConsultant)}
-            className={`mt-3 rounded-full px-5 py-2 text-sm font-semibold ${
-              props.wantsConsultant ? "border border-line bg-surface" : "bg-consultant text-on-consultant hover:opacity-90"
-            }`}
-          >
-            {props.wantsConsultant ? "I'll do it myself" : `Have ${props.consultantName ?? "a consultant"} do it`}
-          </button>
-        </div>
+              <div>
+                <span className="text-lg font-semibold">Done for you</span>
+                <p className="mt-1 text-sm text-ink-muted">
+                  Rather not learn a new platform? {props.consultantName ?? "A consultant"} signs in to your account and
+                  does the cleaning, dashboards and analysis for you — every tool included. Start with a free 30-minute
+                  consultation; after that, consulting is {fmtUsd(props.consultingRate)}/hour.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-pressed={props.wantsConsultant}
+                onClick={() => props.onWantsConsultant(!props.wantsConsultant)}
+                className={`shrink-0 rounded-full px-5 py-2 text-sm font-semibold ${
+                  props.wantsConsultant ? "border border-line bg-surface" : "bg-consultant text-on-consultant hover:opacity-90"
+                }`}
+              >
+                {props.wantsConsultant ? "I'll do it myself" : `Have ${props.consultantName ?? "a consultant"} do it`}
+              </button>
+            </div>
+          }
+        />
       </div>
 
-      <h2 className="mb-2 font-semibold">Or pick individual services</h2>
+      <h2 className="font-semibold">Projects with a consultant (optional)</h2>
+      <p className="mb-2 text-sm text-ink-muted">
+        One-time work done for you — tell us what you&apos;d like help with. Priced after your free 30-minute consultation.
+      </p>
       <div className="grid gap-3 sm:grid-cols-2">
         {props.services.map((s) => {
           const on = props.selected.includes(s.id);
           const price =
             s.pricing_model === "runtime"
               ? "Pay per minute of processing"
-              : s.pricing_model === "consultation"
-                ? "Free discovery call"
+              : s.pricing_model === "consultation" || s.pricing_model === "hourly"
+                ? s.consultation.text
                 : s.pricing_model === "early_access"
                   ? "Early access · no charge"
                   : `From ${fmtUsd(s.starting_price_usd)}`;
@@ -191,6 +170,10 @@ export default function StepServices(props: {
                 {price}
                 {s.id === "data_cleaning" && " · included"}
               </p>
+              {/* Every service can start with a consultant: the free 30 minutes, then hourly. */}
+              {s.pricing_model !== "consultation" && s.pricing_model !== "hourly" && s.consultation.text && (
+                <p className="mt-0.5 text-xs text-ink-muted">{s.consultation.text}</p>
+              )}
             </button>
           );
         })}
@@ -247,24 +230,24 @@ export default function StepServices(props: {
           onCancel={() => setConfirming(false)}
         >
           <p>Here&apos;s what you&apos;ve chosen and what you can expect to pay:</p>
-          {props.subscription && plan && (
+          {props.subscription && pickedNames.length > 0 && (
             <TotalRow
               strong
-              label={`${plan.name} plan (${props.subscription.interval === "month" ? "monthly" : "yearly"}, cancel anytime)`}
-              value={props.subscription.interval === "month" ? `${fmtUsd(plan.monthly_usd)}/mo` : `${fmtUsd(plan.annual_usd)}/yr`}
+              label={`Your package: ${pickedNames.join(" + ")} (${props.subscription.interval === "month" ? "monthly" : "yearly"}, cancel anytime — you'll pay after creating your account)`}
+              value={`${fmtUsd(packageTotal(props.subscriptions, picked, props.subscription.interval))}/${props.subscription.interval === "month" ? "mo" : "yr"}`}
             />
           )}
           {props.wantsConsultant && (
             <p className="rounded-xl bg-consultant-soft p-3">
-              <strong>Done for you:</strong> {props.consultantName ?? "a consultant"} will reach out to scope the work —
-              priced after a free discovery call.
+              <strong>Done for you:</strong> {props.consultantName ?? "a consultant"} will reach out for your free
+              30-minute consultation; after that, consulting is {fmtUsd(props.consultingRate)}/hour.
             </p>
           )}
           <QuoteSummary quote={quote} />
           <p className="text-xs text-ink-muted">
             Data Cleaning is charged when you download (you&apos;ll confirm that amount too). Package prices are starting
             prices — we confirm the final price before any work begins.
-            {quote.requires_consultant && " Some services start with a free call to scope the work."} Nothing is
+            {quote.requires_consultant && " Consulting starts with a free 30-minute call (Data Strategy & Discovery is paid from the first hour)."} Nothing is
             charged on this step.
           </p>
         </ConfirmDialog>

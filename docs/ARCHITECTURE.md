@@ -155,13 +155,22 @@ consultant, linked to their account; `is_default` marks who new "do it for me"
 clients go to), and on `accounts`: `wants_consultant` (boolean) and
 `consultant_id` (NULL unless `wants_consultant` is true — enforced by a CHECK).
 Clients can tick "I'd like a consultant to do this for me" at signup, or the
-consultant creates their account ("Add a client"). Consultant-managed clients,
-consultants, and "All tools" subscribers get every available service.
+consultant creates their account ("Add a client"). Consultant-managed clients
+and consultants get every available service; everyone else gets the tools in
+their subscription package (Data Cleaning is always open). Projects picked on
+"Your needs" are interest the consultant sees, not unlocks.
 Downloads a consultant makes are billed to the client (`usage_events.consultant_id`
 records who did it). **Client data is still never stored** — the consultant
 works on files the client shares, in the same in-memory way.
 
-### 6. Database optional in development
+### 6. Payments through Stripe, decided by the webhook
+
+Plans (monthly or annual) and consulting hours are paid on Stripe's own
+Checkout page; Stripe's signed webhook is the only thing that turns a plan on
+or off (`subscriptions` table). Without Stripe keys the site runs in test
+mode. Full design: [PAYMENTS.md](PAYMENTS.md); every table: [DATABASE.md](DATABASE.md).
+
+### 7. Database optional in development
 
 Without `DATABASE_URL`, accounts live in memory so you can run everything
 locally in two commands. In production, always set `DATABASE_URL`.

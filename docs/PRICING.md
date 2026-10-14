@@ -10,7 +10,7 @@ Code: `api/services/pricing.py`. Rates: environment variables (see `.env.example
 | Service | Model | Placeholder | Needs a consultant? |
 |---|---|---|---|
 | Data Cleaning | Runtime (per minute) | $0.50 / min | No — fully automated, always included |
-| Data Strategy & Discovery | Consultation | Free call, then quoted | Yes → booking link |
+| Data Strategy & Discovery | Hourly | $80 / hour from the first hour (no free call) | Yes |
 | Data Exploration & Analysis | Package | from $250 | Optional |
 | Data Visualization | Package | from $500 | Optional |
 | Data Engineering | Package | from $750 | Yes |
@@ -23,25 +23,46 @@ Each service is also a **skill category**: the skills behind it
 Clients can pick several. If any selected service needs a consultant, the quote
 includes your `BOOKING_URL`.
 
-## Subscription: the "All tools" plan (monthly or yearly)
+## Consulting: free 30 minutes, then hourly
 
-Code: `SUBSCRIPTIONS` in `api/services/pricing.py` (`subscription_catalog()` is
-sent to the site in `/api/intake/options` and `/api/accounts/services`).
+| | Price | How it's paid |
+|---|---|---|
+| First consultation (any service except Data Strategy & Discovery) | **Free, 30 minutes** | Booked through `BOOKING_URL` |
+| Consulting after that | **$80 / hour** (`CONSULTING_RATE_PER_HOUR_USD`) | Prepaid hours in Plan & billing (Stripe Checkout, price `dcp_consulting_hour`) |
+| Data Strategy & Discovery | **$80 / hour from the first hour** | Same prepaid hours (it *is* the consulting) |
+| "Done for you" (a consultant does the work) | Free 30-minute call, then hourly or a package | Hours, or a package price agreed on the call |
 
-| Plan | Monthly | Yearly | What it includes |
+Code: `consultation_terms()` and `consulting_rate()` in `pricing.py`; every
+service card shows its terms ("Free 30-minute consultation, then $80/hour").
+
+## Subscriptions: build your own package (monthly or annual)
+
+Clients pick the **tools** they need; each has a fixed monthly and annual
+price and the total is the **sum**. **All tools** is a cheaper bundle. Code:
+`SUBSCRIPTIONS`, `normalize_selection()` and `selection_price()` in
+`api/services/pricing.py`; the selector is `web/components/billing/PackageBuilder.tsx`.
+In Stripe each tool is a product with two prices, and one subscription holds
+one item per tool ([PAYMENTS.md](PAYMENTS.md)).
+
+| Tool (`id`) | Monthly | Annual | Rule |
 |---|---|---|---|
-| All tools | $49 / month | $490 / year ($40.83 / month — save $98, 17%) | Every available service and data skill unlocked |
+| Data Cleaning (`data_cleaning`) | $19 | $190 | **Base** — in every package; downloads included |
+| Data Exploration & Analysis (`data_exploration_analysis`) | $19 | $190 | |
+| Dashboards (`data_visualization`) | $19 | $190 | |
+| Data Engineering (`data_engineering`) | $39 | $390 | Managed storage when it launches |
+| Data Science & Machine Learning (`data_science_ml`) | $39 | $390 | |
+| AI (`ai`) | $29 | $290 | **Add-on: needs Data Engineering** (it answers questions from stored data); grayed out until Data Engineering is picked; **free until it launches** |
+| **All tools** (`all_tools`, bundle) | **$99** | **$990** | Every tool, AI included at launch — $65/month less than picking all six |
 
-**Placeholder prices.** Yearly = 10 × monthly ("2 months free"); change both
-numbers together. **Cancel anytime:** no contract — the workspace's plan box has
-a "Cancel anytime" link (`POST /api/accounts/subscription/cancel`). Services
-added one by one stay; the "everything" unlock ends. The choice is stored on
-the account (`subscription_plan`, `subscription_interval`, `subscription_status`)
-but **not charged yet** — Stripe subscriptions would replace this (ROADMAP → Payments).
+Examples: Data Cleaning + Dashboards = $38/month. All six tools picked
+separately = $164/month, so the selector suggests All tools ($99).
 
-**Done for you** (a consultant does the work, every tool included) is priced
-after a free discovery call, like Data Strategy & Discovery. Downloads a
-consultant makes for a client are billed to that client.
+**Placeholder prices.** Annual = 10 × monthly ("2 months free", 17% off);
+change both together, then re-run `scripts/sync_stripe.py`. **Changing tools**
+later updates the same subscription (Stripe prorates the difference).
+**Cancel anytime** in Stripe's billing portal ("Manage billing"); access runs to
+the end of the paid period. The packages in the services table above are
+one-time projects a consultant does for you.
 
 ## Runtime billing for cleaning
 
@@ -99,30 +120,28 @@ is sent with the download (`confirmed_amount_usd`), and the server records the
 smaller of that and the real runtime charge. (The re-run could, rarely, cross a
 minute boundary the analysis didn't — the client doesn't pay for that.)
 
-## Which services an account has (the workspace)
+## What unlocks a tool (the workspace)
 
-The signed-in workspace (`/app`) opens the services on the account's **plan**
-(table `account_services`, code `api/services/entitlements.py`):
+Code: `api/services/entitlements.py`.
 
-- **Data Cleaning** is always included.
-- **Every available service** for consultants, consultant-managed ("done for
-  you") clients, and active "All tools" subscribers (`entitlements.gets_everything`).
-- Services chosen in the guest questionnaire are put on the plan at signup.
-- Other services appear grayed out in the left pane, with an ⓘ explaining what
-  they add, the price, and how to get them; **Add to my plan** adds one after
-  a confirmation showing the price and new total.
-- In a business, the team **owner** holds the plan; team members share it but
-  can't change it.
-
-**Placeholder until payments:** adding a service unlocks it right away. When
-checkout exists, only a confirmed payment should unlock a paid service (see
-[ROADMAP.md](ROADMAP.md) → Payments).
+- **Data Cleaning** is always open.
+- **The tools in a live subscription** (`active`, `trialing`, `past_due`) —
+  a "build your own" package, or All tools (every available service).
+- **Every available service** for consultants and consultant-managed ("done
+  for you") clients (`entitlements.gets_everything`).
+- **Nothing else.** "Projects with a consultant" picked on Your needs are
+  recorded as **interest** (table `account_services`) and shown to the
+  consultant ("Asked for help with: …"); they don't unlock tools. A locked
+  tool's "Add to my package" opens Plan & billing with that tool ticked.
+- In a business, the team **owner** holds the package; team members share it
+  but can't change it.
 
 ## What is recorded
 
 Each download writes a row to `usage_events` (account, dataset name, row count,
-runtime, billable minutes, amount). **No payment is collected yet** — this is
-the ledger a payment integration will charge from.
+runtime, billable minutes, amount; $0 with a plan that includes cleaning).
+Subscriptions and consulting hours are paid through Stripe ([PAYMENTS.md](PAYMENTS.md));
+pay-per-minute downloads without a plan are recorded but not yet charged.
 
 ## What a download costs YOU (hosting)
 

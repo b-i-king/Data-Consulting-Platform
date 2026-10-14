@@ -4,8 +4,9 @@
 //   * KPIs   — the 3–4 most common transaction TYPES (e.g. In-store, Online
 //              pickup, Delivery, Catering), each with its own card + line chart
 //   * Overview — total value and number of transactions, charted over time
-//   * Filters  — customer / demographic columns (customer type, age group,
-//              store...). Picking one asks the server again for just those rows.
+//   * Filters  — in one container, rows of up to 3 kept even (filterRows; max 9):
+//                customer / demographic columns (customer type, age group,
+//                store...). Picking one asks the server again for just those rows.
 //
 // Every date range × comparison comes back in one response, so the time bar
 // is instant. The time bar (TimeBar.tsx) is two panels floating at the bottom
@@ -80,6 +81,29 @@ function PeriodChart(props: {
     />
   );
 }
+
+/**
+ * Lay out filters in rows of at most 3, as even as possible (rows differ by at
+ * most one): 4 -> 2+2, 5 -> 3+2, 6 -> 3+3, 7 -> 3+2+2, 8 -> 3+3+2, 9 -> 3+3+3.
+ * The dashboard skill offers at most 9 filters (MAX_FILTERS in skill.py).
+ */
+export function filterRows<T>(items: T[]): T[][] {
+  const rows = Math.ceil(items.length / 3);
+  if (!rows) return [];
+  const small = Math.floor(items.length / rows);   // every row has at least this many
+  const big = items.length % rows;                 // ...and this many rows get one more
+  const out: T[][] = [];
+  let at = 0;
+  for (let r = 0; r < rows; r++) {
+    const size = small + (r < big ? 1 : 0);
+    out.push(items.slice(at, at + size));
+    at += size;
+  }
+  return out;
+}
+
+/** Column classes per row size (written out so Tailwind keeps them); one column on phones. */
+const ROW_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "sm:grid-cols-2", 3: "sm:grid-cols-3" };
 
 export default function Dashboard({ input, groupId }: { input: CleaningInput; groupId: number }) {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -162,30 +186,42 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
 
   return (
     <div className="space-y-5">
-      {/* Filters: WHO the numbers are about (customer type, demographics, place). */}
-      <div className="flex flex-wrap items-end gap-3">
-        {data.filter_columns.map((c) => (
-          <label key={c} className="space-y-1 text-sm">
-            <span className="block text-xs text-ink-muted">{data.filter_labels[c]}</span>
-            <select
-              value={filters[c] ?? ""}
-              onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
-              className="rounded-xl border border-line bg-surface px-3 py-1.5 text-sm"
-            >
-              <option value="">All</option>
-              {data.filter_options[c].map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
+      {/* Filters: WHO the numbers are about (customer type, demographics, place),
+          in one container, in rows of up to 3 kept as even as possible. */}
+      {data.filter_columns.length > 0 && (
+        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Filters</h3>
+            {Object.keys(activeFilters).length > 0 && (
+              <button type="button" className="text-xs text-brand hover:underline" onClick={() => setFilters({})}>
+                Clear filters
+              </button>
+            )}
+          </div>
+          {filterRows(data.filter_columns).map((row, i) => (
+            <div key={i} className={`grid gap-3 ${ROW_COLS[row.length]}`}>
+              {row.map((c) => (
+                <label key={c} className="min-w-0 space-y-1 text-sm">
+                  <span className="block text-xs text-ink-muted">{data.filter_labels[c]}</span>
+                  <select
+                    value={filters[c] ?? ""}
+                    onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
+                    className="w-full rounded-xl border border-line bg-surface px-3 py-1.5 text-sm"
+                  >
+                    <option value="">All</option>
+                    {data.filter_options[c].map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               ))}
-            </select>
-          </label>
-        ))}
-        {Object.keys(activeFilters).length > 0 && (
-          <Button variant="secondary" onClick={() => setFilters({})}>
-            Clear filters
-          </Button>
-        )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-3">
         <div className="ml-auto flex items-center gap-3">
           {loading && <span className="text-xs text-ink-muted">Updating…</span>}
           <Button variant="secondary" onClick={downloadHtml} disabled={downloading}>

@@ -19,7 +19,8 @@ export interface Service {
   id: string;
   name: string;
   description: string;
-  pricing_model: "runtime" | "package" | "consultation" | "early_access";
+  /** "hourly" = paid consulting from the first hour (Data Strategy & Discovery). */
+  pricing_model: "runtime" | "package" | "consultation" | "hourly" | "early_access";
   starting_price_usd: number;
   automated: boolean;
   requires_consultant: boolean;
@@ -28,6 +29,13 @@ export interface Service {
   available: boolean;
   /** Client-friendly names of the skills behind this service (data_skills/catalog.json). */
   capabilities: string[];
+  /** Free 30-minute consultation (or paid from the start), then the hourly rate. */
+  consultation: ConsultationTerms;
+  /** Do-it-yourself price as a package tool; null = not a tool (Data Strategy & Discovery). */
+  tool_monthly_usd: number | null;
+  tool_annual_usd: number | null;
+  /** Tools it needs in the package (AI: ["data_engineering"]). */
+  tool_requires: string[];
 }
 
 export interface FileFormat {
@@ -90,15 +98,29 @@ export interface IntakeOptions {
   limits: { max_upload_mb: number; max_files_per_upload: number };
   pricing: { price_per_runtime_minute_usd: number; billing_increment_seconds: number };
   booking_url: string;
-  /** The "All tools" plan, monthly or yearly. */
+  /** The plans on sale, each with a monthly and a yearly price. */
   subscriptions: Subscription[];
+  /** Consulting after the free 30-minute first consultation (default $80). */
+  consulting_rate_per_hour_usd: number;
   /** The default consultant ("I'd like Brandon to do this for me"); null when none is set up. */
   consultant: { name: string } | null;
 }
 
-/** A recurring plan (api/services/pricing.py SUBSCRIPTIONS). Cancel anytime. */
+/**
+ * One priced item = a Stripe product with a monthly and an annual price: a TOOL
+ * (build your own package; the total is the sum) or the All tools BUNDLE.
+ */
 export interface Subscription {
-  id: "all_tools";
+  id: string; // "data_cleaning", "data_visualization", ..., "ai", "all_tools"
+  kind: "tool" | "bundle";
+  /** Data Cleaning: in every package. */
+  base: boolean;
+  /** Tools that must be picked too (AI needs "data_engineering"). */
+  requires: string[];
+  /** false = free until it launches (AI). */
+  billable: boolean;
+  /** Bundle only: how much less per month than picking every tool. */
+  bundle_savings_month_usd: number;
   name: string;
   description: string;
   monthly_usd: number;
@@ -107,12 +129,46 @@ export interface Subscription {
   annual_savings_usd: number;
   annual_savings_pct: number;
   includes: string[];
+  /** Services the plan unlocks. */
+  service_ids: string[];
 }
 
 export type BillingInterval = "month" | "year";
+/** A "build your own" package: the tools picked (or ["all_tools"]), and the billing interval. */
 export interface SubscriptionChoice {
-  plan: "all_tools";
+  plans: string[];
   interval: BillingInterval;
+}
+
+/** One live subscription (table `subscriptions`, kept in sync by Stripe). */
+export interface LiveSubscription {
+  id: string;
+  /** The tools in it (or ["all_tools"]). */
+  plan_ids: string[];
+  names: string[];
+  interval: BillingInterval;
+  status: string;
+  /** What it costs per interval. */
+  total_usd: number;
+  /** Canceled, but paid through current_period_end. */
+  cancel_at_period_end: boolean;
+  current_period_end: string | null; // YYYY-MM-DD
+}
+
+/** Talking to a consultant for one service. */
+export interface ConsultationTerms {
+  free_minutes: number; // 30, or 0 for Data Strategy & Discovery
+  rate_per_hour_usd: number;
+  text: string; // "Free 30-minute consultation, then $80/hour"
+}
+
+/** POST /api/billing/checkout and /consulting-hours. url = Stripe's page; null in test mode. */
+export interface CheckoutResult {
+  url: string | null;
+  activated: boolean;
+  /** An existing subscription's tools were changed in place. */
+  updated: boolean;
+  test_mode: boolean;
 }
 
 // ── /api/files/analyze ────────────────────────────────────────────────────────
@@ -514,9 +570,6 @@ export interface Account {
   wants_consultant: boolean;
   /** The assigned consultant's first name, e.g. "Brandon". */
   consultant_name: string | null;
-  subscription_plan: string | null;
-  subscription_interval: BillingInterval | null;
-  subscription_status: "active" | "canceled" | null;
 }
 
 /** GET /api/consultant/clients — one row in the consultant's "Working on" picker. */
@@ -574,7 +627,6 @@ export interface SignupInput {
   industry_other?: string | null;
   /** "I'd like a consultant to do this for me." */
   wants_consultant?: boolean;
-  subscription?: SubscriptionChoice | null;
   /** Consultants only (CONSULTANT_ACCESS_CODE). */
   access_code?: string;
 }
@@ -586,10 +638,18 @@ export interface MyServices {
   /** Individuals and team owners can add services; team members can't. */
   can_add: boolean;
   services: (Service & { active: boolean })[];
+  /** Projects they'd like a consultant's help with (interest only; unlocks nothing). */
+  interests: string[];
   /** Whose workspace this is — the client when a consultant is working on one. */
   account: Account;
   /** True when a consultant is working on a client's account. */
   acting: boolean;
-  subscription: { plan: string | null; interval: BillingInterval | null; status: "active" | "canceled" | null };
-  subscriptions: Subscription[];
+  /** Live subscriptions, and the plans on sale. */
+  subscriptions: LiveSubscription[];
+  plans: Subscription[];
+  /** stripe=false: test mode — choosing a plan turns it on with no charge. */
+  billing: { stripe: boolean };
+  /** A live plan includes Data Cleaning: downloads cost nothing extra. */
+  downloads_included: boolean;
+  consulting: { rate_per_hour_usd: number; free_minutes: number; hours_bought: number };
 }

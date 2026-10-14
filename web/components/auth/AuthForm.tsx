@@ -10,8 +10,8 @@
 // Sign-in asks only for the email. Guests never see these fields.
 //
 // Signup also offers "I'd like <consultant> to do this for me" (a "done for
-// you" client, assigned to the default consultant), and carries the
-// subscription picked on "Your needs".
+// you" client, assigned to the default consultant). A plan picked on "Your
+// needs" is paid for after signup, on the download step (Stripe Checkout).
 // CONSULTANTS use the same form plus their access code ("I'm a consultant"
 // link, or shown automatically when the server asks for it).
 //
@@ -31,7 +31,7 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { signin, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
-import type { AccountType, Industry, Location, SubscriptionChoice, TeamMemberInput } from "@/lib/types";
+import type { AccountType, Industry, Location, TeamMemberInput } from "@/lib/types";
 import { capitalizeFirst, companyNameError, emailError, personNameError, repeatedEmails } from "@/lib/validation";
 import { Button, Card, ChoiceCard, ErrorBox, StepHeader } from "@/components/wizard/ui";
 import LocationPicker from "./LocationPicker";
@@ -66,7 +66,6 @@ export default function AuthForm({
   initialMode = "signup",
   title,
   subtitle,
-  subscription = null,
   wantsConsultant: initialWants = false,
   consultantName = null,
 }: {
@@ -77,7 +76,6 @@ export default function AuthForm({
   initialMode?: "signup" | "signin";
   title: { signup: string; signin: string };
   subtitle?: string;
-  subscription?: SubscriptionChoice | null; // picked on "Your needs"
   wantsConsultant?: boolean; // ticked on "Your needs"
   consultantName?: string | null; // the default consultant, e.g. "Brandon"
 }) {
@@ -144,7 +142,6 @@ export default function AuthForm({
               ...(location ? { location_id: location.id } : {}),
               ...(serviceIds.length ? { service_ids: serviceIds } : {}),
               ...(wants ? { wants_consultant: true } : {}),
-              ...(subscription ? { subscription } : {}),
               ...(showCode && code.trim() ? { access_code: code.trim() } : {}),
               ...(type === "business"
                 ? {

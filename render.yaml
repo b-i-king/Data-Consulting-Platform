@@ -32,6 +32,14 @@ services:
         sync: false        # e.g. https://your-site.vercel.app
       - key: BOOKING_URL
         sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false        # empty = test mode (docs/PAYMENTS.md)
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: SITE_URL
+        sync: false        # your Vercel URL
+      - key: CONSULTING_RATE_PER_HOUR_USD
+        value: "80"
       - key: CONSULTANT_EMAILS
         sync: false        # e.g. you@yourdomain.com (first = default consultant)
       - key: CONSULTANT_ACCESS_CODE

@@ -10,11 +10,17 @@ WHAT THIS FILE DOES
    runtime is rounded UP to the billing increment (1 minute by default)
    and multiplied by the per-minute rate.
 3. Builds a QUOTE for the services a client selected.
-5. Lists the SUBSCRIPTIONS: the "All tools" plan, billed monthly or yearly
-   (yearly is cheaper), cancel anytime.
 4. ESTIMATES how long a download will take and what it will cost, from the
    table's rows × fields (see download_estimate), so the site can show the
    amount and ask the client to confirm before anything is charged.
+5. Lists the TOOLS clients subscribe to ("build your own package"): each has
+   a fixed MONTHLY and ANNUAL price (annual is cheaper) and the total is the
+   sum; "All tools" is a cheaper bundle; AI is an add-on that needs Data
+   Engineering. These are the Stripe products: scripts/sync_stripe.py creates
+   them, and api/services/billing.py sells them. Cancel anytime.
+6. CONSULTING: the first 30-minute consultation is free (except Data Strategy
+   & Discovery, which is paid from the start); after that, consulting is
+   billed by the hour (CONSULTING_RATE_PER_HOUR_USD, default $80).
 
 ALL PRICES BELOW ARE PLACEHOLDERS. Edit them here (or move them into the
 database later) once you settle on your packages. The per-minute cleaning
@@ -24,7 +30,9 @@ PRICING MODELS
 --------------
 * "runtime"      — automated; billed per started minute of processing.
 * "package"      — a fixed starting price for a standard package.
-* "consultation" — needs a human; the client is sent to your booking link.
+* "consultation" — needs a human: a FREE 30-minute consultation first (your
+                   BOOKING_URL), then the hourly consulting rate.
+* "hourly"       — paid consulting from the first hour (Data Strategy & Discovery).
 * "early_access" — not sold yet (e.g. AI); shown as "Early access", never charged.
 
 Each service id is also a skill CATEGORY: `data_skills/catalog.json` lists the
@@ -46,7 +54,7 @@ class Service:
     id: str                         # also the category id in data_skills/catalog.json
     name: str
     description: str
-    pricing_model: str              # "runtime", "package", "consultation" or "early_access"
+    pricing_model: str              # "runtime", "package", "consultation", "hourly" or "early_access"
     starting_price_usd: float       # 0 unless pricing_model == "package"
     automated: bool                 # True = the platform does it without a human
     requires_consultant: bool       # True = route to the booking link
@@ -77,11 +85,12 @@ SERVICES: tuple[Service, ...] = (
         description="We collaborate to identify crucial data sources, align data initiatives with "
                     "your overarching business objectives (on and off the court), and build a "
                     "robust roadmap for analytics success.",
-        pricing_model="consultation",
+        # Paid from the first hour (no free 30 minutes): this IS the consulting.
+        pricing_model="hourly",
         starting_price_usd=0.0,
         automated=False,
         requires_consultant=True,
-        includes=("Discovery call", "Data-source inventory", "Analytics roadmap"),
+        includes=("Paid discovery sessions", "Data-source inventory", "Analytics roadmap"),
     ),
     Service(
         id="data_exploration_analysis",
@@ -149,45 +158,194 @@ SERVICES: tuple[Service, ...] = (
 SERVICES_BY_ID = {s.id: s for s in SERVICES}
 
 
+# ── Consulting ────────────────────────────────────────────────────────────────
+FREE_CONSULTATION_MINUTES = 30      # the first call, for every service except "hourly" ones
+
+
+def consulting_rate() -> float:
+    """US dollars per hour of consulting after the free first call (CONSULTING_RATE_PER_HOUR_USD)."""
+    return get_settings().consulting_rate_per_hour_usd
+
+
+def consultation_terms(service: Service) -> dict:
+    """How talking to a consultant works for one service (shown on its card)."""
+    rate = consulting_rate()
+    if service.pricing_model == "hourly":
+        return {"free_minutes": 0, "rate_per_hour_usd": rate,
+                "text": f"Paid consulting from ${rate:,.0f}/hour"}
+    if service.pricing_model == "early_access":
+        return {"free_minutes": 0, "rate_per_hour_usd": rate, "text": ""}
+    return {"free_minutes": FREE_CONSULTATION_MINUTES, "rate_per_hour_usd": rate,
+            "text": f"Free {FREE_CONSULTATION_MINUTES}-minute consultation, then ${rate:,.0f}/hour"}
+
+
+# ── Subscriptions: build your own package (Stripe products) ─────────────────
+#
+# Each TOOL has its own fixed monthly and annual price; a client's subscription
+# is the tools they pick, and the total is the sum ("build your own package").
+#   * Data Cleaning is the base: always in every package.
+#   * AI is an add-on that needs Data Engineering (it answers questions from
+#     data stored and modeled there).
+#   * ALL TOOLS is a bundle with every tool, cheaper than picking them all.
+# In Stripe, every tool (and the bundle) is a PRODUCT with a monthly and an
+# annual PRICE; one subscription holds one item per tool, all on the same
+# billing interval (Stripe's rule). scripts/sync_stripe.py creates them.
+
 @dataclass(frozen=True)
 class Subscription:
-    """A recurring plan. Cancel anytime: no contract, access runs to the end of the period paid."""
+    """One priced item: a tool, or the All tools bundle. Cancel anytime."""
 
-    id: str
+    id: str                         # Stripe lookup-key prefix: "dcp_<id>_month", "dcp_<id>_year"
     name: str
     description: str
+    service_ids: tuple[str, ...]    # services it unlocks (bundle: () = every service)
     monthly_usd: float              # billed every month
     annual_usd: float               # billed once a year (cheaper than 12 × monthly)
     includes: tuple[str, ...]
+    kind: str = "tool"              # "tool" or "bundle"
+    base: bool = False              # True = always in the package (Data Cleaning)
+    requires: tuple[str, ...] = ()  # tools that must be picked too (AI needs Data Engineering)
 
 
-# PLACEHOLDER PRICES — set your own. Yearly = 10 × monthly ("2 months free").
+# PLACEHOLDER PRICES — set your own, then run `python scripts/sync_stripe.py`.
+# Annual = 10 × monthly ("2 months free"). Order = order on the site: the
+# bundle first (shown wide, so it stands out), then the six tools.
 SUBSCRIPTIONS: tuple[Subscription, ...] = (
     Subscription(
-        id="all_tools",
-        name="All tools",
-        description="Every available service and data skill in your workspace — cleaning, analysis, "
-                    "dashboards, data engineering and machine learning tools. Do it yourself, at your pace.",
-        monthly_usd=49.0,
-        annual_usd=490.0,
-        includes=("Every available service unlocked", "All data skills", "Unlimited dashboards",
-                  "Cancel anytime"),
+        id="all_tools", kind="bundle", name="All tools",
+        description="Every tool, including AI when it launches — at a lower price than picking them all.",
+        service_ids=(), monthly_usd=99.0, annual_usd=990.0,
+        includes=("All six tools", "Downloads included", "AI included at launch", "Cancel anytime"),
+    ),
+    Subscription(
+        id="data_cleaning", base=True, name="Data Cleaning",
+        description="Clean, fix and download your data — no per-minute charges. Every package starts here.",
+        service_ids=("data_cleaning",), monthly_usd=19.0, annual_usd=190.0,
+        includes=("Downloads included", "All cleaning and transform tools"),
+    ),
+    Subscription(
+        id="data_exploration_analysis", name="Data Exploration & Analysis",
+        description="Profiles, trends, statistics and answers to your business questions.",
+        service_ids=("data_exploration_analysis",), monthly_usd=19.0, annual_usd=190.0,
+        includes=("Data profiles and key trends", "Statistical tests", "SQL for your questions"),
+    ),
+    Subscription(
+        id="data_visualization", name="Dashboards",
+        description="Interactive KPI dashboards and charts from your data.",
+        service_ids=("data_visualization",), monthly_usd=19.0, annual_usd=190.0,
+        includes=("KPI dashboards with filters", "Charts from your data", "Shareable reports"),
+    ),
+    Subscription(
+        id="data_engineering", name="Data Engineering",
+        description="ER diagrams, data dictionaries and — when it launches — managed storage of your data.",
+        service_ids=("data_engineering",), monthly_usd=39.0, annual_usd=390.0,
+        includes=("ER diagrams and data dictionaries", "Managed storage (coming soon)", "Unlocks the AI add-on"),
+    ),
+    Subscription(
+        id="data_science_ml", name="Data Science & Machine Learning",
+        description="Predictive models, segmentation and sample-size checks.",
+        service_ids=("data_science_ml",), monthly_usd=39.0, annual_usd=390.0,
+        includes=("Predictive models", "Customer segments", "Plain-English results"),
+    ),
+    Subscription(
+        id="ai", name="AI", requires=("data_engineering",),
+        description="Ask questions about your stored data in plain English. Needs Data Engineering.",
+        service_ids=("ai",), monthly_usd=29.0, annual_usd=290.0,
+        includes=("Plain-English questions", "Answers with the math shown", "Requires Data Engineering"),
     ),
 )
 SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
 INTERVALS = ("month", "year")
+BUNDLE = "all_tools"
+BASE = "data_cleaning"
+
+
+def plan_services(plan_id: str) -> list[str]:
+    """Service ids an item unlocks (the bundle = every service, AI included once it's available)."""
+    plan = SUBSCRIPTIONS_BY_ID.get(plan_id)
+    if plan is None:
+        return []
+    return [s.id for s in SERVICES if s.available] if not plan.service_ids else list(plan.service_ids)
+
+
+def billable(plan_id: str) -> bool:
+    """Charged today? An item whose service isn't available yet (AI) is free until it launches."""
+    plan = SUBSCRIPTIONS_BY_ID[plan_id]
+    return plan.kind == "bundle" or all(SERVICES_BY_ID[s].available for s in plan.service_ids)
+
+
+def normalize_selection(plan_ids: list[str]) -> list[str]:
+    """
+    Check a "build your own" selection and return it in catalog order:
+    the bundle replaces everything else; Data Cleaning is always added; an
+    item's requirements must be picked too. Raises ValueError (plain English).
+    """
+    unknown = [p for p in plan_ids if p not in SUBSCRIPTIONS_BY_ID]
+    if unknown:
+        raise ValueError(f"Unknown tool(s): {', '.join(unknown)}.")
+    if BUNDLE in plan_ids:
+        return [BUNDLE]
+    chosen = set(plan_ids) | {BASE}
+    for pid in chosen:
+        missing = [r for r in SUBSCRIPTIONS_BY_ID[pid].requires if r not in chosen]
+        if missing:
+            names = ", ".join(SUBSCRIPTIONS_BY_ID[m].name for m in missing)
+            raise ValueError(f"{SUBSCRIPTIONS_BY_ID[pid].name} needs {names}.")
+    return [s.id for s in SUBSCRIPTIONS if s.id in chosen]
+
+
+def selection_price(plan_ids: list[str], interval: str) -> dict:
+    """
+    The total for a selection: each tool's fixed price added together (items not
+    billable yet count $0). Also says whether the bundle would be cheaper.
+    """
+    if interval not in INTERVALS:
+        raise ValueError("Choose monthly or yearly billing.")
+    picked = normalize_selection(plan_ids)
+    price = (lambda p: p.monthly_usd) if interval == "month" else (lambda p: p.annual_usd)
+    lines = []
+    for pid in picked:
+        plan = SUBSCRIPTIONS_BY_ID[pid]
+        amount = price(plan) if billable(pid) else 0.0
+        lines.append({"id": pid, "name": plan.name, "amount_usd": amount,
+                      "note": "" if billable(pid) else "Free until it launches"})
+    total = round(sum(l["amount_usd"] for l in lines), 2)
+    bundle = price(SUBSCRIPTIONS_BY_ID[BUNDLE])
+    return {"interval": interval, "plan_ids": picked, "lines": lines, "total_usd": total,
+            "bundle_usd": bundle, "bundle_cheaper": picked != [BUNDLE] and total > bundle}
+
+
+CONSULTING_LOOKUP_KEY = "dcp_consulting_hour"   # Stripe price for one consulting hour
+
+
+def lookup_key(plan_id: str, interval: str) -> str:
+    """The Stripe price lookup key, e.g. "dcp_all_tools_year" (see scripts/sync_stripe.py)."""
+    return f"dcp_{plan_id}_{interval}"
+
+
+def plan_from_lookup_key(key: str) -> tuple[str, str] | None:
+    """"dcp_data_visualization_month" -> ("data_visualization", "month"), or None."""
+    if not key.startswith("dcp_") or "_" not in key[4:]:
+        return None
+    plan_id, interval = key[4:].rsplit("_", 1)
+    return (plan_id, interval) if plan_id in SUBSCRIPTIONS_BY_ID and interval in INTERVALS else None
 
 
 def subscription_catalog() -> list[dict]:
-    """Subscriptions as plain dicts, with the yearly saving worked out for the UI."""
+    """Every priced item as a plain dict, with the yearly saving worked out for the UI."""
     out = []
+    all_tools_month = sum(s.monthly_usd for s in SUBSCRIPTIONS if s.kind == "tool")
     for s in SUBSCRIPTIONS:
         full_year = s.monthly_usd * 12
         out.append({
             **asdict(s),
+            "service_ids": plan_services(s.id),
+            "billable": billable(s.id),
             "annual_per_month_usd": round(s.annual_usd / 12, 2),
             "annual_savings_usd": round(full_year - s.annual_usd, 2),
             "annual_savings_pct": round((full_year - s.annual_usd) / full_year * 100) if full_year else 0,
+            # Bundle only: how much less than picking every tool separately (per month).
+            "bundle_savings_month_usd": round(all_tools_month - s.monthly_usd, 2) if s.kind == "bundle" else 0,
         })
     return out
 
@@ -299,9 +457,12 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
         elif svc.pricing_model == "early_access":
             amount = 0.0
             note = "Early access — we'll reach out when it opens."
+        elif svc.pricing_model == "hourly":
+            amount = consulting_rate()
+            note = f"Paid consulting: ${amount:,.0f}/hour (first hour shown)."
         else:
             amount = 0.0
-            note = "Priced after a free discovery call."
+            note = consultation_terms(svc)["text"] + "."
         needs_consultant |= svc.requires_consultant
         total += amount
         lines.append({"service_id": sid, "name": svc.name, "pricing_model": svc.pricing_model,
@@ -318,4 +479,12 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
 
 def catalog() -> list[dict]:
     """All services as plain dicts (for the API), with their skill capabilities."""
-    return [{**asdict(s), "capabilities": capability_labels(s.id)} for s in SERVICES]
+    out = []
+    for s in SERVICES:
+        tool = SUBSCRIPTIONS_BY_ID.get(s.id)   # the tool you can subscribe to, if any
+        out.append({**asdict(s), "capabilities": capability_labels(s.id), "consultation": consultation_terms(s),
+                    # Do-it-yourself price as a package tool (None = not a tool, e.g. Data Strategy).
+                    "tool_monthly_usd": tool.monthly_usd if tool else None,
+                    "tool_annual_usd": tool.annual_usd if tool else None,
+                    "tool_requires": list(tool.requires) if tool else []})
+    return out

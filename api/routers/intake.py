@@ -41,8 +41,10 @@ async def intake_options():
             "billing_increment_seconds": settings.billing_increment_seconds,
         },
         "booking_url": settings.booking_url,
-        # Monthly / yearly "All tools" plan (cancel anytime).
+        # Plans, each with a monthly and a yearly price (cancel anytime).
         "subscriptions": pricing.subscription_catalog(),
+        # Consulting after the free 30-minute first consultation.
+        "consulting_rate_per_hour_usd": pricing.consulting_rate(),
         # The default consultant's first name, for "I'd like Brandon to do this
         # for me" at signup (None until a consultant has signed in once).
         "consultant": {"name": c["display_name"]} if (c := await consultants.default_consultant()) else None,
