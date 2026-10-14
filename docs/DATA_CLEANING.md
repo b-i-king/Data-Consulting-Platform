@@ -74,14 +74,21 @@ Entity labels are a keyword-based guess and are shown to clients as such.
 
 | Step | What | Example |
 |---|---|---|
+| 0. Column names | Lowercase snake_case: spaces/punctuation → `_`, camelCase split, accents removed, names kept unique | `Order Date` → `order_date`, `Unit Price ($)` → `unit_price`, `CustomerID` → `customer_id`, second `Amount` → `amount_2` |
 | 1. Tidy text | Trim spaces; blank text → missing | `" Acme "` → `"Acme"`, `"  "` → missing |
 | 2. Empty rows | Drop rows with no values at all | Blank lines at the bottom of a spreadsheet |
 | 3. Duplicates | Drop rows identical in every column (keep first) | Same order exported twice |
 | 3b. Whole numbers | `1001.0` → `1001` when a column only has whole numbers | ID columns with some blanks |
 | 4. Missing report + advice | Count, % missing, a level and a fill suggestion per column | `phone`: 31% missing → "think about removing" |
-| 5a. Column choices | Per column: **keep** gaps (default), **remove** the column, or **fill** with the mean / median / mode | Client picks on the results step, then **Apply changes** |
+| 5a. Column choices | Per column: **keep** gaps (default), **remove** the column, **fill** with the mean / median / mode, or (ID columns) **remove rows with no ID** | Client picks on the results step, then **Apply changes** |
 | 5b. Row strategy | **Keep** rows with gaps (default) or **remove** them (after 5a) | Client picks on the upload step |
 | 6. Profile | Type, unique values, examples per column | `order_date`: date (stored as text) |
+
+Step 0 runs first, so every later step, the column choices (`column_actions`
+use the cleaned names), the preview, the skills and the download all use the
+new names. The report lists each change in `columns_renamed` (the app shows
+"was "Order Date"" under the column), and the platform's own `source_file`
+column keeps its name.
 
 Steps 2 and 3 ignore the platform's own `source_file` column, so a blank row is
 still blank and a record repeated across two overlapping exports is still a
@@ -102,18 +109,25 @@ How gaps would be filled (the suggested method is starred in the dropdown):
   0.5), otherwise the **median** — sales and prices usually have a long tail of
   big values that drags the mean up. pandas: `s.skew()`, `s.mean()`, `s.median()`.
 - **Text, categories, true/false:** the **mode** (most common value), `s.mode()[0]`.
-- **Dates, IDs and codes** (`customer_id`, order numbers, zip codes, SKUs): no fill.
-  An average ID means nothing, and a blank ID usually means "none" — in the
-  sample data, a blank `customer_id` is a walk-in customer.
+- **Dates:** no fill.
+- **IDs and codes** (`customer_id`, order numbers, zip codes, SKUs): never
+  filled — an average ID means nothing. An ID **should not be blank** (like a
+  `NOT NULL` rule in a database), so the suggestion is **Remove rows with no
+  ID** (`drop_rows`). Removed rows are not lost: the Excel download lists them
+  on a **`rows_missing_id`** sheet, so the client can look up the right IDs,
+  fill them in, and upload again. (In the sample data a blank `customer_id` is a
+  walk-in customer; there, keeping the gaps is a reasonable choice too.)
 - Whole-number columns get a rounded value, so `1001` stays `1001`.
 
-**Use our suggestions** removes 90%+ columns and fills small gaps (under 20%).
-Columns in between are left for the client: filling a third of a column with one
+**Use our suggestions** removes 90%+ columns, removes rows with a blank ID
+(ID columns under 90% missing), and fills small gaps (under 20%). Other columns
+in between are left for the client: filling a third of a column with one
 value changes the data a lot. Choices are sent as `column_actions` (JSON, by
 table: `{"0": {"age_group": "mode"}}`) with every request that needs the data —
 analyze, dashboard, skills, download — so all of them see the same cleaned data.
 The report keeps the **before** numbers and adds what was done (`action`,
-`filled_count`, `missing_after`).
+`filled_count`, `rows_dropped`, `missing_after`), plus `rows_missing_id_removed`
+for the table.
 
 ### Enough rows to analyze? (30-row minimum)
 
@@ -148,7 +162,8 @@ services.
 - **10 fields per page:** the "Missing values by column" table and the preview
   show 10 columns at a time, with First / Previous / Next / Last buttons.
 - **Download:** requires an account. CSV (UTF-8 with BOM so Excel shows accents
-  correctly) or Excel (with a second sheet holding the missing-value report).
+  correctly) or Excel (with a second sheet holding the missing-value report, and
+  a `rows_missing_id` sheet when rows were removed for a blank ID).
   Downloads always contain every row. Before it starts, a confirmation shows
   rows × fields, the estimated wait and the total charge (see
   [PRICING.md](PRICING.md) → Estimates and confirmations).

@@ -207,3 +207,22 @@ def test_a_forgotten_account_signs_out_with_a_clear_message():
     token = create_access_token("00000000-0000-0000-0000-000000000000", "gone@example.com", "individual")
     res = client.get("/api/accounts/services", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401 and "create your account again" in res.json()["detail"]
+
+
+def test_excel_download_lists_rows_removed_for_a_missing_id():
+    token = client.post("/api/accounts/signup", json={
+        "account_type": "individual", "first_name": "Ida", "last_name": "Ng", "email": "ida@example.com",
+    }).json()["access_token"]
+    rows = "".join(f"{'' if i % 10 == 0 else i},{i}\n" for i in range(40))   # 4 blank IDs
+    csv = f"Order ID,Total Amount\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("orders.csv", csv))).json()
+    report = body["groups"][0]["report"]
+    assert [c["column"] for c in report["column_reports"]] == ["order_id", "total_amount"]
+    assert report["column_reports"][0]["suggested_fill"] == "drop_rows"
+    res = client.post("/api/files/download", headers={"Authorization": f"Bearer {token}"},
+                      files=_files(("orders.csv", csv)),
+                      data={"file_format": "xlsx", "column_actions": '{"0": {"order_id": "drop_rows"}}'})
+    assert res.status_code == 200, res.text
+    sheets = pd.read_excel(io.BytesIO(res.content), sheet_name=None)
+    assert len(sheets["cleaned_data"]) == 36
+    assert sheets["rows_missing_id"]["total_amount"].tolist() == [0, 10, 20, 30]

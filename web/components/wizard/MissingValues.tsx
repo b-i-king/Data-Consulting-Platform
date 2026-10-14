@@ -8,6 +8,10 @@
 //   * the values a fill would use (mean / median / mode) and a suggestion:
 //       mean for roughly symmetric numbers, median for skewed numbers,
 //       mode (most common value) for text
+//   * for ID columns (order_id, customer_id …): no fills — an ID should never
+//     be blank, so the suggestion is "Remove rows with no ID". Those rows go
+//     on the "rows_missing_id" sheet of the Excel download for the client to fix.
+//   * the column's original name, when cleaning renamed it ("Order Date" -> order_date)
 //
 // Long tables are shown 10 columns per page (First / Previous / Next / Last);
 // choices made on one page are kept when you move to another.
@@ -46,6 +50,8 @@ export default function MissingValues(props: {
   onApply: (actions: Record<string, ColumnAction>) => Promise<void>;
 }) {
   const { report } = props;
+  // new name -> the name in the uploaded file
+  const originalName = Object.fromEntries(Object.entries(report.columns_renamed ?? {}).map(([o, n]) => [n, o]));
   const [draft, setDraft] = useState<Record<string, ColumnAction>>(props.applied);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,13 +69,15 @@ export default function MissingValues(props: {
     JSON.stringify(Object.entries(a).filter(([, v]) => v !== "keep").sort());
   const changed = clean(draft) !== clean(props.applied);
 
-  // Our suggestions: remove 90%+ columns, fill small gaps (under 20%) with the
-  // suggested method. 20–90% columns are left as they are for the user to
+  // Our suggestions: remove 90%+ columns, remove rows with a blank ID, fill
+  // small gaps (under 20%) with the suggested method. Other 20–90% columns are left as they are for the user to
   // decide — filling a third of a column with one value changes the data a lot.
   function useSuggestions() {
     const next: Record<string, ColumnAction> = { ...draft };
     withGaps.forEach((c) => {
       if (c.missing_level === "remove") next[c.column] = "drop";
+      // IDs must not be blank: remove those rows at any level below 90%.
+      else if (c.suggested_fill === "drop_rows") next[c.column] = "drop_rows";
       else if (c.missing_level === "low" && c.suggested_fill) next[c.column] = c.suggested_fill;
     });
     setDraft(next);
@@ -122,12 +130,16 @@ export default function MissingValues(props: {
                     )}
                     {c.action === "dropped" && <span className="text-xs text-ink-muted">(removed)</span>}
                   </div>
+                  {originalName[c.column] && (
+                    <div className="text-xs text-ink-muted">was &ldquo;{originalName[c.column]}&rdquo;</div>
+                  )}
                   {c.recommendation && <div className="mt-0.5 max-w-sm text-xs text-ink-muted">{c.recommendation}</div>}
                 </td>
                 <td className="px-3 py-2 text-ink-muted">{c.inferred_type}</td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {fmtInt(c.missing_count)}
                   {c.filled_count > 0 && <div className="text-xs text-good">{fmtInt(c.filled_count)} filled</div>}
+                  {c.rows_dropped > 0 && <div className="text-xs text-good">{fmtInt(c.rows_dropped)} rows removed</div>}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
@@ -159,6 +171,11 @@ export default function MissingValues(props: {
                             {c.suggested_fill === m ? "  ★ suggested" : ""}
                           </option>
                         ))}
+                        {c.is_id && (
+                          <option value="drop_rows">
+                            Remove rows with no ID ({fmtInt(c.missing_count)}){c.suggested_fill === "drop_rows" ? "  ★ suggested" : ""}
+                          </option>
+                        )}
                         <option value="drop">Remove this column{c.missing_level === "remove" ? "  ★ suggested" : ""}</option>
                       </select>
                       {skewNote(c) && <div className="mt-0.5 text-xs text-ink-muted">{skewNote(c)}</div>}
@@ -190,7 +207,7 @@ export default function MissingValues(props: {
           <span className="text-xs text-ink-muted" aria-live="polite">
             {changed
               ? "You have changes that aren't applied yet."
-              : "Nothing is filled unless you choose to. Suggestions (for every page) fill small gaps (under 20%) and remove 90%+ columns; the rest is your call."}
+              : "Nothing changes unless you choose to. Suggestions (for every page) fill small gaps (under 20%), remove rows with no ID, and remove 90%+ columns; the rest is your call."}
           </span>
         </div>
       )}

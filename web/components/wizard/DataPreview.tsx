@@ -4,6 +4,7 @@
 // Wide tables are shown 10 fields (columns) at a time, with First / Previous /
 // Next / Last buttons — like df.iloc[:, 0:10], then 10:20, and so on. If
 // PREVIEW_MAX_ROWS is raised, rows are paged 50 at a time the same way.
+// Headers show the real (cleaned, lowercase snake_case) column names as-is.
 
 "use client";
 
@@ -43,7 +44,7 @@ export default function DataPreview({ preview }: { preview: GroupOutput["preview
       )}
       <div className="max-h-[32rem] overflow-auto rounded-2xl border border-line bg-surface shadow-[var(--shadow-card)]">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted shadow-[0_1px_0_var(--color-line)]">
+          <thead className="sticky top-0 bg-surface-2 text-left font-mono text-xs text-ink-muted shadow-[0_1px_0_var(--color-line)]">
             <tr>
               <th className="px-3 py-2 text-right">#</th>
               {columns.map((c) => (

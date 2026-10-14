@@ -13,6 +13,16 @@ data is always recoverable.
 
 THE PIPELINE (runs in this order)
 ---------------------------------
+Step 0. Clean column names
+        Every column name becomes lowercase "snake_case": spaces and
+        punctuation turn into underscores, and words joined in camelCase are
+        split ("Order Date" -> order_date, "Unit Price ($)" -> unit_price,
+        "CustomerID" -> customer_id). Names stay unique (a second "amount"
+        becomes amount_2) and a blank name becomes column_1, column_2, ...
+        Consistent names are easier to use in Excel, SQL and Python, and every
+        later step (and the download) uses the new names. The report lists
+        each rename (`columns_renamed`).
+
 Step 1. Tidy text cells
         Trim leading/trailing spaces in text columns (" Acme " -> "Acme")
         and turn blank text ("", "   ") into a real missing value (NaN).
@@ -53,16 +63,23 @@ Step 4. Missing-value report and advice
                 value), because a few huge values drag the mean up
             text, categories, true/false                 -> the mode (most common value)
             dates, and IDs (customer_id, order number, zip) -> no fill offered:
-                an average customer ID means nothing, and a missing ID usually
-                means "none" (e.g. a walk-in customer)
-        "Use our suggestions" in the app fills only columns under 20% missing
-        and removes 90%+ columns; 20–90% columns are left for the user to decide
+                an average customer ID means nothing
+        IDs SHOULD NOT BE MISSING (like a NOT NULL rule in a database): for an
+        ID column with gaps we recommend removing the rows that have no ID
+        ("drop_rows"), so only rows you can trace are analyzed. The removed
+        rows aren't lost: the Excel download puts them on a "rows_missing_id"
+        sheet so the client can look up the right IDs and upload again.
+        "Use our suggestions" in the app fills only columns under 20% missing,
+        removes rows with a blank ID, and removes 90%+ columns; other 20–90%
+        columns are left for the user to decide
         (filling a third of a column with one value changes the data a lot).
         By default NOTHING is filled — we never guess without being asked.
 
 Step 5. What to do about missing values (chosen by the user)
-        5a. Per column ("column_actions"): keep (default), drop the column, or
-            fill gaps with the mean / median / mode ("auto" = our suggestion).
+        5a. Per column ("column_actions"): keep (default), drop the column,
+            fill gaps with the mean / median / mode ("auto" = our suggestion),
+            or "drop_rows" — remove the rows where this column is missing
+            (offered for ID columns; set aside for the "rows_missing_id" sheet).
             Whole-number columns get a rounded fill value so 1001 stays 1001.
         5b. Rows ("missing_strategy"):
             * "keep"     (default) — keep every row; the report shows the gaps.
@@ -90,7 +107,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+import unicodedata
+from dataclasses import asdict, dataclass, field, fields
 from typing import Literal
 
 import numpy as np
@@ -98,7 +116,7 @@ import pandas as pd
 
 MissingStrategy = Literal["keep", "drop_any"]
 # What to do with one column's missing values (Step 5a).
-COLUMN_ACTIONS = ("keep", "drop", "mean", "median", "mode", "auto")
+COLUMN_ACTIONS = ("keep", "drop", "mean", "median", "mode", "auto", "drop_rows")
 
 # Rules of thumb for missing values (Step 4). Percentages, 0-100.
 REVIEW_PCT = 20.0    # at or above: think about removing the column
@@ -133,12 +151,14 @@ class ColumnReport:
     # column BEFORE the user's missing-value choices, so the advice stays visible.
     missing_level: str = "none"          # "none", "low" (<20%), "review" (20-90%), "remove" (90%+)
     recommendation: str = ""
-    suggested_fill: str | None = None    # "mean", "median", "mode", or None
+    suggested_fill: str | None = None    # "mean", "median", "mode", "drop_rows" (IDs), or None
     skewness: float | None = None        # numbers only; 0 = symmetric
     fill_options: dict[str, str] = field(default_factory=dict)  # method -> value it would use
     # What actually happened (Step 5a).
-    action: str = "keep"                 # "keep", "dropped", "mean", "median", "mode"
+    action: str = "keep"                 # "keep", "dropped", "mean", "median", "mode", "rows_dropped"
     filled_count: int = 0
+    rows_dropped: int = 0                # rows removed because this column was missing ("drop_rows")
+    is_id: bool = False                  # looks like an ID or code (never filled; should not be missing)
     missing_after: int = 0               # missing values left in the downloaded data
 
 
@@ -168,11 +188,55 @@ class CleaningReport:
     consultation_recommended: bool = False   # 90%+ of all cells missing
     analysis_ready: bool = True          # Step 7: at least 30 rows before AND after cleaning
     analysis_note: str = ""              # why not, in plain English (empty when ready)
+    columns_renamed: dict[str, str] = field(default_factory=dict)   # Step 0: old name -> new name
+    rows_missing_id_removed: int = 0     # Step 5a "drop_rows": rows set aside because an ID was missing
     notes: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
+    # The rows removed for a missing ID, kept so the Excel download can list
+    # them for the client to fix. Not part of the JSON report.
+    rows_missing_id: pd.DataFrame | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # Every field except the DataFrame (asdict would also deep-copy it).
+        out = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "rows_missing_id"}
+        out["column_reports"] = [asdict(c) for c in self.column_reports]
+        out["columns_renamed"] = dict(self.columns_renamed)
+        out["columns_fully_empty"] = list(self.columns_fully_empty)
+        return out
+
+
+def snake_case(name: object) -> str:
+    """
+    Step 0 for one name: 'Order Date' -> 'order_date', 'CustomerID' ->
+    'customer_id', 'Unit Price ($)' -> 'unit_price', 'Café Name' -> 'cafe_name'.
+    Returns '' for a name with no letters or digits (the caller numbers it).
+    """
+    text = str(name).strip()
+    # Accented letters -> plain letters (é -> e), so names are easy to type in code.
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    # Split camelCase: "displayName" -> "display Name", "IDNumber" -> "ID Number".
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    # Anything that isn't a letter or digit becomes one underscore.
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def clean_column_names(columns) -> list[str]:
+    """Step 0 for a whole table: snake_case every name, keeping names unique."""
+    seen: dict[str, int] = {}
+    out = []
+    for i, col in enumerate(columns, start=1):
+        base = snake_case(col) or f"column_{i}"
+        if base[0].isdigit():
+            base = f"col_{base}"        # "2024 sales" -> col_2024_sales (code can't start with a digit)
+        name = base
+        while name in seen:             # second "amount" -> amount_2, third -> amount_3
+            seen[base] += 1
+            name = f"{base}_{seen[base]}"
+        seen.setdefault(base, 1)
+        seen.setdefault(name, 1)
+        out.append(name)
+    return out
 
 
 def _infer_type(series: pd.Series) -> str:
@@ -266,12 +330,19 @@ def _missing_advice(series: pd.Series, missing_pct: float) -> dict:
     if missing_pct == 0:
         return advice
     if ID_NAME.search(str(series.name)):
-        # IDs and codes: no fills. A blank customer_id usually means "no account" (a walk-in).
+        # IDs and codes: never filled, and they shouldn't be missing (NOT NULL).
+        # Recommend removing the rows without an ID; the client can look the IDs
+        # up from the "rows_missing_id" sheet of the Excel download.
         level = "remove" if missing_pct >= REMOVE_PCT else "review" if missing_pct >= REVIEW_PCT else "low"
         advice["missing_level"] = level
-        advice["recommendation"] = (f"{missing_pct:.0f}% missing — this looks like an ID or code, so it can't be "
-                                    "filled; a blank usually means \"none\" (e.g. a walk-in customer). "
-                                    + ("Remove it if it isn't needed." if level == "remove" else "Keep the gaps."))
+        if level == "remove":
+            advice["recommendation"] = (f"{missing_pct:.0f}% missing — this ID column is mostly empty; "
+                                        "remove the column if it isn't needed.")
+        else:
+            advice["suggested_fill"] = "drop_rows"
+            advice["recommendation"] = (f"{missing_pct:.1f}% missing — an ID should never be blank, so we recommend "
+                                        "removing these rows. They're listed on the \"rows_missing_id\" sheet of the "
+                                        "Excel download so you can find the right IDs and upload again.")
         return advice
     s = series.dropna()
     if _is_number(series) and len(s) >= 3:
@@ -306,12 +377,14 @@ def _missing_advice(series: pd.Series, missing_pct: float) -> dict:
 
 
 def _apply_column_actions(df: pd.DataFrame, actions: dict[str, str], advice: dict[str, dict],
-                          notes: list[str]) -> tuple[pd.DataFrame, dict[str, tuple[str, int]]]:
+                          notes: list[str]) -> tuple[pd.DataFrame, dict[str, tuple[str, int]], pd.DataFrame | None]:
     """
-    Step 5a: drop or fill columns as the user chose. Returns the new data and
-    {column: (what was done, cells filled)}. "auto" means our suggestion.
+    Step 5a: drop or fill columns, or drop rows, as the user chose. Returns the
+    new data, {column: (what was done, cells filled or rows removed)}, and the
+    rows removed by "drop_rows" (None if none). "auto" means our suggestion.
     """
     done: dict[str, tuple[str, int]] = {}
+    set_aside: list[pd.DataFrame] = []
     for col, action in actions.items():
         if action not in COLUMN_ACTIONS:
             raise ValueError(f"Unknown action '{action}' for column '{col}'. Use one of: {', '.join(COLUMN_ACTIONS)}.")
@@ -325,6 +398,14 @@ def _apply_column_actions(df: pd.DataFrame, actions: dict[str, str], advice: dic
             df = df.drop(columns=[col])
             done[col] = ("dropped", 0)
             continue
+        if action == "drop_rows":
+            # Like a NOT NULL rule: rows with no value here are set aside.
+            missing = df[col].isna()
+            if missing.any():
+                set_aside.append(df.loc[missing])
+                df = df.loc[~missing]
+            done[col] = ("rows_dropped", int(missing.sum()))
+            continue
         gaps = int(df[col].isna().sum())
         value = _fill_value(df[col], action)
         if value is None:
@@ -334,7 +415,8 @@ def _apply_column_actions(df: pd.DataFrame, actions: dict[str, str], advice: dic
         if gaps:
             df[col] = df[col].fillna(value)
         done[col] = (action, gaps)
-    return df, done
+    removed = pd.concat(set_aside) if set_aside else None
+    return df, done, removed
 
 
 def clean_dataframe(
@@ -356,6 +438,15 @@ def clean_dataframe(
     notes: list[str] = []
     rows_before = int(len(df))
     out = df.copy()  # never touch the caller's data
+
+    # Step 0 — lowercase snake_case column names (our own metadata columns keep theirs).
+    new_names = [c if c in METADATA_COLUMNS else n
+                 for c, n in zip(out.columns, clean_column_names(out.columns))]
+    renamed = {str(old): new for old, new in zip(out.columns, new_names) if str(old) != new}
+    out.columns = new_names
+    if renamed:
+        notes.append(f"Column names cleaned (lowercase, underscores instead of spaces) for "
+                     f"{len(renamed):,} column{'s' if len(renamed) != 1 else ''}.")
 
     # Step 1 — tidy text.
     out, blanks_converted = _tidy_text(out)
@@ -405,6 +496,7 @@ def clean_dataframe(
             "missing_pct": pct,
             "unique_count": int(series.nunique(dropna=True)),
             "example_values": [str(v) for v in series.dropna().unique()[:3]],
+            "is_id": bool(ID_NAME.search(str(col))),
             **_missing_advice(series, pct),
         }
     total_cells_pre = n_pre * columns_before
@@ -425,16 +517,22 @@ def clean_dataframe(
 
     # Step 5a — per-column choices (drop / fill).
     # (Only copy when there are choices to apply: big tables are expensive to copy.)
+    removed_for_id = None
     if column_actions:
-        out, done = _apply_column_actions(out.copy(), column_actions, profiles, notes)
+        out, done, removed_for_id = _apply_column_actions(out.copy(), column_actions, profiles, notes)
     else:
         done = {}
     dropped_cols = [c for c, (a, _) in done.items() if a == "dropped"]
-    cells_filled = sum(k for _, k in done.values())
+    cells_filled = sum(k for a, k in done.values() if a not in ("dropped", "rows_dropped"))
+    rows_missing_id = 0 if removed_for_id is None else len(removed_for_id)
+    if rows_missing_id:
+        cols = ", ".join(c for c, (a, k) in done.items() if a == "rows_dropped" and k)
+        notes.append(f"{_rows(rows_missing_id)} removed because the ID was missing ({cols}). Download Excel to see "
+                     "them on the \"rows_missing_id\" sheet, fill in the IDs, and upload again.")
     if dropped_cols:
         notes.append(f"Columns removed at your request: {', '.join(dropped_cols)}.")
     for col, (action, k) in done.items():
-        if action != "dropped" and k:
+        if action not in ("dropped", "rows_dropped") and k:
             notes.append(f"Filled {k:,} missing value{'s' if k != 1 else ''} in '{col}' with the "
                          f"{action} ({profiles[col]['fill_options'].get(action, '')}).")
 
@@ -455,9 +553,11 @@ def clean_dataframe(
     n = len(out)
     column_reports = []
     for col, prof in profiles.items():
-        action, filled = done.get(col, ("keep", 0))
+        action, k = done.get(col, ("keep", 0))
         column_reports.append(ColumnReport(
-            **prof, action=action, filled_count=filled,
+            **prof, action=action,
+            filled_count=0 if action in ("dropped", "rows_dropped") else k,
+            rows_dropped=k if action == "rows_dropped" else 0,
             missing_after=int(out[col].isna().sum()) if col in out.columns else 0,
         ))
 
@@ -492,6 +592,9 @@ def clean_dataframe(
         consultation_recommended=consult,
         analysis_ready=not analysis_note,
         analysis_note=analysis_note,
+        columns_renamed=renamed,
+        rows_missing_id_removed=rows_missing_id,
+        rows_missing_id=removed_for_id,
         notes=notes,
         runtime_seconds=round(time.perf_counter() - started, 4),
     )

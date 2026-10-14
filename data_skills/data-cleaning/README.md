@@ -31,12 +31,13 @@ Run these steps in order. Each maps to a function or block in `cleaning.py`.
 
 | # | Step | pandas | Why |
 |---|---|---|---|
+| 0 | Clean column names | `clean_column_names(df.columns)`: lowercase, non-letters → `_`, split camelCase, unique | `Order Date` → `order_date`, `CustomerID` → `customer_id`; easy to use in Excel, SQL and Python (`columns_renamed`) |
 | 1 | Tidy text | `s.str.strip()`; `""` → `NaN` | `" Acme "` and `"Acme"` are the same; blank text is really missing |
 | 2 | Drop fully empty rows | `df[data_cols].isna().all(axis=1)` | Excel exports often end in blank rows |
 | 3 | Remove exact duplicates | `df.duplicated(subset=data_cols, keep="first")` | All values equal = a copy |
 | 3b | Restore whole numbers | float column with all `% 1 == 0` → `Int64` | IDs like `1001.0` → `1001` |
 | 4 | Missing-value report + advice | `df.isna().sum()`, `/ len(df) * 100`, `s.skew()` | Count, %, a level and a fill suggestion per column (below) |
-| 5a | Column choices (client) | `df.drop(columns=…)`, `s.fillna(s.mean() / s.median() / s.mode()[0])` | Keep (default), remove, or fill — `column_actions` |
+| 5a | Column choices (client) | `df.drop(columns=…)`, `s.fillna(s.mean() / s.median() / s.mode()[0])`, `df[s.notna()]` | Keep (default), remove, fill, or remove rows with no ID (`drop_rows`) — `column_actions`, by cleaned name |
 | 5b | Row strategy (client) | `keep` (default) or `dropna(how="any")` after 5a | Warn if > 20% of rows drop |
 | 6 | Column profile | inferred type, unique count, 3 example values | Sanity-check for the client |
 | 7 | Enough rows? | `rows_before >= 30 and rows_after >= 30` | Under 30 rows (before OR after cleaning) = clean and download only; no analysis (`analysis_ready`, `analysis_note`) |
@@ -57,13 +58,15 @@ Fill suggestion:
 | Numbers, \|skewness\| < 0.5 | mean | Roughly symmetric, so the average is typical |
 | Numbers, \|skewness\| ≥ 0.5 | median | A long tail (e.g. sales) drags the mean; the middle value is more typical |
 | Text, categories, true/false | mode | The most common value |
-| Dates; IDs and codes (`*_id`, `*_number`, `zip`, `sku`…) | nothing | An "average customer ID" means nothing; a blank ID usually means "none" (a walk-in) |
+| Dates | nothing | There's no sensible "average date" to fill in |
+| IDs and codes (`*_id`, `*_number`, `zip`, `sku`…) | `drop_rows` — remove rows with no ID | Never filled ("an average customer ID" means nothing), and an ID should not be blank (NOT NULL). The removed rows go on the Excel download's `rows_missing_id` sheet so the client can find the right IDs and upload again |
 
 Whole-number columns get a rounded fill value (1001 stays 1001). The column
 report keeps the **before** numbers (`missing_count`, `missing_pct`) and adds
-`action`, `filled_count` and `missing_after`. "Use our suggestions" in the app
-fills only `low` columns and removes `remove` columns; `review` columns are the
-client's call, because filling a third of a column with one value changes it a lot.
+`action`, `filled_count`, `rows_dropped` and `missing_after`. "Use our
+suggestions" in the app fills only `low` columns, removes rows with a blank ID,
+and removes `remove` columns; other `review` columns are the client's call,
+because filling a third of a column with one value changes it a lot.
 
 `data_cols` = every column except ones the platform adds (`source_file`), so a
 stacked blank row is still "empty" and the same record in two overlapping
@@ -73,7 +76,9 @@ exports is still a duplicate.
 
 - Do not impute (mean/median/mode/forward-fill) unless the client chooses it —
   then say exactly what was filled and with which value.
-- Never fill IDs or codes, whatever is asked.
+- Never fill IDs or codes, whatever is asked. Remove rows with a blank ID only
+  when the client chooses it, and always hand those rows back (the
+  `rows_missing_id` sheet) — don't silently lose them.
 - Do not remove near-duplicates ("Jon Smith" vs "John Smith") — flag them for a
   consultant instead.
 - Do not drop columns, even fully empty ones, unless the client chooses it — advise instead.
@@ -116,4 +121,4 @@ Input: one table. Runs on the data as uploaded, before cleaning.
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `missing_strategy` | choice (keep, drop_any) | keep | Keep rows with gaps, or drop them |
-| `column_actions` | json | auto | Per column: keep, drop, mean, median, mode or auto, e.g. {"age_group": "mode", "notes": "drop"} |
+| `column_actions` | json | auto | Per column (cleaned names): keep, drop, mean, median, mode, auto, or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"} |

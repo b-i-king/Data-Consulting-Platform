@@ -134,20 +134,25 @@ export interface ColumnReport {
   /** Missing-value advice: under 20% "low", 20%+ "review", 90%+ "remove". */
   missing_level: "none" | "low" | "review" | "remove";
   recommendation: string;
-  /** Suggested fill: mean (symmetric numbers), median (skewed numbers), mode (text). */
-  suggested_fill: FillMethod | null;
+  /** Suggestion: mean (symmetric numbers), median (skewed numbers), mode (text),
+   *  or "drop_rows" for an ID column (remove the rows with no ID). */
+  suggested_fill: FillMethod | "drop_rows" | null;
   skewness: number | null;
   /** method -> the value it would fill in, e.g. { mean: "12.4", median: "9" } */
   fill_options: Partial<Record<FillMethod, string>>;
-  /** What was done: keep, dropped, or the fill method used. */
-  action: "keep" | "dropped" | FillMethod;
+  /** What was done: keep, dropped (the column), rows_dropped (rows with no ID), or the fill method used. */
+  action: "keep" | "dropped" | "rows_dropped" | FillMethod;
   filled_count: number;
+  /** Rows removed because this column was blank ("drop_rows"). */
+  rows_dropped: number;
+  /** Looks like an ID or code: never filled, and shouldn't be blank. */
+  is_id: boolean;
   missing_after: number;
 }
 
 export type FillMethod = "mean" | "median" | "mode";
 /** A choice for one column's missing values ("auto" = our suggestion). */
-export type ColumnAction = "keep" | "drop" | "auto" | FillMethod;
+export type ColumnAction = "keep" | "drop" | "auto" | "drop_rows" | FillMethod;
 /** group id -> column -> choice; sent to analyze, download and skills alike. */
 export type ColumnActions = Record<string, Record<string, ColumnAction>>;
 
@@ -186,6 +191,10 @@ export interface CleaningReport {
   analysis_ready: boolean;
   /** Why the table can't be analyzed (empty when it can). */
   analysis_note: string;
+  /** Column names cleaned to lowercase snake_case: original name -> new name. */
+  columns_renamed: Record<string, string>;
+  /** Rows removed because an ID was blank (listed on the Excel download's "rows_missing_id" sheet). */
+  rows_missing_id_removed: number;
 }
 
 export interface SampleSizeCheck {

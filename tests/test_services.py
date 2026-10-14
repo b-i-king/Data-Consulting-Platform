@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from api.services.categorizer import categorize, combine_group, normalize_column
-from api.services.cleaning import clean_dataframe
+from api.services.cleaning import clean_column_names, clean_dataframe
 from api.services.file_reader import LoadedDataset, UnsupportedFileError, read_file
 from api.services.pricing import build_quote, download_estimate, runtime_cost, wait_label
 from api.services.sample_size import sample_size_snapshot
@@ -236,7 +236,8 @@ def test_id_columns_are_never_filled():
     df = pd.DataFrame({"order_id": range(10), "customer_id": [1001, None, 1003, None, 1005, 1006, None, 1008, 1009, 1010]})
     cleaned, report = clean_dataframe(df, column_actions={"customer_id": "mean"})
     cid = next(c for c in report.column_reports if c.column == "customer_id")
-    assert cid.fill_options == {} and cid.suggested_fill is None and "ID" in cid.recommendation
+    # Never filled — the suggestion is to remove the rows with no ID instead.
+    assert cid.fill_options == {} and cid.suggested_fill == "drop_rows" and "ID" in cid.recommendation
     assert cleaned["customer_id"].isna().sum() == 3            # the request is refused, gaps kept
     assert any("IDs" in n for n in report.notes)
 
@@ -258,3 +259,30 @@ def test_wait_label_reads_like_plain_english():
     assert wait_label(4) == "under 10 seconds"
     assert wait_label(34) == "about 40 seconds"
     assert wait_label(61) == "about 2 minutes"
+
+
+def test_column_names_become_lowercase_snake_case():
+    assert clean_column_names(["Order Date", "Unit Price ($)", "CustomerID", "DisplayName", "Café Name",
+                               "amount", "Amount", "", "2024 Sales", "  e-mail  "]) == [
+        "order_date", "unit_price", "customer_id", "display_name", "cafe_name",
+        "amount", "amount_2", "column_8", "col_2024_sales", "e_mail"]
+    df = pd.DataFrame({"Order ID": range(3), "Total Amount": [1.0, 2.0, 3.0], "source_file": ["a.csv"] * 3})
+    cleaned, report = clean_dataframe(df)
+    assert list(cleaned.columns) == ["order_id", "total_amount", "source_file"]   # ours keeps its name
+    assert report.columns_renamed == {"Order ID": "order_id", "Total Amount": "total_amount"}
+    assert report.column_reports[0].column == "order_id" and report.column_reports[0].is_id
+
+
+def test_rows_missing_an_id_can_be_removed_and_are_set_aside():
+    df = pd.DataFrame({"Order ID": [1, None, 3, None, 5], "amount": [10, 20, 30, 40, 50]})
+    # Choices use the CLEANED column names (the ones the report shows).
+    cleaned, report = clean_dataframe(df, column_actions={"order_id": "drop_rows"})
+    assert cleaned["order_id"].tolist() == [1, 3, 5]
+    assert report.rows_missing_id_removed == 2
+    assert report.rows_missing_id["amount"].tolist() == [20, 40]     # kept for the Excel sheet
+    oid = report.column_reports[0]
+    assert oid.action == "rows_dropped" and oid.rows_dropped == 2 and oid.filled_count == 0
+    assert report.cells_filled == 0
+    assert any("rows_missing_id" in n for n in report.notes)
+    d = report.to_dict()                                              # JSON report leaves the DataFrame out
+    assert "rows_missing_id" not in d and d["rows_missing_id_removed"] == 2

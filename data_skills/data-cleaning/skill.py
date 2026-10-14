@@ -5,9 +5,10 @@ Python implementation of README.md in this folder. The actual pipeline lives in
 api/services/cleaning.py (the website uses it on every upload); this skill
 wraps it so it can also run from the command line or the skills API.
 
-Steps: tidy text → drop empty rows → drop exact duplicates → restore whole
+Steps: clean column names (lowercase snake_case) → tidy text → drop empty rows → drop exact duplicates → restore whole
 numbers → missing-value report with advice (20% / 90% rules, mean vs. median
-by skewness). Nothing is filled or removed unless `column_actions` asks for it.
+by skewness; IDs: remove rows with no ID). Nothing is filled or removed unless
+`column_actions` asks for it.
 """
 
 from __future__ import annotations
@@ -24,8 +25,8 @@ SKILL = SkillSpec(
     description="Remove duplicates and blank rows, tidy text, and report missing values by column.",
     params={
         "missing_strategy": Param("choice", "keep", "Keep rows with gaps, or drop them", ("keep", "drop_any")),
-        "column_actions": Param("json", None, 'Per column: keep, drop, mean, median, mode or auto, '
-                                              'e.g. {"age_group": "mode", "notes": "drop"}'),
+        "column_actions": Param("json", None, 'Per column (cleaned names): keep, drop, mean, median, mode, auto, '
+                                              'or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"}'),
     },
 )
 

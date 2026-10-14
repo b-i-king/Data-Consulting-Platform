@@ -9,7 +9,9 @@ Flat-file endpoints: analyze (guest) and download (signed in).
                                  * the runtime-based price to download, and per table an
                                    estimate of the wait (CSV / Excel) from rows × fields
     POST /api/files/download   SIGNED IN — upload the same files again and
-                               receive the cleaned file (CSV or Excel).
+                               receive the cleaned file (CSV or Excel). Excel adds
+                               a missing-value report sheet and, when rows were
+                               removed for a blank ID, a "rows_missing_id" sheet.
 
 WHY ARE THE FILES UPLOADED TWICE?
 ---------------------------------
@@ -130,6 +132,11 @@ async def download_cleaned(
             pd.DataFrame(group.report.to_dict()["column_reports"]).to_excel(
                 writer, index=False, sheet_name="missing_value_report"
             )
+            # Rows removed because an ID was blank, so the client can look up
+            # the right IDs, fill them in, and upload again.
+            missing_ids = group.report.rows_missing_id
+            if missing_ids is not None and len(missing_ids):
+                missing_ids.to_excel(writer, index=False, sheet_name="rows_missing_id")
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         # utf-8-sig adds a byte-order mark so Excel opens accented characters correctly.
