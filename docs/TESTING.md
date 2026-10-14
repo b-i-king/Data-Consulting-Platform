@@ -73,7 +73,14 @@ python scripts/make_sample_data.py --end 2026-10-31
 4. The time controls are two panels at the bottom: ranges above, comparisons
    below. Make the window narrow (or open it on a phone): they switch to
    **4W 3M 1Y MTD YTD All** and **DoD WoW MoM**.
-5. Services picked in the guest questionnaire ("Your needs") are already on the
+5. Each service page has a **Skill** menu at the top and opens on its default:
+   the cleaning report, the dashboard, or the service's primary skill, which runs
+   by itself (e.g. *Dataset profiling* for Data Exploration & Analysis). Skills
+   that need an option first (*Forecasts & predictive models* needs a target column)
+   open on their form with a hint.
+6. To see the time bar adapt, use **Change files** with a short extract — e.g. the
+   last 7 days of `sales.csv` shows only "Last week" and "Day over day".
+7. Services picked in the guest questionnaire ("Your needs") are already on the
    plan if you create the account at the wizard's download step.
 
 ## 2. From the command line

@@ -166,7 +166,9 @@ turn off the plugin and use these copies.
    ```
 2. Add `data_skills/<name>/skill.py` with `SKILL = SkillSpec(...)` and
    `run(data, **options) -> SkillResult` (copy a similar skill as a starting point).
-3. Add it to **one** category in `catalog.json` with a client-friendly `label`.
+3. Add it to **one** category in `catalog.json` with a client-friendly `label`
+   (each category marks exactly one skill `"primary": true` — the one its workspace
+   page opens on).
 4. Add a case to `CASES` in `tests/test_data_skills.py` that runs it on the sample data.
 5. Run `python scripts/sync_skill_docs.py` to add its "Run it" section to SKILL.md.
 6. Run `pytest -q` — the tests confirm it's placed exactly once, has a

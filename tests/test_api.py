@@ -108,7 +108,7 @@ def test_run_dashboard_skill_on_upload():
                       data={"params": '{"value_columns": ["amount"]}'})
     assert res.status_code == 200, res.text
     body = res.json()
-    assert set(body["data"]["ranges"]) == {"last_4_weeks", "last_3_months", "last_1_year", "month_to_date", "year_to_date", "all"}
+    assert set(body["data"]["ranges"]) == {"last_1_week", "last_4_weeks", "last_3_months", "last_1_year", "month_to_date", "year_to_date", "all"}
     assert "html_dashboard" in body["artifacts"]
 
 

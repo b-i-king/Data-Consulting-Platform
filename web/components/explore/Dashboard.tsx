@@ -139,18 +139,26 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
 
   if (!data) return error ? <ErrorBox message={error} /> : <p className="py-8 text-sm text-ink-muted">Building your dashboard…</p>;
 
-  const R = data.ranges[range];
-  // Day over day isn't calculated for very long ranges; fall back gracefully.
+  // Only ranges the data supports are offered (e.g. "All time" needs > 1 year).
+  // With none, the dashboard shows everything ("all") and hides the range panel.
+  const rangeOptions = Object.fromEntries(
+    Object.entries(data.range_labels).filter(([k]) => data.available_ranges.includes(k)),
+  ) as Record<string, string>;
+  const activeRange = data.ranges[range] && (data.available_ranges.includes(range) || !data.available_ranges.length) ? range : data.default_range;
+  const R = data.ranges[activeRange];
+  // Comparisons calculated for this range (each needs at least two periods).
   const cmpOptions = Object.fromEntries(
     Object.entries(data.comparison_labels).filter(([k]) => R.series[k]),
   ) as Record<string, string>;
-  const activeCmp = R.series[cmp] ? cmp : R.series.wow ? "wow" : "mom";
+  const cmpKeys = Object.keys(cmpOptions);
+  const activeCmp = R.series[cmp] ? cmp : (cmpKeys.includes("wow") ? "wow" : cmpKeys[cmpKeys.length - 1] ?? "");
+  const hasCharts = cmpKeys.length > 0;   // false with only a day or so of data
   const w = R.window;
   const prev = w.prev_start ? { start: w.prev_start, end: w.prev_end! } : null;
   const ovMetric = data.overview.includes(overview) ? overview : data.overview[0];
-  const rows: PeriodRow[] = R.series[activeCmp][ovMetric] ?? [];
+  const rows: PeriodRow[] = R.series[activeCmp]?.[ovMetric] ?? [];
   const partial = rows.length > 1 && rows[rows.length - 1].partial;
-  const breakdown = data.breakdown[range] ?? [];
+  const breakdown = data.breakdown[activeRange] ?? [];
 
   return (
     <div className="space-y-5">
@@ -188,7 +196,7 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
       <ErrorBox message={error} />
 
       <p className="text-sm text-ink-muted">
-        {data.range_labels[range]}: {usDate(w.start)} – {usDate(w.end)}
+        {data.range_labels[activeRange]}: {usDate(w.start)} – {usDate(w.end)}
         {prev && ` · compared with ${usDate(prev.start)} – ${usDate(prev.end)}`} · data as of {usDate(data.as_of)} ·{" "}
         {data.rows.toLocaleString("en-US")} {Object.keys(data.filters).length ? "matching rows" : "rows"}
       </p>
@@ -212,6 +220,14 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
         ))}
       </div>
 
+      {!hasCharts && (
+        <p className="rounded-2xl border border-dashed border-line p-4 text-sm text-ink-muted">
+          Charts over time appear once the data covers at least two days. More date ranges unlock as the data
+          grows: a week, then 4 weeks, 3 months and a year.
+        </p>
+      )}
+
+      {hasCharts && (
       <Card>
         <h3 className="mb-2 font-semibold">
           {data.metric_labels[ovMetric]} over time — {data.comparison_labels[activeCmp]}
@@ -220,7 +236,7 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
           rows={rows}
           cmp={activeCmp}
           prev={prev}
-          label={`${data.metric_labels[ovMetric]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[range]}`}
+          label={`${data.metric_labels[ovMetric]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[activeRange]}`}
         />
         {partial && (
           <p className="mt-2 text-xs text-ink-muted">
@@ -265,6 +281,8 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
         )}
       </Card>
 
+)}
+
       {/* One card + line chart per KPI (the most common transaction types). */}
       {data.kpis.length > 0 && (
         <div>
@@ -280,13 +298,15 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
                   <Delta value={R.kpis[m].pct_change} />
                 </div>
                 <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{fmt(R.kpis[m].current)}</div>
+                {hasCharts && (
                 <PeriodChart
-                  rows={R.series[activeCmp][m] ?? []}
+                  rows={R.series[activeCmp]?.[m] ?? []}
                   cmp={activeCmp}
                   prev={prev}
                   height={200}
-                  label={`${data.metric_labels[m]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[range]}`}
+                  label={`${data.metric_labels[m]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[activeRange]}`}
                 />
+                )}
               </Card>
             ))}
           </div>
@@ -296,7 +316,7 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
       {breakdown.length > 0 && data.dimension_column && (
         <Card>
           <h3 className="mb-3 font-semibold">
-            {data.metric_labels[data.breakdown_metric]} by {data.dimension_column} · {data.range_labels[range].toLowerCase()}
+            {data.metric_labels[data.breakdown_metric]} by {data.dimension_column} · {data.range_labels[activeRange].toLowerCase()}
           </h3>
           <BarChart
             categories={breakdown.map((b) => b.category)}
@@ -309,9 +329,9 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
       {/* Time bar: two floating panels fixed at the bottom of the screen while the
           dashboard is in view; short labels (4W, MTD, WoW…) when space is tight. */}
       <TimeBar
-        ranges={data.range_labels}
+        ranges={rangeOptions}
         rangeShort={data.range_short_labels}
-        range={range}
+        range={activeRange}
         onRange={setRange}
         comparisons={cmpOptions}
         comparisonShort={data.comparison_short_labels}

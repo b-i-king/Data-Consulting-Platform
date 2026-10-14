@@ -2,6 +2,22 @@
 
 Same hosting pattern as the Video_Game_Stats_Tracker template.
 
+## A free test run ($0)
+
+You can put the whole platform online for testing without paying anything and
+**without Supabase**:
+
+| Piece | Free option | What to know |
+|---|---|---|
+| Website | Vercel **Hobby** | Free for personal, non-commercial use. Move to Pro (about $20/month) before you charge clients through the site. |
+| API | Render **Free** web service (`render.yaml` uses `plan: free`) | Sleeps after 15 minutes with no visits; the next visit waits about a minute while it wakes up. 512 MB memory (the API uses about 270 MB with the sample files). 750 free hours a month. |
+| Database | none: leave `DATABASE_URL` empty | Accounts and plans are kept in the API's memory, so they disappear whenever the free API sleeps or redeploys; testers just sign up again. Client files are never stored either way. |
+
+Steps: skip section 1 below, deploy the API (section 2) with `DATABASE_URL`
+empty, then the website (section 3). When you want accounts to persist, add
+Supabase (its free plan has a 500 MB database and pauses after a week of no
+use) by running `db/schema.sql` and setting `DATABASE_URL`.
+
 ## 1. Database — Supabase
 
 1. Create a project (choose a US region, e.g. `us-east-1`).

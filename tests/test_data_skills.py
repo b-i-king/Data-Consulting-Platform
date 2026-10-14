@@ -109,7 +109,9 @@ def test_dashboard_month_to_date_matches_pandas(sales):
     assert mtd["kpis"]["amount"]["current"] == pytest.approx(expected)
     assert mtd["kpis"]["amount"]["previous"] == pytest.approx(prev)
     assert set(r["ranges"]) == set(_time.RANGES)
-    assert set(r["ranges"]["last_4_weeks"]["series"]) == {"dod", "wow", "mom"}
+    # 4 weeks holds two weeks but not two months, so no month-over-month there.
+    assert set(r["ranges"]["last_4_weeks"]["series"]) == {"dod", "wow"}
+    assert set(r["ranges"]["last_3_months"]["series"]) == {"dod", "wow", "mom"}
 
 
 def test_dashboard_kpis_are_the_most_common_types(sales):
@@ -193,7 +195,22 @@ def test_skill_docs_match_the_code():
 
 def test_dashboard_sends_short_labels_for_narrow_screens(sales):
     d = run_skill("build-dashboard", sales, {"include_html": False}).data
-    assert d["range_short_labels"] == {"last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
+    assert d["range_short_labels"] == {"last_1_week": "1W", "last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
                                        "month_to_date": "MTD", "year_to_date": "YTD", "all": "All"}
     assert d["comparison_short_labels"] == {"dod": "DoD", "wow": "WoW", "mom": "MoM"}
     assert set(d["range_short_labels"]) == set(d["range_labels"])
+
+
+
+def test_time_bar_offers_only_what_the_data_supports(sales):
+    """A week of data: Last week + day over day; "All time" only with more than a year."""
+    d = pd.to_datetime(sales["order_date"])
+    def offered(days):
+        r = run_skill("build-dashboard", sales[d > d.max() - pd.Timedelta(days=days)], {"include_html": False}).data
+        return r["available_ranges"], r["available_comparisons"], r["default_range"]
+    assert offered(1)[:2] == ([], [])                                        # nothing to compare: no time bar
+    assert offered(7) == (["last_1_week"], ["dod"], "last_1_week")
+    rng, cmps, default = offered(30)
+    assert rng == ["last_1_week", "last_4_weeks"] and cmps == ["dod", "wow"] and default == "last_4_weeks"
+    assert "all" not in offered(300)[0] and "month_to_date" in offered(300)[0]
+    assert {"all", "year_to_date", "last_1_year"} <= set(offered(731)[0])

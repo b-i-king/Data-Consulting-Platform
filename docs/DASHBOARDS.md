@@ -22,14 +22,16 @@ button. Without dates, **Explore your data** opens on **Run a skill** instead.
 3. **KPIs** — one card and one line chart per KPI (below).
 4. **Breakdown** — the top 8 values of a category column (e.g. product) vs. the
    previous period.
-5. **Time bar** — two separate panels floating at the bottom of the screen
-   while the dashboard is in view: date ranges on top, comparisons below
+5. **Time bar** — two separate, slightly see-through (frosted) panels floating
+   at the bottom of the screen while the dashboard is in view, so the chart
+   behind stays visible: date ranges on top, comparisons below
    (`web/components/explore/TimeBar.tsx`). When the full labels don't fit the
    width available — a phone, a narrow window, a zoomed-in browser — both panels
    switch to short labels. This is measured, not tied to a screen size:
 
    | Full | Short | | Full | Short |
    |---|---|---|---|---|
+   | Last week | 1W | | | |
    | Last 4 weeks | 4W | | Day over day | DoD |
    | Last 3 months | 3M | | Week over week | WoW |
    | Last year | 1Y | | Month over month | MoM |
@@ -92,6 +94,7 @@ open it in November. (Override with the `as_of` option.)
 
 | Range | Covers (as of 10/10/2026) | Compared with |
 |---|---|---|
+| Last week | 10/04 – 10/10/2026 (7 days) | the 7 days before: 09/27 – 10/03 |
 | Last 4 weeks | 09/13 – 10/10/2026 (28 days) | the 28 days before: 08/16 – 09/12 |
 | Last 3 months | 07/11 – 10/10/2026 | the 3 months before: 04/11 – 07/10 |
 | Last year | 10/11/2025 – 10/10/2026 | the year before |
@@ -101,6 +104,32 @@ open it in November. (Override with the `as_of` option.)
 
 Month-to-date near the end of a month never spills over: on 10/31 the
 comparison is 09/01 – 09/30, not into October.
+
+## Only what the data can support
+
+The time bar offers a range or comparison only when there's enough history for
+it (`data_skills/_time.py` → `available_ranges`, `available_comparisons`):
+
+| Offered when… | Ranges | Comparisons |
+|---|---|---|
+| the data covers the whole window | Last week (7 days), Last 4 weeks (28), Last 3 months, Last year | |
+| it also covers the same days last month / last year (so the comparison is fair) | Month to date, Year to date | |
+| there's **more than a year** of data | All time | |
+| at least 2 days / 2 weeks / 2 months (in the data and in the range) | | Day / Week / Month over… |
+
+| Data covers | Time bar shows |
+|---|---|
+| 1 day | nothing — no time bar and no line charts, just the totals and a note |
+| 2–6 days | day over day (charts over all the data; no range panel) |
+| 1–3 weeks | Last week · day over day (week over week from 2 weeks) |
+| 4 weeks | + Last 4 weeks · week over week |
+| about 6 weeks | + Month to date |
+| 3 months | + Last 3 months · month over month |
+| more than a year | + Last year · All time (and Year to date once last year's matching days exist) |
+
+If the requested default range isn't available, the dashboard opens on the
+longest rolling window the data has. Filtering (e.g. to one customer type) can
+shorten the history, so the choices follow the filtered rows.
 
 The KPI cards show each range's total (or average) and the % change vs. its
 comparison, with ▲/▼ and the number — never color alone.

@@ -261,6 +261,8 @@ export interface SkillInfo {
   category: string;
   category_name: string;
   label: string;
+  /** The skill its service's workspace page opens on (one per service). */
+  primary: boolean;
   params: Record<string, SkillParam>;
 }
 
@@ -343,6 +345,11 @@ export interface DashboardData {
   /** Short labels for narrow screens: 4W, 3M, 1Y, MTD, YTD, All · DoD, WoW, MoM. */
   range_short_labels: Record<string, string>;
   comparison_short_labels: Record<string, string>;
+  /** Ranges the data supports, e.g. ["last_1_week"] for one week of data ("all" needs > 1 year). */
+  available_ranges: string[];
+  /** Comparisons the data supports: dod needs 2 days, wow 2 weeks, mom 2 months. */
+  available_comparisons: string[];
+  days_of_data: number;
   ranges: Record<
     string,
     {

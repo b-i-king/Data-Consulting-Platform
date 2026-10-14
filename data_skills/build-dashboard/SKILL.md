@@ -943,7 +943,9 @@ calculation:
 4. **Time controls float at the bottom** of the screen (Copilot Money style), as
    two panels — ranges (last 4 weeks · 3 months · year · month to date · year to
    date · all time) above comparisons (day / week / month over period) — with
-   short labels (4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM) when the full ones don't fit.
+   short labels (1W, 4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM) when the full ones don't
+   fit. Only ranges and comparisons the data can support are offered: a week of
+   data gets Last week + day over day; "All time" needs more than a year.
 
 ## Run it (platform implementation)
 
@@ -967,7 +969,7 @@ Input: one table.
 | `value_columns` | columns | auto | KPIs when there is no type column: number columns to chart (default: up to 3 detected) |
 | `dimension_column` | column | auto | Category column for a breakdown (e.g. product) |
 | `agg` | choice (sum, mean, count) | sum | How to combine values in a period |
-| `range` | choice (last_4_weeks, last_3_months, last_1_year, month_to_date, year_to_date, all) | last_3_months | Default range shown |
+| `range` | choice (last_1_week, last_4_weeks, last_3_months, last_1_year, month_to_date, year_to_date, all) | last_3_months | Default range shown |
 | `comparison` | choice (auto, dod, wow, mom) | auto | Default comparison |
 | `as_of` | str | auto | End date for ranges, YYYY-MM-DD (default: latest date in the data) |
 | `title` | str | Dashboard | Dashboard title |
