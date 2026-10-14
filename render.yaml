@@ -32,6 +32,10 @@ services:
         sync: false        # e.g. https://your-site.vercel.app
       - key: BOOKING_URL
         sync: false
+      - key: CONSULTANT_EMAILS
+        sync: false        # e.g. you@yourdomain.com (first = default consultant)
+      - key: CONSULTANT_ACCESS_CODE
+        sync: false        # a long secret; consultants type it when signing in
       - key: PRICE_PER_RUNTIME_MINUTE_USD
         value: "0.50"
       # 512 MB of memory: a 14 MB CSV peaks around 300-375 MB while cleaning and

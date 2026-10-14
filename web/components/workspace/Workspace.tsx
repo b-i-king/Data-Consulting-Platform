@@ -23,6 +23,15 @@
 //   Picking another skill from the menu shows that skill instead. Results are
 //   kept while the files stay the same, so switching back is instant.
 //
+// CONSULTANT MODE (lavender): a consultant sees a "Working on" picker at the
+// top of the left pane (ClientPicker.tsx). Picking a client shows that
+// client's plan and data tools; every signed-in request then carries
+// X-Acting-As, and the server checks the client is assigned to this consultant.
+// "Book a call" prompts are hidden for consultants.
+//
+// PLAN BOX (bottom of the left pane): the "All tools" subscription, if any,
+// with "Cancel anytime".
+//
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
 // Until payments exist, "Add to my plan" unlocks a service right away, after
 // a confirmation showing its price and the plan's new total. Downloads also
@@ -33,10 +42,22 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { addMyService, analyzeFiles, downloadCleaned, getIntakeOptions, getMyServices, getSkills } from "@/lib/api";
+import {
+  addMyService,
+  analyzeFiles,
+  cancelSubscription,
+  downloadCleaned,
+  getIntakeOptions,
+  getMyClients,
+  getMyServices,
+  getSkills,
+  setActingAs,
+} from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
+import type { ConsultantClient, IntakeOptions } from "@/lib/types";
+import ClientPicker, { AddClientForm } from "./ClientPicker";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
@@ -44,7 +65,7 @@ import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
 import { AddServiceConfirm } from "@/components/wizard/ServiceConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
-import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
@@ -103,6 +124,13 @@ export default function Workspace() {
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
+  // Consultant mode: my clients, the one I'm working on (null = my own workspace).
+  const [options, setOptions] = useState<IntakeOptions | null>(null);
+  const [clients, setClients] = useState<ConsultantClient[]>([]);
+  const [actingId, setActingId] = useState<string | null>(null);
+  const [addingClient, setAddingClient] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
   // Skill menu: every skill, the choice per service, and results kept for this visit.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [picked, setPicked] = useState<Record<string, string>>({});
@@ -111,7 +139,13 @@ export default function Workspace() {
   useEffect(() => {
     const s = loadSession();
     setSession(s);
+    setActingAs(null); // a fresh visit starts in your own workspace
     if (!s) return;
+    if (s.account.role === "consultant") {
+      getMyClients(s.token)
+        .then((r) => setClients(r.clients))
+        .catch(() => {});
+    }
     getMyServices(s.token)
       .then(setPlan)
       .catch((e) => {
@@ -127,9 +161,44 @@ export default function Workspace() {
       .then(setSkills)
       .catch(() => {});
     getIntakeOptions()
-      .then((o) => setBookingUrl(o.booking_url))
+      .then((o) => {
+        setBookingUrl(o.booking_url);
+        setOptions(o);
+      })
       .catch(() => {});
   }, []);
+
+  // Consultant: switch to another client (or back to my own workspace). Their
+  // data is separate, so the files and results from the last client are cleared.
+  async function chooseClient(id: string | null) {
+    if (!session) return;
+    setActingAs(id);
+    setActingId(id);
+    setAddingClient(false);
+    setFiles([]);
+    setAnalysis(null);
+    setColumnActions({});
+    setColumnNames({});
+    setTransforms({});
+    setResults({});
+    setSection(null);
+    setError(null);
+    try {
+      setPlan(await getMyServices(session.token));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't open that client.");
+    }
+  }
+
+  async function cancelPlan() {
+    if (!session) return;
+    setConfirmCancel(false);
+    try {
+      setPlan(await cancelSubscription(session.token));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't cancel the plan.");
+    }
+  }
 
   // Left-pane order: Dashboard (if on the plan) or Data Cleaning first, then the
   // rest of the plan, then everything not on the plan (grayed out).
@@ -261,6 +330,12 @@ export default function Workspace() {
     );
   }
 
+  const isConsultant = session.account.role === "consultant";
+  // Whose workspace is on screen: the client a consultant is working on, or me.
+  const who = plan?.account ?? session.account;
+  const sub = plan?.subscription;
+  const subPlan = plan?.subscriptions?.find((s) => s.id === sub?.plan);
+
   const item = (s: Service, isLocked: boolean) => (
     <li key={s.id} className="shrink-0 lg:shrink">
       <div
@@ -312,8 +387,11 @@ export default function Workspace() {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
       {/* ── Left pane ── */}
       <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+        {isConsultant && (
+          <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} />
+        )}
         <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">
-          {session.account.company_name ?? `${session.account.first_name} ${session.account.last_name}`}
+          {who.company_name ?? `${who.first_name} ${who.last_name}`}
         </p>
         <nav aria-label="Workspace">
           {/* relative: keeps the screen-reader-only text inside this scrolling row on phones. */}
@@ -327,6 +405,38 @@ export default function Workspace() {
             {locked.map((s) => item(s, true))}
           </ul>
         </nav>
+        {subPlan && sub?.status && (
+          <div className="mx-1 mt-4 hidden rounded-xl border border-line bg-surface p-3 text-xs lg:block">
+            <p className="font-semibold">
+              {subPlan.name} plan · {sub.interval === "year" ? "yearly" : "monthly"}
+            </p>
+            {sub.status === "active" ? (
+              <>
+                <p className="text-ink-muted">Every available service is on. No contract.</p>
+                {plan?.can_add && (
+                  <button type="button" onClick={() => setConfirmCancel(true)} className="mt-1 text-ink-muted underline hover:text-bad">
+                    Cancel anytime
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-ink-muted">Canceled — services you added stay on your plan.</p>
+            )}
+          </div>
+        )}
+        {confirmCancel && subPlan && (
+          <ConfirmDialog
+            title={`Cancel the ${subPlan.name} plan?`}
+            confirmLabel="Cancel the plan"
+            onConfirm={cancelPlan}
+            onCancel={() => setConfirmCancel(false)}
+          >
+            <p>
+              No fees and no questions. Services you added one by one stay on your plan; the rest are grayed out again.
+              Your downloaded files are yours to keep.
+            </p>
+          </ConfirmDialog>
+        )}
         <button type="button" onClick={signOut} className="mt-4 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
           Sign out
         </button>
@@ -353,6 +463,24 @@ export default function Workspace() {
             </button>
           </div>
         </div>
+        {isConsultant && plan?.acting && (
+          <p role="status" className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
+            <span className="mr-2 rounded-full bg-consultant px-2 py-0.5 text-xs font-semibold text-on-consultant">Consultant</span>
+            You&apos;re working on <strong>{who.company_name ?? `${who.first_name} ${who.last_name}`}</strong>
+            {who.company_name && ` (${who.first_name} ${who.last_name})`}. Downloads are billed to them.
+          </p>
+        )}
+        {isConsultant && addingClient && (
+          <AddClientForm
+            token={session.token}
+            options={options}
+            onCancel={() => setAddingClient(false)}
+            onDone={(c) => {
+              setClients((all) => [...all, c].sort((a, b) => a.label.localeCompare(b.label)));
+              chooseClient(c.id);
+            }}
+          />
+        )}
         <ErrorBox message={error} />
         {pendingAdd && plan?.services.find((s) => s.id === pendingAdd) && (
           <AddServiceConfirm
@@ -375,7 +503,7 @@ export default function Workspace() {
               ) : (
                 <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this service.</p>
               )}
-              {currentService.pricing_model === "consultation" && (
+              {currentService.pricing_model === "consultation" && !isConsultant && (
                 <a href={bookingUrl} target="_blank" rel="noreferrer" className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
                   Book a free call
                 </a>

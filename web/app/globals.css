@@ -44,6 +44,11 @@
   --color-cat-engineering: #2f9e44;
   --color-cat-ai: #a07c1e;
 
+  /* Consultant mode (lavender): the header badge, "Working on" picker and banner. */
+  --color-consultant: #6f4fd8;
+  --color-consultant-soft: #efeafd;
+  --color-on-consultant: #ffffff;
+
   /* Dashboard line charts: this period vs. previous period. Checked with the
      dataviz palette validator (lightness, chroma, color-blind separation,
      contrast) against the light surface; dark values below were checked too. */
@@ -83,6 +88,9 @@
     --color-cat-ml: #ff922b;
     --color-cat-engineering: #69db7c;
     --color-cat-ai: #c8ac44;
+    --color-consultant: #b197fc;
+    --color-consultant-soft: #2a2340;
+    --color-on-consultant: #0e1117;
     --color-chart-current: #a68a2c;
     --color-chart-previous: #6f8fd8;
     --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
@@ -112,6 +120,9 @@
       --color-cat-ml: #ff922b;
       --color-cat-engineering: #69db7c;
       --color-cat-ai: #c8ac44;
+      --color-consultant: #b197fc;
+      --color-consultant-soft: #2a2340;
+      --color-on-consultant: #0e1117;
       --color-chart-current: #a68a2c;
       --color-chart-previous: #6f8fd8;
       --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);

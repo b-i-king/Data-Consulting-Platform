@@ -21,7 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
@@ -47,7 +47,11 @@ export default function Wizard() {
     naics_sector: null,
     naics_subsector: null,
     company_size: null,
+    industry_other: null,
   });
+  // "Your needs": the All tools subscription (or none), and "do it for me".
+  const [subscription, setSubscription] = useState<SubscriptionChoice | null>(null);
+  const [wantsConsultant, setWantsConsultant] = useState(false);
   const [location, setLocation] = useState<string | null>(null);
   const [locationOption, setLocationOption] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -228,6 +232,12 @@ export default function Wizard() {
           onChange={setServiceIds}
           runtimeSeconds={analysis.runtime.runtime_seconds}
           bookingUrl={bookingUrl}
+          subscriptions={options.subscriptions ?? []}
+          subscription={subscription}
+          onSubscription={setSubscription}
+          consultantName={options.consultant?.name ?? null}
+          wantsConsultant={wantsConsultant}
+          onWantsConsultant={setWantsConsultant}
           onBack={() => go(3)}
           onNext={() => go(5)}
         />
@@ -238,6 +248,9 @@ export default function Wizard() {
           defaultType={accountType ?? "individual"}
           industry={industry}
           serviceIds={serviceIds}
+          subscription={subscription}
+          wantsConsultant={wantsConsultant}
+          consultantName={options.consultant?.name ?? null}
           session={session}
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}

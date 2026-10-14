@@ -9,6 +9,12 @@
 // location; business -> plus business name and optional team members.
 // Sign-in asks only for the email. Guests never see these fields.
 //
+// Signup also offers "I'd like <consultant> to do this for me" (a "done for
+// you" client, assigned to the default consultant), and carries the
+// subscription picked on "Your needs".
+// CONSULTANTS use the same form plus their access code ("I'm a consultant"
+// link, or shown automatically when the server asks for it).
+//
 // FOOLPROOF INPUT (rules in lib/validation.ts, enforced again on the server):
 //   * names: letters (accents fine), spaces, - ' ’ . ; the first letter is
 //     capitalized for you as you type
@@ -25,7 +31,7 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { signin, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
-import type { AccountType, Industry, Location, TeamMemberInput } from "@/lib/types";
+import type { AccountType, Industry, Location, SubscriptionChoice, TeamMemberInput } from "@/lib/types";
 import { capitalizeFirst, companyNameError, emailError, personNameError, repeatedEmails } from "@/lib/validation";
 import { Button, Card, ChoiceCard, ErrorBox, StepHeader } from "@/components/wizard/ui";
 import LocationPicker from "./LocationPicker";
@@ -60,6 +66,9 @@ export default function AuthForm({
   initialMode = "signup",
   title,
   subtitle,
+  subscription = null,
+  wantsConsultant: initialWants = false,
+  consultantName = null,
 }: {
   defaultType?: AccountType;
   industry?: Industry; // answered on the wizard's first step; sent only for business signups
@@ -68,6 +77,9 @@ export default function AuthForm({
   initialMode?: "signup" | "signin";
   title: { signup: string; signin: string };
   subtitle?: string;
+  subscription?: SubscriptionChoice | null; // picked on "Your needs"
+  wantsConsultant?: boolean; // ticked on "Your needs"
+  consultantName?: string | null; // the default consultant, e.g. "Brandon"
 }) {
   const [mode, setMode] = useState<"signup" | "signin">(initialMode);
   const [type, setType] = useState<AccountType>(defaultType);
@@ -77,6 +89,10 @@ export default function AuthForm({
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState<Location | null>(null);
   const [team, setTeam] = useState<TeamMemberInput[]>([]);
+  const [wants, setWants] = useState(initialWants);
+  // Consultant sign-in: the access code box (hidden for everyone else).
+  const [showCode, setShowCode] = useState(false);
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which fields have been left (so errors don't shout while someone is still typing).
@@ -119,7 +135,7 @@ export default function AuthForm({
     try {
       const res =
         mode === "signin"
-          ? await signin(email.trim())
+          ? await signin(email.trim(), showCode ? code.trim() : undefined)
           : await signup({
               account_type: type,
               first_name: first.trim(),
@@ -127,6 +143,9 @@ export default function AuthForm({
               email: email.trim(),
               ...(location ? { location_id: location.id } : {}),
               ...(serviceIds.length ? { service_ids: serviceIds } : {}),
+              ...(wants ? { wants_consultant: true } : {}),
+              ...(subscription ? { subscription } : {}),
+              ...(showCode && code.trim() ? { access_code: code.trim() } : {}),
               ...(type === "business"
                 ? {
                     company_name: company.trim(),
@@ -137,7 +156,9 @@ export default function AuthForm({
             });
       onSignedIn({ token: res.access_token, account: res.account });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      const message = err instanceof Error ? err.message : "Something went wrong.";
+      if (message.includes("consultant access code")) setShowCode(true); // a consultant's email: ask for the code
+      setError(message);
     } finally {
       setBusy(false);
     }
@@ -242,6 +263,42 @@ export default function AuthForm({
               </div>
             </Card>
           </>
+        )}
+
+        {mode === "signup" && (
+          // "Done for you": a consultant does the work in this account.
+          <label className="flex items-start gap-3 rounded-2xl border border-consultant/40 bg-consultant-soft p-4 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-[var(--color-consultant)]"
+              checked={wants}
+              onChange={(e) => setWants(e.target.checked)}
+            />
+            <span>
+              <span className="font-semibold">I&apos;d like {consultantName ?? "a consultant"} to do this for me</span>
+              <span className="block text-xs text-ink-muted">
+                No new platform to learn: your consultant signs in and does the cleaning, dashboards and analysis for you,
+                with every tool unlocked. You can still log in and look around anytime.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {showCode ? (
+          <label className="block space-y-1 text-sm">
+            <span>Consultant access code</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              className={inputCls(false)}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </label>
+        ) : (
+          <button type="button" className="text-xs text-ink-muted hover:text-consultant" onClick={() => setShowCode(true)}>
+            I&apos;m a consultant
+          </button>
         )}
 
         {(submitted || touched.email) && errors.repeats && (

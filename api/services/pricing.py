@@ -10,6 +10,8 @@ WHAT THIS FILE DOES
    runtime is rounded UP to the billing increment (1 minute by default)
    and multiplied by the per-minute rate.
 3. Builds a QUOTE for the services a client selected.
+5. Lists the SUBSCRIPTIONS: the "All tools" plan, billed monthly or yearly
+   (yearly is cheaper), cancel anytime.
 4. ESTIMATES how long a download will take and what it will cost, from the
    table's rows × fields (see download_estimate), so the site can show the
    amount and ask the client to confirm before anything is charged.
@@ -145,6 +147,49 @@ SERVICES: tuple[Service, ...] = (
 )
 
 SERVICES_BY_ID = {s.id: s for s in SERVICES}
+
+
+@dataclass(frozen=True)
+class Subscription:
+    """A recurring plan. Cancel anytime: no contract, access runs to the end of the period paid."""
+
+    id: str
+    name: str
+    description: str
+    monthly_usd: float              # billed every month
+    annual_usd: float               # billed once a year (cheaper than 12 × monthly)
+    includes: tuple[str, ...]
+
+
+# PLACEHOLDER PRICES — set your own. Yearly = 10 × monthly ("2 months free").
+SUBSCRIPTIONS: tuple[Subscription, ...] = (
+    Subscription(
+        id="all_tools",
+        name="All tools",
+        description="Every available service and data skill in your workspace — cleaning, analysis, "
+                    "dashboards, data engineering and machine learning tools. Do it yourself, at your pace.",
+        monthly_usd=49.0,
+        annual_usd=490.0,
+        includes=("Every available service unlocked", "All data skills", "Unlimited dashboards",
+                  "Cancel anytime"),
+    ),
+)
+SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
+INTERVALS = ("month", "year")
+
+
+def subscription_catalog() -> list[dict]:
+    """Subscriptions as plain dicts, with the yearly saving worked out for the UI."""
+    out = []
+    for s in SUBSCRIPTIONS:
+        full_year = s.monthly_usd * 12
+        out.append({
+            **asdict(s),
+            "annual_per_month_usd": round(s.annual_usd / 12, 2),
+            "annual_savings_usd": round(full_year - s.annual_usd, 2),
+            "annual_savings_pct": round((full_year - s.annual_usd) / full_year * 100) if full_year else 0,
+        })
+    return out
 
 
 def runtime_cost(runtime_seconds: float) -> dict:

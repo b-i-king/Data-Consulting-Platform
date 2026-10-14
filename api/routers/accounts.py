@@ -6,12 +6,19 @@ Account endpoints.
     GET  /api/accounts/me             who am I? (requires token)
     GET  /api/accounts/services       services on my plan + the full catalog (requires token)
     POST /api/accounts/services       add a service to my plan (requires token; see entitlements.py)
+    POST /api/accounts/subscription/cancel   cancel the "All tools" subscription (anytime)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
 
 Guests only need an account at the DOWNLOAD step. Signup asks for:
   * individual: first name, last name, email
   * business:   first name, last name, email, company name (+ optional team members)
+  * optional:   "I'd like a consultant to do this for me", a subscription
+
+CONSULTANTS sign up and sign in here too: their email must be in
+CONSULTANT_EMAILS and they must send CONSULTANT_ACCESS_CODE. Their token says
+role "consultant". The services endpoints accept `X-Acting-As: <client id>`
+from a consultant to work on an assigned client (api/services/consultants.py).
 
 ⚠️ SECURITY NOTE — READ BEFORE LAUNCH
 -------------------------------------
@@ -28,10 +35,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from api.core.security import create_access_token, get_current_account
-from api.models.accounts import AccountOut, AddServiceIn, AuthOut, SigninIn, SignupIn, TeamMemberIn
-from api.services import account_store, entitlements, locations
-from api.services.pricing import catalog
+from api.core.security import create_access_token, get_acting_context, get_current_account
+from api.models.accounts import (
+    AccountOut,
+    AddServiceIn,
+    AuthOut,
+    CancelSubscriptionIn,
+    SigninIn,
+    SignupIn,
+    TeamMemberIn,
+)
+from api.services import account_store, consultants, entitlements, locations
+from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
 
@@ -43,7 +58,7 @@ ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without
                 "have restarted and forgotten accounts — please create your account again.")
 
 
-def _account_out(acc: dict) -> AccountOut:
+def _account_out(acc: dict, role: str = "client", consultant_name: str | None = None) -> AccountOut:
     """Convert a stored account (dict with UUIDs/dates) to the API shape."""
     return AccountOut(
         id=str(acc["id"]),
@@ -61,16 +76,49 @@ def _account_out(acc: dict) -> AccountOut:
         company_size=acc.get("company_size"),
         location_id=acc.get("location_geoname_id"),
         location=acc.get("location_label"),
+        industry_other=acc.get("industry_other"),
+        role=role,
+        wants_consultant=bool(acc.get("wants_consultant")),
+        consultant_name=consultant_name,
+        subscription_plan=acc.get("subscription_plan"),
+        subscription_interval=acc.get("subscription_interval"),
+        subscription_status=acc.get("subscription_status"),
     )
 
 
-def _auth_response(acc: dict) -> AuthOut:
-    token = create_access_token(str(acc["id"]), acc["email"], acc["account_type"])
-    return AuthOut(access_token=token, account=_account_out(acc))
+async def _full_account_out(acc: dict) -> AccountOut:
+    """_account_out plus the role and the assigned consultant's name (looked up)."""
+    role = "consultant" if await account_store.get_consultant_by_account(str(acc["id"])) else "client"
+    holder_id = await entitlements.plan_holder_id(acc)
+    holder = acc if holder_id == str(acc["id"]) else await account_store.get_account(holder_id)
+    consultant = await account_store.get_consultant(str(holder["consultant_id"])) if holder and holder.get("consultant_id") else None
+    return _account_out(acc, role, consultant["display_name"] if consultant else None)
+
+
+async def _auth_response(acc: dict) -> AuthOut:
+    out = await _full_account_out(acc)
+    token = create_access_token(str(acc["id"]), acc["email"], acc["account_type"], out.role)
+    return AuthOut(access_token=token, account=out)
 
 
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(body: SignupIn):
+    is_consultant = consultants.is_consultant_email(body.email)
+    if is_consultant:
+        consultants.check_access_code(body.access_code)   # 403 without the right code
+    owner = await create_client_account(body, consultant_id=None if is_consultant else "default")
+    if is_consultant:
+        await consultants.register(owner)
+    return await _auth_response(owner)
+
+
+async def create_client_account(body: SignupIn, consultant_id: str | None) -> dict:
+    """
+    Create the account (+ team members, + services on the plan). Shared by
+    signup and by a consultant adding a client (api/routers/consultants.py).
+    `consultant_id`: "default" = the default consultant if they asked for one;
+    a consultant's id = assign to them; None = no consultant.
+    """
     unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
     if unknown:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown service id(s): {', '.join(unknown)}")
@@ -85,6 +133,10 @@ async def signup(body: SignupIn):
                        + (" — please sign in instead." if email == body.email else "."),
             )
     place = locations.get(body.location_id) if body.location_id else None
+    wants = body.wants_consultant or (consultant_id not in (None, "default"))
+    if consultant_id == "default":
+        default = await consultants.default_consultant() if body.wants_consultant else None
+        consultant_id = str(default["id"]) if default else None
     try:
         owner = await account_store.create_account(
             account_type=body.account_type,
@@ -97,6 +149,11 @@ async def signup(body: SignupIn):
             naics_subsector=body.naics_subsector,
             company_size=body.company_size,
             location=place,
+            industry_other=body.industry_other,
+            wants_consultant=wants,
+            consultant_id=consultant_id,
+            subscription_plan=body.subscription.plan if body.subscription else None,
+            subscription_interval=body.subscription.interval if body.subscription else None,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -109,17 +166,20 @@ async def signup(body: SignupIn):
     # Services chosen in the questionnaire go on the plan (placeholder until payments).
     if body.service_ids:
         await entitlements.add_services(owner, body.service_ids, source="signup")
-
-    return _auth_response(owner)
+    return owner
 
 
 @router.post("/signin", response_model=AuthOut)
 async def signin(body: SigninIn):
+    if consultants.is_consultant_email(body.email):
+        consultants.check_access_code(body.access_code)   # 403 without the right code
     acc = await account_store.get_account_by_email(body.email)
     if acc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No account found for that email. Please sign up.")
     await account_store.touch_last_login(str(acc["id"]))
-    return _auth_response(acc)
+    if consultants.is_consultant_email(body.email):
+        await consultants.register(acc)
+    return await _auth_response(acc)
 
 
 @router.get("/me", response_model=AccountOut)
@@ -127,7 +187,7 @@ async def me(token: Annotated[dict, Depends(get_current_account)]):
     acc = await account_store.get_account(token["sub"])
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
-    return _account_out(acc)
+    return await _full_account_out(acc)
 
 
 @router.get("/team")
@@ -178,34 +238,54 @@ async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
         )
 
 
-async def _services_out(acc: dict) -> dict:
+async def _services_out(ctx: dict) -> dict:
+    acc = ctx["account"]
     active = await entitlements.active_services(acc)
-    holder = await entitlements.plan_holder_id(acc)
+    holder_id = await entitlements.plan_holder_id(acc)
+    holder = acc if holder_id == str(acc["id"]) else await account_store.get_account(holder_id)
     return {
         "active": active,
         # True when this person may add services (individuals and team owners).
-        "can_add": holder == str(acc["id"]),
+        "can_add": holder_id == str(acc["id"]),
         "services": [{**s, "active": s["id"] in active} for s in catalog()],
+        # Whose workspace this is (a consultant may be working on a client's).
+        "account": (await _full_account_out(acc)).model_dump(),
+        "acting": ctx["acting"],
+        "subscription": {
+            "plan": holder.get("subscription_plan") if holder else None,
+            "interval": holder.get("subscription_interval") if holder else None,
+            "status": holder.get("subscription_status") if holder else None,
+        },
+        "subscriptions": subscription_catalog(),
     }
 
 
 @router.get("/services")
-async def my_services(token: Annotated[dict, Depends(get_current_account)]):
-    acc = await account_store.get_account(token["sub"])
-    if acc is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
-    return await _services_out(acc)
+async def my_services(ctx: Annotated[dict, Depends(get_acting_context)]):
+    return await _services_out(ctx)
 
 
 @router.post("/services")
-async def add_service(body: AddServiceIn, token: Annotated[dict, Depends(get_current_account)]):
-    acc = await account_store.get_account(token["sub"])
-    if acc is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
+async def add_service(body: AddServiceIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    acc = ctx["account"]
     try:
         await entitlements.add_services(acc, [body.service_id])
     except entitlements.NotPlanOwnerError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return await _services_out(acc)
+    return await _services_out(ctx)
+
+
+@router.post("/subscription/cancel")
+async def cancel_subscription(body: CancelSubscriptionIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """Cancel anytime. Services already on the plan stay; the "everything" unlock ends."""
+    acc = ctx["account"]
+    holder_id = await entitlements.plan_holder_id(acc)
+    if holder_id != str(acc["id"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can change the subscription.")
+    if not acc.get("subscription_plan") or acc.get("subscription_status") != "active":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="There's no active subscription to cancel.")
+    await account_store.set_subscription(holder_id, plan=acc["subscription_plan"],
+                                         interval=acc.get("subscription_interval"), status="canceled")
+    return await _services_out({**ctx, "account": await account_store.get_account(holder_id)})

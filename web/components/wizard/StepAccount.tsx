@@ -20,7 +20,7 @@ import { downloadCleaned } from "@/lib/api";
 import AuthForm from "@/components/auth/AuthForm";
 import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, Industry } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, Industry, SubscriptionChoice } from "@/lib/types";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
 import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 
@@ -29,6 +29,9 @@ export default function StepAccount(props: {
   defaultType: AccountType;
   industry: Industry;
   serviceIds: string[]; // chosen on "Your needs"; saved on the new account's plan
+  subscription: SubscriptionChoice | null; // "All tools" plan picked on "Your needs"
+  wantsConsultant: boolean; // "do it for me" picked on "Your needs"
+  consultantName: string | null;
   session: Session | null;
   onSignedIn: (s: Session) => void;
   onSignOut: () => void;
@@ -45,6 +48,9 @@ export default function StepAccount(props: {
           defaultType={props.defaultType}
           industry={props.industry}
           serviceIds={props.serviceIds}
+          subscription={props.subscription}
+          wantsConsultant={props.wantsConsultant}
+          consultantName={props.consultantName}
           onSignedIn={props.onSignedIn}
           title={{ signup: "Create a free account to download", signin: "Welcome back" }}
           subtitle="Your cleaned data is ready. We just need to know who to send it to."

@@ -16,6 +16,13 @@ from api.services import locations, validation
 from api.services.intake import COMPANY_SIZE_CODES, validate_industry
 
 
+class SubscriptionIn(BaseModel):
+    """The subscription chosen at signup (placeholder until payments)."""
+
+    plan: Literal["all_tools"]
+    interval: Literal["month", "year"]
+
+
 class TeamMemberIn(BaseModel):
     """A colleague a business owner wants to add to their team."""
 
@@ -70,6 +77,15 @@ class SignupIn(BaseModel):
     # Optional location, chosen from the picker (a GeoNames city id). Only the
     # id is trusted; the city/state/country are looked up on the server.
     location_id: int | None = None
+    # "Other" industry: what the person typed when nothing in the list fit.
+    # Saved instead of a NAICS code; leave everything empty to save nothing.
+    industry_other: str | None = Field(default=None, max_length=120)
+    # "I'd like a consultant to do this for me" -> assigned to the default consultant.
+    wants_consultant: bool = False
+    # Subscription choice: {"plan": "all_tools", "interval": "month" | "year"}.
+    subscription: SubscriptionIn | None = None
+    # Only consultants (CONSULTANT_EMAILS) send this; see api/services/consultants.py.
+    access_code: str | None = Field(default=None, max_length=200)
 
     @field_validator("first_name")
     @classmethod
@@ -85,6 +101,12 @@ class SignupIn(BaseModel):
     @classmethod
     def _email(cls, v: str) -> str:
         return validation.clean_email(v)
+
+    @field_validator("industry_other")
+    @classmethod
+    def _industry_other(cls, v: str | None) -> str | None:
+        v = " ".join((v or "").split())     # trim and collapse spaces
+        return v or None
 
     @field_validator("company_name")
     @classmethod
@@ -108,6 +130,10 @@ class SignupIn(BaseModel):
                 raise ValueError("Industry applies to business accounts only.")
             if self.company_size:
                 raise ValueError("Company size applies to business accounts only.")
+            if self.industry_other:
+                raise ValueError("Industry applies to business accounts only.")
+        if self.industry_other and self.naics_sector:
+            raise ValueError("Pick an industry from the list, or choose Other — not both.")
         if self.company_size and self.company_size not in COMPANY_SIZE_CODES:
             raise ValueError("Unknown company size.")
         if self.account_type == "business" and not self.company_name:
@@ -125,6 +151,7 @@ class SignupIn(BaseModel):
 
 class SigninIn(BaseModel):
     email: EmailStr
+    access_code: str | None = Field(default=None, max_length=200)   # consultants only
 
     @field_validator("email", mode="before")
     @classmethod
@@ -148,6 +175,13 @@ class AccountOut(BaseModel):
     company_size: str | None = None
     location_id: int | None = None
     location: str | None = None       # "Atlanta, Georgia, United States"
+    industry_other: str | None = None
+    role: Literal["client", "consultant"] = "client"
+    wants_consultant: bool = False
+    consultant_name: str | None = None    # the assigned consultant's first name
+    subscription_plan: str | None = None
+    subscription_interval: str | None = None
+    subscription_status: str | None = None
 
 
 class AuthOut(BaseModel):
@@ -167,3 +201,9 @@ class AddServiceIn(BaseModel):
     """Add one service to the plan (from the workspace's left pane)."""
 
     service_id: str
+
+
+class CancelSubscriptionIn(BaseModel):
+    """Cancel anytime: no reason required (an optional note helps us improve)."""
+
+    note: str | None = Field(default=None, max_length=500)

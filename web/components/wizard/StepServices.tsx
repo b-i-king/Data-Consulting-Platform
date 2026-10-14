@@ -4,6 +4,11 @@
 // changes; services that need a person show the booking link.
 // "Continue to download" first asks the person to confirm the selection and
 // the estimated total they can expect to pay.
+//
+// Two ways to work, above the services:
+//   * ALL TOOLS — one subscription for every available service, billed
+//     monthly or yearly (yearly is cheaper). Cancel anytime.
+//   * DONE FOR YOU — a consultant (lavender card) signs in and does the work.
 
 "use client";
 
@@ -11,9 +16,9 @@ import { useEffect, useState } from "react";
 import { getQuote } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
 import { fmtUsd } from "@/lib/format";
-import type { Quote, Service } from "@/lib/types";
+import type { BillingInterval, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
 import { QuoteSummary } from "./ServiceConfirm";
-import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader } from "./ui";
+import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader, TotalRow } from "./ui";
 
 export default function StepServices(props: {
   services: Service[];
@@ -21,9 +26,21 @@ export default function StepServices(props: {
   onChange: (ids: string[]) => void;
   runtimeSeconds: number;
   bookingUrl: string;
+  subscriptions: Subscription[];
+  subscription: SubscriptionChoice | null;
+  onSubscription: (s: SubscriptionChoice | null) => void;
+  consultantName: string | null;
+  wantsConsultant: boolean;
+  onWantsConsultant: (v: boolean) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
+  const plan = props.subscriptions[0];
+  const [interval, setBilling] = useState<BillingInterval>(props.subscription?.interval ?? "month");
+  const pickInterval = (i: BillingInterval) => {
+    setBilling(i);
+    if (props.subscription) props.onSubscription({ plan: "all_tools", interval: i });
+  };
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -51,6 +68,73 @@ export default function StepServices(props: {
         subtitle="Choose as many as you like — or none. Your cleaned data is ready to download either way."
       />
 
+      <div className="mb-6 grid gap-3 sm:grid-cols-2">
+        {plan && (
+          <div
+            className={`rounded-2xl border p-4 shadow-[var(--shadow-card)] ${
+              props.subscription ? "border-brand bg-brand-soft" : "border-line bg-surface"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-semibold">{plan.name} plan</span>
+              <div role="radiogroup" aria-label="Billing" className="flex gap-1 rounded-full border border-line bg-surface p-0.5 text-xs">
+                {(["month", "year"] as const).map((i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    role="radio"
+                    aria-checked={interval === i}
+                    onClick={() => pickInterval(i)}
+                    className={`rounded-full px-2.5 py-1 ${interval === i ? "bg-brand font-semibold text-on-brand" : "text-ink-muted"}`}
+                  >
+                    {i === "month" ? "Monthly" : "Yearly"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="mt-1 text-sm text-ink-muted">{plan.description}</p>
+            <p className="mt-3 font-mono text-lg font-semibold">
+              {interval === "month" ? `${fmtUsd(plan.monthly_usd)}/month` : `${fmtUsd(plan.annual_usd)}/year`}
+            </p>
+            <p className="text-xs text-ink-muted">
+              {interval === "year"
+                ? `${fmtUsd(plan.annual_per_month_usd)}/month · save ${fmtUsd(plan.annual_savings_usd)} (${plan.annual_savings_pct}%)`
+                : `or ${fmtUsd(plan.annual_usd)}/year — save ${plan.annual_savings_pct}%`}{" "}
+              · Cancel anytime
+            </p>
+            <Button
+              variant={props.subscription ? "secondary" : "primary"}
+              className="mt-3"
+              onClick={() => props.onSubscription(props.subscription ? null : { plan: "all_tools", interval })}
+            >
+              {props.subscription ? "Remove plan" : `Choose ${interval === "month" ? "monthly" : "yearly"}`}
+            </Button>
+          </div>
+        )}
+        <div
+          className={`rounded-2xl border p-4 shadow-[var(--shadow-card)] ${
+            props.wantsConsultant ? "border-consultant bg-consultant-soft" : "border-consultant/40 bg-surface"
+          }`}
+        >
+          <span className="font-semibold">Done for you</span>
+          <p className="mt-1 text-sm text-ink-muted">
+            Rather not learn a new platform? {props.consultantName ?? "A consultant"} signs in to your account and does the
+            cleaning, dashboards and analysis for you — every tool included. Priced after a free discovery call.
+          </p>
+          <button
+            type="button"
+            aria-pressed={props.wantsConsultant}
+            onClick={() => props.onWantsConsultant(!props.wantsConsultant)}
+            className={`mt-3 rounded-full px-5 py-2 text-sm font-semibold ${
+              props.wantsConsultant ? "border border-line bg-surface" : "bg-consultant text-on-consultant hover:opacity-90"
+            }`}
+          >
+            {props.wantsConsultant ? "I'll do it myself" : `Have ${props.consultantName ?? "a consultant"} do it`}
+          </button>
+        </div>
+      </div>
+
+      <h2 className="mb-2 font-semibold">Or pick individual services</h2>
       <div className="grid gap-3 sm:grid-cols-2">
         {props.services.map((s) => {
           const on = props.selected.includes(s.id);
@@ -163,6 +247,19 @@ export default function StepServices(props: {
           onCancel={() => setConfirming(false)}
         >
           <p>Here&apos;s what you&apos;ve chosen and what you can expect to pay:</p>
+          {props.subscription && plan && (
+            <TotalRow
+              strong
+              label={`${plan.name} plan (${props.subscription.interval === "month" ? "monthly" : "yearly"}, cancel anytime)`}
+              value={props.subscription.interval === "month" ? `${fmtUsd(plan.monthly_usd)}/mo` : `${fmtUsd(plan.annual_usd)}/yr`}
+            />
+          )}
+          {props.wantsConsultant && (
+            <p className="rounded-xl bg-consultant-soft p-3">
+              <strong>Done for you:</strong> {props.consultantName ?? "a consultant"} will reach out to scope the work —
+              priced after a free discovery call.
+            </p>
+          )}
           <QuoteSummary quote={quote} />
           <p className="text-xs text-ink-muted">
             Data Cleaning is charged when you download (you&apos;ll confirm that amount too). Package prices are starting

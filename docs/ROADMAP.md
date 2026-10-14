@@ -24,6 +24,10 @@ Email-only sign-in is a placeholder. Replace with **Supabase Auth magic links**:
 3. In FastAPI, verify the Supabase JWT (`SUPABASE_JWT_SECRET`) in
    `api/core/security.py` instead of issuing our own tokens.
 4. Team members receive an invite email instead of being created silently.
+5. Consultants: replace the shared `CONSULTANT_ACCESS_CODE` with their own
+   verified sign-in (and ideally two-factor), since a consultant can open every
+   client assigned to them. Keep `CONSULTANT_EMAILS` (or a `consultants.active`
+   flag) as the list of who may be one.
 
 ### 2. Payments
 Stripe Checkout (or Stripe usage-based billing) charging from `usage_events`.
@@ -42,6 +46,11 @@ Save guest answers to `intake_responses` (table already exists) to learn which
 data sources and services clients ask for → which connector to build next.
 
 ### 5. Consultant workflow
+- ✅ Consultants table, "do it for me" signup, "Working on" client picker,
+  "Add a client", every tool unlocked, downloads billed to the client.
+- Reassign a client to another consultant (today: the default consultant, or
+  whoever created the account), and an "invite this client" email.
+- Notes per client and a "last worked on" date in the picker.
 - Pass questionnaire answers to the booking link (Calendly supports prefill).
 - Admin page listing new signups, selected services, and usage.
 - Automatic invoices (Stripe Invoicing) to cut manual invoicing.
