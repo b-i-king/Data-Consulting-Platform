@@ -252,3 +252,18 @@ def test_client_column_names_apply_to_analyze_and_skills():
     bad = client.post("/api/files/analyze", files=_files(("o.csv", csv)),
                       data={"column_names": '{"0": {"amount_2": "amount"}}'})
     assert bad.status_code == 400 and "share a name" in bad.json()["detail"]
+
+
+def test_transform_steps_apply_to_analyze_and_skills():
+    rows = "".join(f"{i},{60 if i != 7 else 450}\n" for i in range(40))
+    csv = f"order_id,duration\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("w.csv", csv))).json()
+    assert body["groups"][0]["report"]["outlier_columns"] == []     # all 60s: no spread, nothing to compare
+    steps = '{"0": [{"op": "outliers", "column": "duration", "method": "cap", "high": 120}]}'
+    body = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": steps}).json()
+    report = body["groups"][0]["report"]
+    assert report["transforms_applied"][0]["count"] == 1
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("w.csv", csv)), data={"transforms": steps})
+    assert res.status_code == 200, res.text
+    bad = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": '{"0": [{"op": "x"}]}'})
+    assert bad.status_code == 400 and "unknown step" in bad.json()["detail"]

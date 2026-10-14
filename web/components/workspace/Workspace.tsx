@@ -37,7 +37,7 @@ import { addMyService, analyzeFiles, downloadCleaned, getIntakeOptions, getMySer
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
@@ -99,6 +99,7 @@ export default function Workspace() {
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
   const [columnNames, setColumnNames] = useState<ColumnNames>({});
+  const [transforms, setTransforms] = useState<Transforms>({});
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
@@ -143,8 +144,8 @@ export default function Workspace() {
   const currentService = plan?.services.find((s) => s.id === current);
 
   const input: CleaningInput = useMemo(
-    () => ({ files, strategy: "keep", columnActions, columnNames }),
-    [files, columnActions, columnNames],
+    () => ({ files, strategy: "keep", columnActions, columnNames, transforms }),
+    [files, columnActions, columnNames, transforms],
   );
   const group = analysis?.groups[groupIndex];
 
@@ -167,8 +168,9 @@ export default function Workspace() {
       setFiles(chosen);
       setColumnActions({});
       setColumnNames({});
+      setTransforms({});
       setGroupIndex(0);
-      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {} }));
+      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }));
     } catch (e) {
       setAnalysis(null);
       setError(e instanceof Error ? e.message : "We couldn't read those files.");
@@ -179,7 +181,7 @@ export default function Workspace() {
 
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames, transforms }));
     setColumnActions(next);
     setResults({});
   }
@@ -187,11 +189,19 @@ export default function Workspace() {
   async function applyNames(groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) {
     const nextNames = { ...columnNames, [String(groupId)]: names };
     const nextActions = actions ? { ...columnActions, [String(groupId)]: actions } : columnActions;
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: nextActions, columnNames: nextNames }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: nextActions, columnNames: nextNames, transforms }));
     setColumnNames(nextNames);
     setColumnActions(nextActions);
     setResults({}); // skill results used the old names
   }
+  // The table's transform steps (Power Query-style "Applied steps"), in order.
+  async function applyTransforms(groupId: number, steps: TransformStep[]) {
+    const next = { ...transforms, [String(groupId)]: steps };
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions, columnNames, transforms: next }));
+    setTransforms(next);
+    setResults({}); // skill results used the old data
+  }
+
 
   // Every "Add" button opens a confirmation with the price first (pendingAdd);
   // only "Add" in that box calls add().
@@ -469,6 +479,8 @@ export default function Workspace() {
                   onApply={(actions) => applyActions(group.group_id, actions)}
                   appliedNames={columnNames[String(group.group_id)] ?? {}}
                   onApplyNames={(names, actions) => applyNames(group.group_id, names, actions)}
+                  appliedSteps={transforms[String(group.group_id)] ?? []}
+                  onApplySteps={(steps) => applyTransforms(group.group_id, steps)}
                 />
               </>
             )}

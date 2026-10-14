@@ -455,7 +455,7 @@ def read_file(filename: str, raw: bytes) -> list[LoadedDataset]:
     for name, df in frames.items():
         # Column names: make sure they are strings and trim stray spaces,
         # e.g. " Email " -> "Email". Duplicated names get a numeric suffix.
-        df.columns = _dedupe_column_names([str(c).strip() for c in df.columns])
+        df.columns = dedupe_column_names([str(c).strip() for c in df.columns])
         df = _flatten_cells(df)
         datasets.append(LoadedDataset(name=name, source_file=filename, file_type=fmt.label, df=df, size_bytes=len(raw)))
     return datasets
@@ -467,7 +467,7 @@ PANDAS_BLANK = re.compile(r"^Unnamed: \d+(_level_\d+)?$")
 PANDAS_REPEAT = re.compile(r"^(.*)\.(\d+)$")
 
 
-def _dedupe_column_names(columns: list[str]) -> list[str]:
+def dedupe_column_names(columns: list[str]) -> list[str]:
     """
     Make column names unique and mark the two header problems so the cleaning
     report can ask the client to fix them (api/services/cleaning.py, Step 0):

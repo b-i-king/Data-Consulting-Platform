@@ -7,7 +7,7 @@ Data skills endpoints (no sign-in required — like the guest cleaning flow).
 The run endpoint takes the same multipart upload as /api/files/analyze, plus:
     params    JSON object of skill options, e.g. {"value_column": "amount"}
     group_id  which cleaned table to use when the upload has several (default 0)
-    missing_strategy, column_actions, column_names
+    missing_strategy, column_actions, column_names, transforms
               the user's missing-value choices, exactly as sent to
               /api/files/analyze, so skills see the same cleaned data
 
@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names
+from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms
 from api.services.skills_runner import run_on_uploads
 from data_skills._core import SkillInputError
 from data_skills.registry import list_skills, skill_ids
@@ -46,6 +46,7 @@ async def run_skill_endpoint(
     missing_strategy: Annotated[Literal["keep", "drop_any"], Form()] = "keep",
     column_actions: Annotated[str, Form()] = "{}",
     column_names: Annotated[str, Form()] = "{}",
+    transforms: Annotated[str, Form()] = "{}",
 ):
     if skill_id not in skill_ids():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown skill '{skill_id}'.")
@@ -58,8 +59,9 @@ async def run_skill_endpoint(
 
     actions = parse_column_actions(column_actions)
     names = parse_column_names(column_names)
+    steps = parse_transforms(transforms)
     datasets = await load_uploads(files)
     try:
-        return run_on_uploads(skill_id, datasets, options, group_id, missing_strategy, actions, names)
+        return run_on_uploads(skill_id, datasets, options, group_id, missing_strategy, actions, names, steps)
     except SkillInputError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))

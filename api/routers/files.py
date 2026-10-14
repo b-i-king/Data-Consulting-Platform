@@ -38,7 +38,13 @@ from api.core.config import get_settings
 from api.core.security import get_current_account
 from api.services import account_store
 from api.services.cleaning import dataframe_to_records
-from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, run_pipeline
+from api.services.pipeline import (
+    load_uploads,
+    parse_column_actions,
+    parse_column_names,
+    parse_transforms,
+    run_pipeline,
+)
 from api.services.pricing import download_estimate, runtime_cost
 
 router = APIRouter(prefix="/files")
@@ -54,11 +60,13 @@ async def analyze_files(
     column_actions: Annotated[str, Form()] = "{}",
     # The client's own column names, JSON: {"<group_id>": {"<column key>": "new name"}}
     column_names: Annotated[str, Form()] = "{}",
+    # Transform steps, JSON: {"<group_id>": [{"op": "change_type", ...}, ...]} (api/services/transforms.py)
+    transforms: Annotated[str, Form()] = "{}",
 ):
     settings = get_settings()
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
-                          parse_column_names(column_names))
+                          parse_column_names(column_names), parse_transforms(transforms))
 
     groups_out = []
     for g in result.groups:
@@ -104,10 +112,11 @@ async def download_cleaned(
     # charge never goes above it, even if this run takes a little longer.
     confirmed_amount_usd: Annotated[float | None, Form(ge=0)] = None,
     column_names: Annotated[str, Form()] = "{}",
+    transforms: Annotated[str, Form()] = "{}",
 ):
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
-                          parse_column_names(column_names))
+                          parse_column_names(column_names), parse_transforms(transforms))
 
     group = next((g for g in result.groups if g.group_id == group_id), None)
     if group is None:

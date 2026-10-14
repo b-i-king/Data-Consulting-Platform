@@ -32,14 +32,16 @@ Run these steps in order. Each maps to a function or block in `cleaning.py`.
 | # | Step | pandas | Why |
 |---|---|---|---|
 | 0 | Clean column names | `clean_column_names(df.columns)`: lowercase, non-letters → `_`, split camelCase, unique; then the client's own names (`column_names`) | `Order Date` → `order_date`, `CustomerID` → `customer_id`; easy to use in Excel, SQL and Python (`columns_renamed`). Flags blank headers (`unnamed_column_4`) and repeated ones (`amount`, `amount_2`) as `name_problem` until the client renames or removes them |
+| 0b | Header steps (client) | "Use first row as headers" `df.columns = df.iloc[0]`; "Remove top rows" `df.iloc[n:]` | Title rows in exports — `transforms` (see `api/services/transforms.py`) |
 | 1 | Tidy text | `s.str.strip()`; `""` → `NaN` | `" Acme "` and `"Acme"` are the same; blank text is really missing |
+| 1b | Transform steps (client) | change type (`pd.to_numeric` / `pd.to_datetime`), replace values, unusual-values rule (`clip` / filter / `NaN`), unpivot (`melt`), pivot (`groupby().unstack()`) | Power Query-style "Applied steps", in order (`transforms_applied`) |
 | 2 | Drop fully empty rows | `df[data_cols].isna().all(axis=1)` | Excel exports often end in blank rows |
 | 3 | Remove exact duplicates | `df.duplicated(subset=data_cols, keep="first")` | All values equal = a copy |
 | 3b | Restore whole numbers | float column with all `% 1 == 0` → `Int64` | IDs like `1001.0` → `1001` |
 | 4 | Missing-value report + advice | `df.isna().sum()`, `/ len(df) * 100`, `s.skew()` | Count, %, a level and a fill suggestion per column (below) |
 | 5a | Column choices (client) | `df.drop(columns=…)`, `s.fillna(s.mean() / s.median() / s.mode()[0])`, `df[s.notna()]` | Keep (default), remove, fill, or remove rows with no ID (`drop_rows`) — `column_actions`, by cleaned name |
 | 5b | Row strategy (client) | `keep` (default) or `dropna(how="any")` after 5a | Warn if > 20% of rows drop |
-| 6 | Column profile | inferred type, unique count, 3 example values | Sanity-check for the client |
+| 6 | Column profile + checks | inferred type, unique count, 3 example values; **wrong data**: numbers outside Q1 − 3×IQR … Q3 + 3×IQR, dates in the future or before 1900 (`outliers`); **wrong format**: text that is 80%+ numbers or dates (`format_issue`) | Sanity-check for the client; checks only report — fixes are steps the client picks |
 | 7 | Enough rows? | `rows_before >= 30 and rows_after >= 30` | Under 30 rows (before OR after cleaning) = clean and download only; no analysis (`analysis_ready`, `analysis_note`) |
 
 ### Missing-value rules of thumb (Step 4)
@@ -85,13 +87,13 @@ exports is still a duplicate.
 - Do not remove near-duplicates ("Jon Smith" vs "John Smith") — flag them for a
   consultant instead.
 - Do not drop columns, even fully empty ones, unless the client chooses it — advise instead.
-- Do not remove outliers — a $50,000 order may be real.
-- Do not change date or currency formats in place without telling the client.
+- Do not change unusual values on your own — a $50,000 order may be real.
+  Flag them (3 × IQR) and let the client keep, cap, remove or blank them.
+- Do not convert dates or currency without the client choosing it; show which
+  values won't convert first.
 
 ## Ideas for the next version (consultant-assisted)
 
-- Detect numbers stored as text (`"$1,200"`) and offer to convert.
-- Detect dates stored as text and offer to convert.
 - Standardize categorical spelling (`"CA"`, `"Calif."`, `"California"`).
 - Near-duplicate detection on name/email columns.
 
@@ -126,3 +128,4 @@ Input: one table. Runs on the data as uploaded, before cleaning.
 | `missing_strategy` | choice (keep, drop_any) | keep | Keep rows with gaps, or drop them |
 | `column_actions` | json | auto | Per column (cleaned names): keep, drop, mean, median, mode, auto, or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"} |
 | `column_names` | json | auto | Your own column names, by cleaned name, e.g. {"unnamed_column_4": "store_code", "amount_2": "refund_amount"} |
+| `transforms` | json | auto | Transform steps in order (like Power Query), e.g. [{"op": "change_type", "column": "order_date", "to": "date"}] |

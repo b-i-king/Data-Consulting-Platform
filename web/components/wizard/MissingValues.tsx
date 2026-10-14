@@ -11,6 +11,8 @@
 //   * for ID columns (order_id, customer_id …): no fills — an ID should never
 //     be blank, so the suggestion is "Remove rows with no ID". Those rows go
 //     on the "rows_missing_id" sheet of the Excel download for the client to fix.
+//   * every column can also "Remove rows where this is blank" (df.dropna(subset=[col])),
+//     e.g. after converting a date column whose bad values became blank
 //   * the column's original name, when cleaning renamed it ("Order Date" -> order_date)
 // Choices are keyed by the column's stable `key`, so they survive a rename.
 //
@@ -174,11 +176,11 @@ export default function MissingValues(props: {
                             {c.suggested_fill === m ? "  ★ suggested" : ""}
                           </option>
                         ))}
-                        {c.is_id && (
-                          <option value="drop_rows">
-                            Remove rows with no ID ({fmtInt(c.missing_count)}){c.suggested_fill === "drop_rows" ? "  ★ suggested" : ""}
-                          </option>
-                        )}
+                        {/* Like df.dropna(subset=[column]); for IDs this is the suggestion. */}
+                        <option value="drop_rows">
+                          {c.is_id ? "Remove rows with no ID" : "Remove rows where this is blank"} ({fmtInt(c.missing_count)})
+                          {c.suggested_fill === "drop_rows" ? "  ★ suggested" : ""}
+                        </option>
                         <option value="drop">Remove this column{c.missing_level === "remove" ? "  ★ suggested" : ""}</option>
                       </select>
                       {skewNote(c) && <div className="mt-0.5 text-xs text-ink-muted">{skewNote(c)}</div>}

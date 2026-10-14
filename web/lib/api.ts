@@ -126,6 +126,7 @@ const choiceFields = (c: CleaningInput) => ({
   missing_strategy: c.strategy,
   column_actions: JSON.stringify(c.columnActions),
   column_names: JSON.stringify(c.columnNames ?? {}),
+  transforms: JSON.stringify(c.transforms ?? {}),
 });
 
 /**

@@ -147,6 +147,61 @@ The report keeps the **before** numbers and adds what was done (`action`,
 `filled_count`, `rows_dropped`, `missing_after`), plus `rows_missing_id_removed`
 for the table.
 
+### Wrong data (unusual values) and wrong format
+
+Code: `api/services/transforms.py`. Both checks only **report**; nothing changes
+until the client picks a fix on the results screen ("Fix wrong data").
+
+**Wrong data — unusual values** (`outliers` on each column, `outlier_columns`):
+
+| Column type | Flagged when | Why this rule |
+|---|---|---|
+| Numbers (not IDs), 10+ values | Outside Tukey's "far out" fences: Q1 − 3 × IQR to Q3 + 3 × IQR (IQR = Q3 − Q1). The low limit never goes below 0 when the column has no negatives. | The usual box-plot rule (1.5 × IQR) flagged ~13% of the sample bakery's prices — its cakes are real, just rare. 3 × IQR flags only the extremes, like a 450-minute workout among 30–60 minute ones. |
+| Dates | In the future, or before 1900 | Usually typing mistakes (2202 instead of 2022) |
+
+The report gives the count, the expected range, the data's min and max, and the
+most extreme examples. Fixes (the W3Schools "cleaning wrong data" techniques):
+
+| Fix | pandas | Example |
+|---|---|---|
+| Keep them (default) | — | A very large order is real |
+| Cap to the range | `df[col].clip(low, high)` | "If Duration > 120, set it to 120" |
+| Remove those rows | `df = df[df[col].between(low, high)]` | Drop the rows with impossible values |
+| Make them blank | `df.loc[outside, col] = NaN` | Then fill or remove them like other gaps |
+| Replace one value | `df.loc[df[col] == 450, col] = 45` | The **Replace values** tool |
+
+The client can edit the range before applying. Once a column has a rule, it
+isn't flagged again.
+
+**Wrong format** (`format_issue`, `format_columns`): a text column where 80%+
+of the values are really **numbers** (`"$1,200"`, `"15%"`) or **dates**
+(`"2020/12/26"`, `"20201226"` is treated as a number). The report says how many
+convert and shows the ones that won't. **Convert to date / number** runs
+`pd.to_datetime(..., format="mixed")` or `pd.to_numeric(...)`. Values that don't
+convert become blank, and **Remove rows where this is blank** (offered for every
+column, `drop_rows`) removes them, i.e. `df.dropna(subset=[col])`.
+
+### Transform data (simplified Power Query)
+
+Like Power BI's "Applied steps", the client builds an ordered list of steps
+(sent as `transforms`, by table) that re-runs on every request. Each step is
+listed with what it did (`transforms_applied`) and can be removed.
+
+| Step | When to use it | pandas | Runs |
+|---|---|---|---|
+| Use first row as headers | The real column names are in row 1 (e.g. the file starts with a title line) | `df.columns = df.iloc[0]; df = df.iloc[1:]` | Before column names are cleaned |
+| Remove top rows | Extra title or note rows at the top of the data | `df.iloc[n:]` | Before column names are cleaned |
+| Change data type | Number / date / text | `pd.to_numeric`, `pd.to_datetime`, `astype(str)` | After names, in order |
+| Replace values | Fix one wrong value; fill blanks with a value ("Find" empty); blank a value out ("Replace with" empty) | `df.loc[df[col] == find, col] = new` | After names, in order |
+| Unusual values rule | Cap / remove / blank values outside a range (from "Fix wrong data") | `clip`, filter, `NaN` | After names, in order |
+| Unpivot columns | Jan, Feb, Mar columns → a month column + a value column | `pd.melt` | After names, in order |
+| Pivot column | The reverse: one column per value (sum, average, count or first); up to 100 new columns | `groupby(...).agg(...).unstack()` | After names, in order |
+
+Renaming columns, removing columns and removing duplicates — the other Power
+Query basics — are covered by "Column names", the missing-values table, and the
+automatic duplicate removal. A step that names a column that no longer exists
+gets a plain-English error (e.g. "Step 2: there's no column called 'x'").
+
 ### Enough rows to analyze? (30-row minimum)
 
 Analysis needs at least **30 rows** — with fewer, averages, trends and tests
@@ -166,9 +221,9 @@ use several tables (e.g. an ER diagram), at least one table must have 30+ rows.
 ### What we deliberately do NOT do automatically
 
 Fill in missing values or drop columns without the client choosing to, fill IDs,
-remove near-duplicates, remove outliers, or reformat dates/currency. These need
-business context — they are the client's call or part of the consultant-assisted
-services.
+remove near-duplicates, change unusual values, or convert dates/currency. We
+flag and suggest; the client decides (or a consultant helps), because these
+need business context.
 
 ## 4. Preview and download
 

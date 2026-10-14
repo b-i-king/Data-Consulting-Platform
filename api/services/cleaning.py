@@ -36,11 +36,20 @@ Step 0. Clean column names
         keeps a stable `key` (its automatic name), so choices made before a
         rename still apply after it. A renamed column's problem counts as fixed.
 
+Step 0b. Header steps the client chose ("Use first row as headers", "Remove
+        top rows") run BEFORE Step 0, because they change the header row.
+        See api/services/transforms.py.
+
 Step 1. Tidy text cells
         Trim leading/trailing spaces in text columns (" Acme " -> "Acme")
         and turn blank text ("", "   ") into a real missing value (NaN).
         Blank strings LOOK filled in but are really missing; counting them
         as missing makes the null report honest.
+
+Step 1b. The client's transform steps (transforms.py), in order:
+        change data type, replace values, a rule for unusual values (cap /
+        remove / blank), unpivot, pivot. Like Power Query's "Applied steps";
+        each one is listed in the report (`transforms_applied`).
 
 Step 2. Drop completely empty rows
         Rows where EVERY value is missing (very common at the bottom of
@@ -108,9 +117,15 @@ Step 7. Enough rows to analyze?
         and every non-cleaning skill are switched off for that table
         (`analysis_ready` = False, with `analysis_note` saying why).
 
-Step 6. Column profile
+Step 6. Column profile and data-quality checks
         The inferred type of each column (number, date, text, true/false)
         and a few example values, to help the user sanity-check the result.
+        Plus two checks that only REPORT (nothing changes until the client
+        picks a step):
+          * wrong data ("outliers"): numbers outside 1.5 × the interquartile
+            range (the box-plot rule) and dates in the future or before 1900
+          * wrong format ("format_issue"): text columns that are really
+            numbers or dates, and which values wouldn't convert
 
 ASSUMPTION: the first row of the file contains the column names.
 """
@@ -126,6 +141,9 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+
+from api.services import transforms as tf
+from api.services.file_reader import dedupe_column_names
 
 MissingStrategy = Literal["keep", "drop_any"]
 # What to do with one column's missing values (Step 5a).
@@ -181,6 +199,8 @@ class ColumnReport:
     rows_dropped: int = 0                # rows removed because this column was missing ("drop_rows")
     is_id: bool = False                  # looks like an ID or code (never filled; should not be missing)
     missing_after: int = 0               # missing values left in the downloaded data
+    outliers: dict | None = None         # Step 6 "wrong data": {kind, count, low, high, min, max, examples, note}
+    format_issue: dict | None = None     # Step 6 "wrong format": {to, convertible, failing, examples}
 
 
 @dataclass
@@ -213,6 +233,9 @@ class CleaningReport:
     unnamed_columns: list[str] = field(default_factory=list)       # Step 0: blank headers, still unfixed
     duplicate_columns: list[list[str]] = field(default_factory=list)  # Step 0: same-name groups, still unfixed
     rows_missing_id_removed: int = 0     # Step 5a "drop_rows": rows set aside because an ID was missing
+    transforms_applied: list[dict] = field(default_factory=list)   # Steps 0b / 1b: what each step did
+    outlier_columns: list[str] = field(default_factory=list)       # Step 6: columns with unusual values
+    format_columns: list[str] = field(default_factory=list)        # Step 6: columns in the wrong format
     notes: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
     # The rows removed for a missing ID, kept so the Excel download can list
@@ -227,6 +250,9 @@ class CleaningReport:
         out["columns_fully_empty"] = list(self.columns_fully_empty)
         out["unnamed_columns"] = list(self.unnamed_columns)
         out["duplicate_columns"] = [list(g) for g in self.duplicate_columns]
+        out["transforms_applied"] = [dict(s) for s in self.transforms_applied]
+        out["outlier_columns"] = list(self.outlier_columns)
+        out["format_columns"] = list(self.format_columns)
         return out
 
 
@@ -497,6 +523,7 @@ def clean_dataframe(
     missing_strategy: MissingStrategy = "keep",
     column_actions: dict[str, str] | None = None,
     column_names: dict[str, str] | None = None,
+    transforms: list[dict] | None = None,
 ) -> tuple[pd.DataFrame, CleaningReport]:
     """
     Run the full cleaning pipeline (Steps 0–7 above).
@@ -504,6 +531,7 @@ def clean_dataframe(
     `column_actions` maps column (its key or current name) -> "keep" | "drop" |
     "mean" | "median" | "mode" | "auto" | "drop_rows" (Step 5a).
     `column_names` maps column key -> the client's new name (Step 0).
+    `transforms` is the ordered list of steps (Steps 0b and 1b, transforms.py).
     Leave them out to change nothing.
 
     Returns (cleaned_dataframe, report). `report.runtime_seconds` is the
@@ -513,6 +541,10 @@ def clean_dataframe(
     notes: list[str] = []
     rows_before = int(len(df))
     out = df.copy()  # never touch the caller's data
+    steps = tf.validate_steps(transforms)
+
+    # Step 0b — header steps ("Use first row as headers", "Remove top rows").
+    out, applied = tf.apply_raw_steps(out, steps, dedupe_column_names, keep=METADATA_COLUMNS)
 
     # Step 0 — lowercase snake_case column names (our own metadata columns keep
     # theirs), then the client's own names, then the header checks.
@@ -561,6 +593,14 @@ def clean_dataframe(
         cells = "cell was" if blanks_converted == 1 else "cells were"
         notes.append(f"{blanks_converted:,} blank text {cells} treated as missing values.")
 
+    # Step 1b — the client's transform steps, in order.
+    out, more = tf.apply_steps(out, steps, resolve=lambda c: final_of.get(c, c), clean_names=clean_column_names)
+    applied = sorted(applied + more, key=lambda s: s["step"])   # in the client's order
+    # Columns the client already set an unusual-values rule for aren't flagged
+    # again (their own limit wins over the automatic range).
+    ruled = {final_of.get(s.get("column", ""), s.get("column", "")) for s in steps if s["op"] == "outliers"}
+    notes.extend(s["text"] for s in applied)
+
     # Columns that hold the client's actual data (everything except ours).
     data_cols = [c for c in out.columns if c not in METADATA_COLUMNS] or list(out.columns)
 
@@ -607,6 +647,8 @@ def clean_dataframe(
             "key": key_of.get(str(col), str(col)),
             "original_name": shown_original.get(str(col), str(col)),
             "name_problem": problems.get(key_of.get(str(col), str(col))),
+            "outliers": None if str(col) in ruled else tf.outlier_check(series, is_id=bool(ID_NAME.search(str(col)))),
+            "format_issue": tf.format_check(series),
             **_missing_advice(series, pct),
         }
     total_cells_pre = n_pre * columns_before
@@ -614,6 +656,17 @@ def clean_dataframe(
     if fully_empty:
         notes.append(f"These columns have no values at all: {', '.join(fully_empty)}.")
     # (IDs are left out of the "review" list: their gaps usually mean "none", which is fine.)
+    outlier_cols = [c for c, p in profiles.items() if p["outliers"]]
+    format_cols = [c for c, p in profiles.items() if p["format_issue"]]
+    for c in outlier_cols:
+        o = profiles[c]["outliers"]
+        notes.append(f"'{c}' has {o['count']:,} unusual value{'s' if o['count'] != 1 else ''} "
+                     f"(expected {o['low']} to {o['high']}; e.g. {', '.join(o['examples'])}). Check them before analyzing.")
+    for c in format_cols:
+        f = profiles[c]["format_issue"]
+        notes.append(f"'{c}' looks like {f['to']}s stored as text"
+                     + (f"; {f['failing']:,} value{'s' if f['failing'] != 1 else ''} wouldn't convert "
+                        f"(e.g. {', '.join(f['examples'])})." if f["failing"] else "."))
     to_review = [c for c, p in profiles.items() if p["missing_level"] == "review" and not ID_NAME.search(c)]
     to_remove = [c for c, p in profiles.items() if p["missing_level"] == "remove"]
     if to_review:
@@ -704,6 +757,9 @@ def clean_dataframe(
         analysis_note=analysis_note,
         columns_renamed=renamed,
         unnamed_columns=unnamed_cols,
+        transforms_applied=applied,
+        outlier_columns=outlier_cols,
+        format_columns=format_cols,
         duplicate_columns=duplicate_cols,
         rows_missing_id_removed=rows_missing_id,
         rows_missing_id=removed_for_id,

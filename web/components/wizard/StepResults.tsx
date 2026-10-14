@@ -6,6 +6,8 @@
 //        a. cleaning summary tiles (rows, fields, duplicates, missing)
 //        a2. column names: warnings for blank / repeated headers, and an
 //            editor to rename any column (ColumnNames.tsx)
+//        a3. fix wrong data: wrong format + unusual values (DataQuality.tsx)
+//        a4. transform data: Power Query-style applied steps (TransformSteps.tsx)
 //        b. missing values by column, with advice and fill/remove choices
 //           (MissingValues.tsx); a consultation banner if 90%+ is missing
 //        c. "Is there enough data?" sample-size snapshot
@@ -16,11 +18,13 @@
 
 import { useState } from "react";
 import { fmtInt, fmtPct } from "@/lib/format";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, GroupOutput, Service } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, GroupOutput, Service, TransformStep } from "@/lib/types";
 import { Button, Card, ConsultantCta, NavRow, Stat, StepHeader } from "./ui";
 import DataPreview from "./DataPreview";
 import MissingValues from "./MissingValues";
 import ColumnNames from "./ColumnNames";
+import DataQuality from "./DataQuality";
+import TransformSteps from "./TransformSteps";
 import ExplorePanel from "@/components/explore/ExplorePanel";
 
 export default function StepResults(props: {
@@ -30,6 +34,8 @@ export default function StepResults(props: {
   onApplyActions: (groupId: number, actions: Record<string, ColumnAction>) => Promise<void>;
   /** Re-run the cleaning with the client's own column names (and optional column choices). */
   onApplyNames: (groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) => Promise<void>;
+  /** Re-run the cleaning with a new list of transform steps for one table. */
+  onApplyTransforms: (groupId: number, steps: TransformStep[]) => Promise<void>;
   services: Service[];
   selectedServices: string[];
   onAddService: (id: string) => void;
@@ -101,6 +107,8 @@ export default function StepResults(props: {
         onApply={(actions) => props.onApplyActions(group.group_id, actions)}
         appliedNames={props.input.columnNames[String(group.group_id)] ?? {}}
         onApplyNames={(names, actions) => props.onApplyNames(group.group_id, names, actions)}
+        appliedSteps={props.input.transforms[String(group.group_id)] ?? []}
+        onApplySteps={(steps) => props.onApplyTransforms(group.group_id, steps)}
       />
 
       {/* Dashboard (when there are dates) and the data skills, on this table. */}
@@ -132,6 +140,8 @@ export function GroupDetails(props: {
   onApply: (actions: Record<string, ColumnAction>) => Promise<void>;
   appliedNames: Record<string, string>;
   onApplyNames: (names: Record<string, string>, actions?: Record<string, ColumnAction>) => Promise<void>;
+  appliedSteps: TransformStep[];
+  onApplySteps: (steps: TransformStep[]) => Promise<void>;
 }) {
   const { group } = props;
   const r = group.report;
@@ -185,6 +195,12 @@ export function GroupDetails(props: {
         appliedNames={props.appliedNames}
         onApplyNames={props.onApplyNames}
       />
+
+      {/* a3. Wrong format + unusual values. key: start fresh when the steps change. */}
+      <DataQuality key={`dq-${JSON.stringify(props.appliedSteps)}`} report={r} steps={props.appliedSteps} onApplySteps={props.onApplySteps} />
+
+      {/* a4. Transform data — Power Query-style applied steps */}
+      <TransformSteps key={`ts-${JSON.stringify(props.appliedSteps)}`} report={r} steps={props.appliedSteps} onApplySteps={props.onApplySteps} />
 
       {/* b. Missing values by column — advice + fill / remove choices */}
       {/* key: start fresh when the choices in effect change elsewhere (e.g. "remove unnamed columns"). */}

@@ -153,7 +153,51 @@ export interface ColumnReport {
   original_name: string;
   /** Header problem still to fix: a blank header, or a name shared with another column. */
   name_problem: "unnamed" | "duplicate" | null;
+  /** "Wrong data": values far outside the usual range (3 × IQR), or dates in the future / before 1900. */
+  outliers: OutlierCheck | null;
+  /** "Wrong format": a text column that is really numbers or dates. */
+  format_issue: FormatCheck | null;
   missing_after: number;
+}
+
+export interface OutlierCheck {
+  kind: "number" | "date";
+  count: number;
+  /** The expected range (numbers for number columns, YYYY-MM-DD for dates). */
+  low: number | string;
+  high: number | string;
+  min: string;
+  max: string;
+  /** The most extreme unusual values. */
+  examples: string[];
+  note: string;
+}
+
+export interface FormatCheck {
+  to: "number" | "date";
+  convertible: number;
+  /** Values that wouldn't convert (they'd become blank). */
+  failing: number;
+  examples: string[];
+}
+
+/** One transform step (api/services/transforms.py), like Power Query's "Applied steps". */
+export type TransformStep =
+  | { op: "promote_headers" }
+  | { op: "remove_top_rows"; count: number }
+  | { op: "change_type"; column: string; to: "number" | "date" | "text" }
+  | { op: "replace_values"; column: string; find: string; replace: string }
+  | { op: "outliers"; column: string; method: "cap" | "remove" | "blank"; low?: number | string | null; high?: number | string | null }
+  | { op: "unpivot"; columns: string[]; attribute?: string; value?: string }
+  | { op: "pivot"; column: string; values: string; agg: "sum" | "mean" | "count" | "first" };
+
+/** What one step did (report.transforms_applied). `step` counts from 1. */
+export interface AppliedStep {
+  step: number;
+  op: TransformStep["op"];
+  column?: string;
+  count: number;
+  text: string;
 }
 
 export type FillMethod = "mean" | "median" | "mode";
@@ -163,6 +207,8 @@ export type ColumnAction = "keep" | "drop" | "auto" | "drop_rows" | FillMethod;
 export type ColumnActions = Record<string, Record<string, ColumnAction>>;
 /** group id -> column key -> the client's own name for it (cleaned to snake_case by the server). */
 export type ColumnNames = Record<string, Record<string, string>>;
+/** group id -> the table's transform steps, in order. */
+export type Transforms = Record<string, TransformStep[]>;
 
 /** Everything needed to re-create the cleaned data on the server. */
 export interface CleaningInput {
@@ -170,6 +216,7 @@ export interface CleaningInput {
   strategy: MissingStrategy;
   columnActions: ColumnActions;
   columnNames: ColumnNames;
+  transforms: Transforms;
 }
 
 export interface CleaningReport {
@@ -208,6 +255,11 @@ export interface CleaningReport {
   unnamed_columns: string[];
   /** Groups of columns that had the same name (e.g. ["amount", "amount_2"]), not yet told apart. */
   duplicate_columns: string[][];
+  /** What each transform step did, in order. */
+  transforms_applied: AppliedStep[];
+  /** Columns with unusual values / in the wrong format. */
+  outlier_columns: string[];
+  format_columns: string[];
 }
 
 export interface SampleSizeCheck {

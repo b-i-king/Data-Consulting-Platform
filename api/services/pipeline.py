@@ -11,7 +11,8 @@ Glues the individual services together in the order a consultant would work:
                          year, or different kinds of data?
                          (api/services/categorizer.py)
     3. combine_group()   stack files that share a structure into one table
-    4. clean_dataframe() clean column names (and apply the user's own names),
+    4. clean_dataframe() run the user's transform steps, clean column names
+                         (and apply the user's own names),
                          remove duplicates, measure missing values, and apply
                          the user's missing-value choices (drop / fill a
                          column, drop rows) — api/services/cleaning.py
@@ -131,11 +132,28 @@ def parse_column_names(text: str | None) -> dict[int, dict[str, str]]:
     return _parse_by_group(text, "column_names", '{"0": {"amount_2": "refund_amount"}}')
 
 
+def parse_transforms(text: str | None) -> dict[int, list[dict]]:
+    """
+    Read the `transforms` form field: the client's transform steps per table,
+    JSON like {"0": [{"op": "promote_headers"}, {"op": "change_type",
+    "column": "order_date", "to": "date"}]} (see api/services/transforms.py).
+    """
+    try:
+        raw = json.loads(text or "{}")
+        if not isinstance(raw, dict) or not all(isinstance(v, list) for v in raw.values()):
+            raise ValueError
+        return {int(k): v for k, v in raw.items()}
+    except (ValueError, TypeError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail='transforms must look like {"0": [{"op": "promote_headers"}]}.')
+
+
 def run_pipeline(
     datasets: list[LoadedDataset],
     missing_strategy: MissingStrategy = "keep",
     column_actions: dict[int, dict[str, str]] | None = None,
     column_names: dict[int, dict[str, str]] | None = None,
+    transforms: dict[int, list[dict]] | None = None,
 ) -> PipelineResult:
     """Steps 2–5 of the pipeline. Timed so runtime billing is accurate."""
     started = time.perf_counter()
@@ -149,8 +167,9 @@ def run_pipeline(
                 combined, dataset_name=group.label, missing_strategy=missing_strategy,
                 column_actions=(column_actions or {}).get(group.group_id),
                 column_names=(column_names or {}).get(group.group_id),
+                transforms=(transforms or {}).get(group.group_id),
             )
-        except ValueError as exc:  # e.g. an unknown fill method, or two columns given one name
+        except ValueError as exc:  # e.g. an unknown fill method, two columns given one name, a bad step
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
         groups.append(
             GroupResult(
