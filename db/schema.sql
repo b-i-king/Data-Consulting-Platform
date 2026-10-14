@@ -145,13 +145,12 @@ ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS consultant_id UUID REFERENCES 
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_account ON usage_events (account_id, created_at DESC);
 
--- ── Services on the plan ─────────────────────────────────────────────────────
--- Which services an account (an individual, or a business team's OWNER) has.
--- Team members share their owner's services. Drives the signed-in workspace:
--- active services are open in the left pane, the rest are grayed out.
--- PLACEHOLDER UNTIL PAYMENTS: services chosen at signup (source 'signup') or
--- added in the workspace (source 'added') count as active. When Stripe is
--- added, only rows with source 'payment' should unlock paid services.
+-- ── Project interests ────────────────────────────────────────────────────────
+-- Services a client said they'd like a consultant's help with ("Projects with
+-- a consultant" on Your needs). INTEREST ONLY — these rows do not unlock any
+-- tool; tools unlock through a subscription (tables subscriptions +
+-- subscription_items), consultant management, or being a consultant.
+-- (Table name kept from v0.1.)
 CREATE TABLE IF NOT EXISTS account_services (
     account_id  UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
     service_id  TEXT NOT NULL,                 -- ids from api/services/pricing.py

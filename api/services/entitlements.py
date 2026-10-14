@@ -6,7 +6,9 @@ WHAT THIS FILE DOES
   * active_services(account)   the service ids an account can use, in the
                                order of api/services/pricing.py. Data Cleaning
                                is always included.
-  * add_services(account, ids) put services on the account's plan.
+  * add_services(account, ids) record PROJECT INTEREST ("Projects with a
+                               consultant" on Your needs) — it does NOT unlock tools.
+  * interests(account)         those project interests (shown to the consultant).
 
 WHO HOLDS THE PLAN?
 -------------------
@@ -27,12 +29,13 @@ api/services/billing.py) unlocks its plan's services ("All tools" = all of
 them). A plan that includes Data Cleaning also makes downloads free
 (`downloads_included`).
 
-PLACEHOLDER UNTIL PAYMENTS
---------------------------
-There's no checkout yet, so services chosen in the guest questionnaire (sent
-with signup) or added in the workspace are active right away. When payments
-are added, add_services() should be called from the payment confirmation
-(source "payment") and the workspace's "Add" button should open checkout.
+WHAT UNLOCKS A TOOL (and what doesn't)
+-------------------------------------
+Only these unlock tools: a live subscription (a package of tools, or All
+tools), being a consultant, or being a consultant-managed client. Data
+Cleaning is always open. Services picked as "Projects with a consultant" are
+INTERESTS only (table account_services): one-time work a consultant scopes
+after the free 30-minute consultation.
 """
 
 from __future__ import annotations
@@ -73,9 +76,14 @@ async def active_services(account: dict) -> list[str]:
     if await gets_everything(account):
         return [s.id for s in SERVICES if s.available]
     holder = await plan_holder_id(account)
-    stored = set(await account_store.list_services(holder))
-    stored |= set((await billing.live_plan_services(holder))[0])     # from subscriptions
-    stored.add(ALWAYS_INCLUDED)
+    unlocked = set((await billing.live_plan_services(holder))[0])     # the tools in their package
+    unlocked.add(ALWAYS_INCLUDED)
+    return [s.id for s in SERVICES if s.id in unlocked]
+
+
+async def interests(account: dict) -> list[str]:
+    """Projects the client said they'd like help with (catalog order). Doesn't unlock anything."""
+    stored = set(await account_store.list_services(await plan_holder_id(account)))
     return [s.id for s in SERVICES if s.id in stored]
 
 
@@ -86,7 +94,7 @@ async def downloads_included(account: dict) -> bool:
 
 async def add_services(account: dict, service_ids: list[str], source: str = "added") -> list[str]:
     """
-    Add services to the account's plan and return the new active list.
+    Record project interest in services and return the account's interests.
     Raises ValueError for unknown ids and NotPlanOwnerError for team members.
     """
     unknown = [s for s in service_ids if s not in SERVICES_BY_ID]
@@ -98,4 +106,4 @@ async def add_services(account: dict, service_ids: list[str], source: str = "add
     new = [s for s in dict.fromkeys(service_ids) if s != ALWAYS_INCLUDED]
     if new:
         await account_store.add_services(holder, new, source)
-    return await active_services(account)
+    return await interests(account)

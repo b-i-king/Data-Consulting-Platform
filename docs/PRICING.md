@@ -120,26 +120,21 @@ is sent with the download (`confirmed_amount_usd`), and the server records the
 smaller of that and the real runtime charge. (The re-run could, rarely, cross a
 minute boundary the analysis didn't — the client doesn't pay for that.)
 
-## Which services an account has (the workspace)
+## What unlocks a tool (the workspace)
 
-The signed-in workspace (`/app`) opens the services on the account's **plan**
-(table `account_services`, code `api/services/entitlements.py`):
+Code: `api/services/entitlements.py`.
 
-- **Data Cleaning** is always included.
-- **Every available service** for consultants and consultant-managed ("done for
-  you") clients (`entitlements.gets_everything`).
+- **Data Cleaning** is always open.
 - **The tools in a live subscription** (`active`, `trialing`, `past_due`) —
-  "All tools" = every available service.
-- Services chosen in the guest questionnaire are put on the plan at signup.
-- Other services appear grayed out in the left pane, with an ⓘ explaining what
-  they add, the price, and how to get them; **Add to my plan** adds one after
-  a confirmation showing the price and new total.
-- In a business, the team **owner** holds the plan; team members share it but
-  can't change it.
-
-**Placeholder until payments:** adding a service unlocks it right away. When
-checkout exists, only a confirmed payment should unlock a paid service (see
-[ROADMAP.md](ROADMAP.md) → Payments).
+  a "build your own" package, or All tools (every available service).
+- **Every available service** for consultants and consultant-managed ("done
+  for you") clients (`entitlements.gets_everything`).
+- **Nothing else.** "Projects with a consultant" picked on Your needs are
+  recorded as **interest** (table `account_services`) and shown to the
+  consultant ("Asked for help with: …"); they don't unlock tools. A locked
+  tool's "Add to my package" opens Plan & billing with that tool ticked.
+- In a business, the team **owner** holds the package; team members share it
+  but can't change it.
 
 ## What is recorded
 

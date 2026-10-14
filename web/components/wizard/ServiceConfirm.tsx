@@ -3,10 +3,11 @@
 //
 //   QuoteSummary       the price lines + estimated total from POST /api/quote
 //                      (api/services/pricing.py build_quote)
-//   AddServiceConfirm  "Add Data Visualization?" — shown when a locked
-//                      service's Add button is clicked (wizard and
-//                      workspace). It prices the plan WITH the new service
-//                      so the person sees the new total before confirming.
+//   AddServiceConfirm  "Add Dashboards to your package?" — shown when a locked
+//                      tool's Add button is clicked in the guest wizard. It
+//                      prices the PACKAGE with the new tool (each tool's fixed
+//                      price, added up). For a non-tool (Data Strategy &
+//                      Discovery) it just records interest for the consultant.
 //
 // Package prices are starting prices (the final price is set once the work is
 // scoped); consulting starts with a free 30-minute call, then the hourly rate
@@ -15,10 +16,9 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { getQuote } from "@/lib/api";
 import { fmtUsd } from "@/lib/format";
-import type { Quote, Service } from "@/lib/types";
+import type { BillingInterval, Quote, Service, Subscription } from "@/lib/types";
+import { normalizePackage, packageTotal } from "@/components/billing/PackageBuilder";
 import { priceLabel } from "@/components/explore/LockedService";
 import { ConfirmDialog, TotalRow } from "./ui";
 
@@ -46,48 +46,50 @@ export function QuoteSummary({ quote, highlight }: { quote: Quote; highlight?: s
 
 export function AddServiceConfirm(props: {
   service: Service;
-  /** Services already chosen (Data Cleaning is always added by the server). */
-  currentIds: string[];
-  /** Processing time measured on the cleaning, used to price Data Cleaning. */
-  runtimeSeconds: number;
-  onConfirm: () => void;
+  /** Every priced item (tools + bundle), from /api/intake/options. */
+  plans: Subscription[];
+  /** The package being built on "Your needs" so far. */
+  currentPlans: string[];
+  interval: BillingInterval;
+  onConfirm: (nextPackage: string[]) => void;
   onCancel: () => void;
 }) {
-  const { service } = props;
-  const [quote, setQuote] = useState<Quote | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const ids = props.currentIds.includes(service.id) ? props.currentIds : [...props.currentIds, service.id];
-    getQuote(ids, props.runtimeSeconds)
-      .then((q) => !cancelled && setQuote(q))
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "We couldn't price that."));
-    return () => {
-      cancelled = true;
-    };
-  }, [service.id, props.currentIds, props.runtimeSeconds]);
+  const { service, plans, interval } = props;
+  const isTool = plans.some((p) => p.id === service.id);
+  // The package with this tool (and anything it needs, e.g. AI -> Data Engineering).
+  const next = isTool ? normalizePackage(plans, [...props.currentPlans, ...service.tool_requires, service.id]) : props.currentPlans;
+  const per = interval === "month" ? "month" : "year";
 
   return (
     <ConfirmDialog
-      title={`Add ${service.name}?`}
-      confirmLabel={`Add · ${priceLabel(service)}`}
-      onConfirm={props.onConfirm}
+      title={isTool ? `Add ${service.name} to your package?` : `Interested in ${service.name}?`}
+      confirmLabel={isTool ? `Add · ${priceLabel(service)}` : "Yes, I'm interested"}
+      onConfirm={() => props.onConfirm(next)}
       onCancel={props.onCancel}
     >
       <p>{service.description}</p>
-      {quote ? (
+      {isTool ? (
         <>
-          <p className="font-medium">Your plan with {service.name}:</p>
-          <QuoteSummary quote={quote} highlight={service.id} />
+          <div className="space-y-1 rounded-xl bg-surface-2 p-3">
+            {next.map((id) => {
+              const p = plans.find((x) => x.id === id)!;
+              return (
+                <TotalRow
+                  key={id}
+                  label={<span className={id === service.id ? "font-semibold" : ""}>{p.name}{id === service.id ? " (new)" : ""}</span>}
+                  value={fmtUsd(p.billable ? (interval === "month" ? p.monthly_usd : p.annual_usd) : 0)}
+                />
+              );
+            })}
+            <TotalRow strong label={`Package total per ${per}`} value={fmtUsd(packageTotal(plans, next, interval))} />
+          </div>
+          <p className="text-xs text-ink-muted">
+            Try it now in this preview; you&apos;ll start the package after creating your account. Cancel anytime.
+          </p>
         </>
       ) : (
-        <p className="text-ink-muted">{error ?? "Working out your new total…"}</p>
+        <p className="text-xs text-ink-muted">{service.consultation.text}. We&apos;ll note your interest for the consultant.</p>
       )}
-      <p className="text-xs text-ink-muted">
-        Package prices are starting prices; we confirm the final price with you before any work begins. Nothing is
-        charged when you add a service.
-      </p>
     </ConfirmDialog>
   );
 }

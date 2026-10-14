@@ -23,7 +23,7 @@ erDiagram
     teams ||--o{ accounts : "members (team_id)"
     consultants |o--|| accounts : "signs in as"
     consultants ||--o{ accounts : "manages (consultant_id)"
-    accounts ||--o{ account_services : "plan (one-off services)"
+    accounts ||--o{ account_services : "project interests"
     accounts ||--o{ subscriptions : "pays for"
     subscriptions ||--|{ subscription_items : "tools in it"
     subscription_plans ||--o{ subscription_items : "plan_id"
@@ -132,7 +132,7 @@ erDiagram
 | `accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant and billing for everyone on the team. `industry_other` = "Other" industry text; empty = NULL. |
 | `teams` | business | business signup | `accounts.team_id` links members. |
 | `consultants` | consultant (a "dim" table) | first consultant sign-in (`consultants.register`) | Email must be in `CONSULTANT_EMAILS`; `is_default` = who "do it for me" clients go to. |
-| `account_services` | service added one at a time | signup ("Your needs"), workspace "Add" | Placeholder for package services until they're sold through Stripe too. |
+| `account_services` | project a client would like a consultant's help with | signup ("Projects with a consultant" on Your needs) | **Interest only** — doesn't unlock tools (subscriptions do). Shown to the consultant. |
 | `subscription_plans` | thing you sell = Stripe product: each **tool**, and the All tools **bundle** | `scripts/sync_stripe.py` | Prices are defined in `api/services/pricing.py`; the script copies them here with the Stripe ids. `is_base` = Data Cleaning (in every package); `requires` = AI needs Data Engineering; `service_ids = '{}'` means every service (the bundle). |
 | `subscriptions` | client subscription | **Stripe webhook only** (`api/services/billing.py`) | One billing interval for all its tools. `active`, `trialing`, `past_due` keep it on. Cancel = `cancel_at_period_end` until the period ends, then `canceled`. |
 | `subscription_items` | tool in a subscription ("build your own package") | Stripe webhook (replaced as a whole on every change) | The total price is the sum of the items' prices. |

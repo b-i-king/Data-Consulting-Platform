@@ -31,13 +31,17 @@ export default function BillingPanel(props: {
   bookingUrl: string;
   /** Re-load the plan after a change made here. */
   onChanged: () => Promise<void>;
+  /** A tool to start ticked (from an "Add … to my package" button elsewhere). */
+  suggestTool?: string | null;
 }) {
   const { plan } = props;
   const stripe = plan.billing.stripe;
   const live = plan.subscriptions[0] ?? null;
   // The package being built: starts as the current one.
   const [interval, setBilling] = useState<BillingInterval>(live?.interval ?? "year");
-  const [picked, setPicked] = useState<string[]>(live?.plan_ids ?? []);
+  const [picked, setPicked] = useState<string[]>(() =>
+    normalizePackage(plan.plans, [...(live?.plan_ids ?? []), ...(props.suggestTool ? [props.suggestTool] : [])]),
+  );
   const [asking, setAsking] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [hours, setHours] = useState("1");

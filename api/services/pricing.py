@@ -479,5 +479,12 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
 
 def catalog() -> list[dict]:
     """All services as plain dicts (for the API), with their skill capabilities."""
-    return [{**asdict(s), "capabilities": capability_labels(s.id), "consultation": consultation_terms(s)}
-            for s in SERVICES]
+    out = []
+    for s in SERVICES:
+        tool = SUBSCRIPTIONS_BY_ID.get(s.id)   # the tool you can subscribe to, if any
+        out.append({**asdict(s), "capabilities": capability_labels(s.id), "consultation": consultation_terms(s),
+                    # Do-it-yourself price as a package tool (None = not a tool, e.g. Data Strategy).
+                    "tool_monthly_usd": tool.monthly_usd if tool else None,
+                    "tool_annual_usd": tool.annual_usd if tool else None,
+                    "tool_requires": list(tool.requires) if tool else []})
+    return out

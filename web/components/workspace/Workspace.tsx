@@ -35,8 +35,8 @@
 // Coming back from Stripe (?checkout=success) shows a thank-you note.
 //
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
-// Until payments exist, "Add to my plan" unlocks a service right away, after
-// a confirmation showing its price and the plan's new total. Downloads also
+// Tools unlock only through a package: "Add to my package" opens Plan &
+// billing with that tool ticked (the package selector shows the new total). Downloads also
 // ask first, with the estimated wait and charge (DownloadConfirm.tsx).
 
 "use client";
@@ -45,7 +45,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  addMyService,
   analyzeFiles,
   downloadCleaned,
   getIntakeOptions,
@@ -65,7 +64,6 @@ import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
-import { AddServiceConfirm } from "@/components/wizard/ServiceConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
@@ -84,12 +82,14 @@ const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
 
 /** Plain-English "how do I get this?" for a locked service. */
 function howToGet(s: Service): string {
-  if (s.pricing_model === "consultation") return `${s.consultation.text}. A plan (Plan & billing) unlocks the do-it-yourself tools.`;
+  if (s.id === CLEANING) return "Included with every account.";
+  if (s.tool_monthly_usd != null) {
+    const needs = s.tool_requires.length ? " Needs Data Engineering in your package." : "";
+    const soon = s.available ? "" : " Free until it launches.";
+    return `Add it to your package: ${fmtUsd(s.tool_monthly_usd)}/month or ${fmtUsd(s.tool_annual_usd ?? 0)}/year, cancel anytime.${needs}${soon} Rather have it done for you? ${s.consultation.text}.`;
+  }
   if (s.pricing_model === "hourly") return `${s.consultation.text} — buy hours in Plan & billing, then book a time.`;
-  if (s.pricing_model === "early_access") return "Free while in early access — add it to try it.";
-  if (s.pricing_model === "package")
-    return `Unlock the tools with a plan (Plan & billing), or have a consultant do it: a package from ${fmtUsd(s.starting_price_usd)}. ${s.consultation.text}.`;
-  return "Included with every account.";
+  return `${s.consultation.text}.`;
 }
 
 function ServiceInfo({ service, small = false }: { service: Service; small?: boolean }) {
@@ -280,22 +280,15 @@ export default function Workspace() {
   }
 
 
-  // Every "Add" button opens a confirmation with the price first (pendingAdd);
-  // only "Add" in that box calls add().
-  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  // Every "Add" button opens Plan & billing with that tool already ticked in the
+  // package selector: tools unlock only through a package (entitlements.py).
+  const [suggestTool, setSuggestTool] = useState<string | null>(null);
   const [askDownload, setAskDownload] = useState<DownloadFormat | null>(null);
 
-  async function add(id: string) {
-    if (!session) return;
-    setPendingAdd(null);
-    setError(null);
-    try {
-      setPlan(await addMyService(session.token, id));
-      setSection(id);
-      setInfoOpen(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "We couldn't add that service.");
-    }
+  function add(id: string) {
+    setSuggestTool(id);
+    setInfoOpen(null);
+    setSection(BILLING);
   }
 
   async function download(format: DownloadFormat) {
@@ -457,6 +450,12 @@ export default function Workspace() {
             <span className="mr-2 rounded-full bg-consultant px-2 py-0.5 text-xs font-semibold text-on-consultant">Consultant</span>
             You&apos;re working on <strong>{who.company_name ?? `${who.first_name} ${who.last_name}`}</strong>
             {who.company_name && ` (${who.first_name} ${who.last_name})`}. Downloads are billed to them.
+            {plan.interests.length > 0 && (
+              <span className="mt-1 block text-xs text-ink-muted">
+                Asked for help with:{" "}
+                {plan.interests.map((id) => plan.services.find((s) => s.id === id)?.name ?? id).join(", ")}
+              </span>
+            )}
           </p>
         )}
         {isConsultant && addingClient && (
@@ -471,15 +470,6 @@ export default function Workspace() {
           />
         )}
         <ErrorBox message={error} />
-        {pendingAdd && plan?.services.find((s) => s.id === pendingAdd) && (
-          <AddServiceConfirm
-            service={plan.services.find((s) => s.id === pendingAdd)!}
-            currentIds={plan.active}
-            runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
-            onConfirm={() => add(pendingAdd)}
-            onCancel={() => setPendingAdd(null)}
-          />
-        )}
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
 
         {current === BILLING && plan && (
@@ -489,7 +479,14 @@ export default function Workspace() {
                 {returnNote}
               </p>
             )}
-            <BillingPanel token={session.token} plan={plan} bookingUrl={bookingUrl} onChanged={reloadPlan} />
+            <BillingPanel
+              key={suggestTool ?? "billing"}
+              token={session.token}
+              plan={plan}
+              bookingUrl={bookingUrl}
+              onChanged={reloadPlan}
+              suggestTool={suggestTool}
+            />
           </>
         )}
 
@@ -498,19 +495,19 @@ export default function Workspace() {
           <Card>
             <ServiceInfo service={currentService} />
             <div className="mt-4 flex flex-wrap gap-3">
-              {plan?.can_add ? (
-                <Button onClick={() => setPendingAdd(currentService.id)}>Add {currentService.name} to my plan</Button>
+              {!plan?.can_add ? (
+                <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this tool.</p>
+              ) : currentService.tool_monthly_usd != null ? (
+                <Button onClick={() => add(currentService.id)}>Add {navName(currentService)} to my package</Button>
               ) : (
-                <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this service.</p>
+                <Button onClick={() => setSection(BILLING)}>Buy consulting hours</Button>
               )}
               {!isConsultant && currentService.consultation.free_minutes > 0 && (
                 <a href={bookingUrl} target="_blank" rel="noreferrer" className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
                   Book a free {currentService.consultation.free_minutes}-minute call
                 </a>
               )}
-              <Button variant="secondary" onClick={() => setSection(BILLING)}>
-                See plans
-              </Button>
+
             </div>
           </Card>
         ) : currentService && !analysis ? (
@@ -636,7 +633,7 @@ export default function Workspace() {
                 columns={group.preview.columns}
                 services={plan.services}
                 selectedServices={plan.active}
-                onAddService={setPendingAdd}
+                onAddService={add}
                 fixedSkill={choice}
                 autoRun
                 initialResult={results[`${group.group_id}:${choice}`] ?? null}

@@ -3,11 +3,9 @@
 // Explore only offers the skills (and the dashboard) of services the user
 // has chosen — Data Cleaning is always included. Every other service shows up
 // as one of these badges instead: its category color, name and starting
-// price, and a button that adds it to the order (the same list as the
-// "Your needs" step). Once added, its skills unlock right away.
-//
-// NOTE: there's no payment yet, so this is a choice, not a purchase. When
-// payments launch, "unlocked" should come from what the account has paid for.
+// monthly price as a package tool, and a button to add it: in the guest wizard
+// it joins the package being built on "Your needs" (and unlocks the preview);
+// in the workspace it opens Plan & billing with the tool ticked.
 
 "use client";
 
@@ -15,8 +13,10 @@ import { fmtUsd } from "@/lib/format";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { Service } from "@/lib/types";
 
-/** "from $500", "Free 30-min call", "$80/hour", "Early access", "Included". */
+/** "$19/month", "$80/hour", "Free 30-min call", "Early access", "Included". */
 export function priceLabel(s: Service): string {
+  if (s.id === "data_cleaning") return "Included";
+  if (s.tool_monthly_usd != null) return `${fmtUsd(s.tool_monthly_usd)}/month`;
   if (s.pricing_model === "package") return `from ${fmtUsd(s.starting_price_usd)}`;
   if (s.pricing_model === "consultation") return `Free ${s.consultation.free_minutes}-min call`;
   if (s.pricing_model === "hourly") return `${fmtUsd(s.consultation.rate_per_hour_usd)}/hour`;

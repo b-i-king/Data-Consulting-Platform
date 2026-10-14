@@ -155,8 +155,10 @@ consultant, linked to their account; `is_default` marks who new "do it for me"
 clients go to), and on `accounts`: `wants_consultant` (boolean) and
 `consultant_id` (NULL unless `wants_consultant` is true — enforced by a CHECK).
 Clients can tick "I'd like a consultant to do this for me" at signup, or the
-consultant creates their account ("Add a client"). Consultant-managed clients,
-consultants, and "All tools" subscribers get every available service.
+consultant creates their account ("Add a client"). Consultant-managed clients
+and consultants get every available service; everyone else gets the tools in
+their subscription package (Data Cleaning is always open). Projects picked on
+"Your needs" are interest the consultant sees, not unlocks.
 Downloads a consultant makes are billed to the client (`usage_events.consultant_id`
 records who did it). **Client data is still never stored** — the consultant
 works on files the client shares, in the same in-memory way.

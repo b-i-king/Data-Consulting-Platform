@@ -31,6 +31,11 @@ export interface Service {
   capabilities: string[];
   /** Free 30-minute consultation (or paid from the start), then the hourly rate. */
   consultation: ConsultationTerms;
+  /** Do-it-yourself price as a package tool; null = not a tool (Data Strategy & Discovery). */
+  tool_monthly_usd: number | null;
+  tool_annual_usd: number | null;
+  /** Tools it needs in the package (AI: ["data_engineering"]). */
+  tool_requires: string[];
 }
 
 export interface FileFormat {
@@ -633,6 +638,8 @@ export interface MyServices {
   /** Individuals and team owners can add services; team members can't. */
   can_add: boolean;
   services: (Service & { active: boolean })[];
+  /** Projects they'd like a consultant's help with (interest only; unlocks nothing). */
+  interests: string[];
   /** Whose workspace this is — the client when a consultant is working on one. */
   account: Account;
   /** True when a consultant is working on a client's account. */

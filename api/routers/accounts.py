@@ -5,7 +5,7 @@ Account endpoints.
     POST /api/accounts/signin         get a new token for an existing email
     GET  /api/accounts/me             who am I? (requires token)
     GET  /api/accounts/services       services on my plan + the full catalog (requires token)
-    POST /api/accounts/services       add a service to my plan (requires token; see entitlements.py)
+    POST /api/accounts/services       record interest in a project with a consultant (doesn't unlock tools)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
 
@@ -157,7 +157,8 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
     for member in body.team_members:
         await _add_member(owner, member)
 
-    # Services chosen in the questionnaire go on the plan (placeholder until payments).
+    # Projects picked on "Your needs": recorded as interest for the consultant
+    # (tools unlock only with a package — api/services/entitlements.py).
     if body.service_ids:
         await entitlements.add_services(owner, body.service_ids, source="signup")
     return owner
@@ -242,6 +243,8 @@ async def _services_out(ctx: dict) -> dict:
         # True when this person may add services (individuals and team owners).
         "can_add": holder_id == str(acc["id"]),
         "services": [{**s, "active": s["id"] in active} for s in catalog()],
+        # Projects they'd like a consultant's help with (interest only).
+        "interests": await entitlements.interests(acc),
         # Whose workspace this is (a consultant may be working on a client's).
         "account": (await _full_account_out(acc)).model_dump(),
         "acting": ctx["acting"],

@@ -110,14 +110,24 @@ export default function Wizard() {
     setTransforms(next);
   }
 
-  // A service picked from a locked badge in Explore is added to the order —
-  // after a confirmation that shows its price and the new total.
+  // A tool picked from a locked badge in Explore joins the PACKAGE being built
+  // (after a confirmation with the new total) and unlocks it in this preview.
+  // A non-tool (Data Strategy & Discovery) is recorded as project interest.
   const [pendingAdd, setPendingAdd] = useState<string | null>(null);
   const addService = (id: string) => setPendingAdd(id);
-  const confirmAdd = (id: string) => {
-    setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  const isTool = (id: string) => (options?.subscriptions ?? []).some((p) => p.id === id);
+  const confirmAdd = (id: string, nextPackage: string[]) => {
+    if (isTool(id)) setSubscription({ plans: nextPackage, interval: subscription?.interval ?? "year" });
+    else setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
     setPendingAdd(null);
   };
+  // What the preview unlocks: the package being built, plus project interests.
+  const previewServices = useMemo(
+    () => Array.from(new Set([...serviceIds, ...(subscription?.plans.includes("all_tools")
+      ? (options?.services ?? []).map((s) => s.id)
+      : subscription?.plans ?? [])])),
+    [serviceIds, subscription, options],
+  );
   const go = (n: number) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -147,9 +157,10 @@ export default function Wizard() {
       {pendingAdd && options.services.find((s) => s.id === pendingAdd) && (
         <AddServiceConfirm
           service={options.services.find((s) => s.id === pendingAdd)!}
-          currentIds={serviceIds}
-          runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
-          onConfirm={() => confirmAdd(pendingAdd)}
+          plans={options.subscriptions ?? []}
+          currentPlans={subscription?.plans ?? []}
+          interval={subscription?.interval ?? "year"}
+          onConfirm={(next) => confirmAdd(pendingAdd, next)}
           onCancel={() => setPendingAdd(null)}
         />
       )}
@@ -217,7 +228,7 @@ export default function Wizard() {
           onApplyNames={applyNames}
           onApplyTransforms={applyTransforms}
           services={options.services}
-          selectedServices={serviceIds}
+          selectedServices={previewServices}
           onAddService={addService}
           bookingUrl={bookingUrl}
           onBack={() => go(2)}
