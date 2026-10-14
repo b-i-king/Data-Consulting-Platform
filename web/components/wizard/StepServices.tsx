@@ -2,6 +2,8 @@
 // Pick one or more services. Data cleaning is always included (it's the
 // automatic first step). The price estimate refreshes whenever the selection
 // changes; services that need a person show the booking link.
+// "Continue to download" first asks the person to confirm the selection and
+// the estimated total they can expect to pay.
 
 "use client";
 
@@ -10,7 +12,8 @@ import { getQuote } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
 import { fmtUsd } from "@/lib/format";
 import type { Quote, Service } from "@/lib/types";
-import { Button, Card, ConsultantCta, ErrorBox, NavRow, StepHeader } from "./ui";
+import { QuoteSummary } from "./ServiceConfirm";
+import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader } from "./ui";
 
 export default function StepServices(props: {
   services: Service[];
@@ -23,6 +26,7 @@ export default function StepServices(props: {
 }) {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   // Re-price whenever the selection changes.
   useEffect(() => {
@@ -142,8 +146,32 @@ export default function StepServices(props: {
       <ErrorBox message={error} />
 
       <NavRow onBack={props.onBack}>
-        <Button onClick={props.onNext}>Continue to download</Button>
+        {/* If pricing failed to load, don't trap the person here: go on without the box. */}
+        <Button onClick={() => (quote ? setConfirming(true) : props.onNext())} disabled={!quote && !error}>
+          Continue to download
+        </Button>
       </NavRow>
+
+      {confirming && quote && (
+        <ConfirmDialog
+          title="Confirm your selection"
+          confirmLabel={`Confirm · ${fmtUsd(quote.estimated_total_usd)}`}
+          onConfirm={() => {
+            setConfirming(false);
+            props.onNext();
+          }}
+          onCancel={() => setConfirming(false)}
+        >
+          <p>Here&apos;s what you&apos;ve chosen and what you can expect to pay:</p>
+          <QuoteSummary quote={quote} />
+          <p className="text-xs text-ink-muted">
+            Data Cleaning is charged when you download (you&apos;ll confirm that amount too). Package prices are starting
+            prices — we confirm the final price before any work begins.
+            {quote.requires_consultant && " Some services start with a free call to scope the work."} Nothing is
+            charged on this step.
+          </p>
+        </ConfirmDialog>
+      )}
     </section>
   );
 }

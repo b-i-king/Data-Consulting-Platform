@@ -4,7 +4,7 @@
 
 "use client";
 
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 
 export function StepHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -141,6 +141,100 @@ export function ConsultantCta({ bookingUrl, children }: { bookingUrl: string; ch
           Book a free consultation
         </a>
       </div>
+    </div>
+  );
+}
+
+/**
+ * First / Previous / "Page 2 of 5" / Next / Last controls for a long list.
+ * `page` counts from 0. Hidden when everything fits on one page.
+ */
+export function Pager(props: {
+  page: number;
+  pages: number;
+  onPage: (page: number) => void;
+  /** e.g. "Fields 11–20 of 43", shown next to the buttons. */
+  summary?: string;
+  label: string; // for screen readers, e.g. "Columns pages"
+}) {
+  const { page, pages, onPage } = props;
+  if (pages <= 1) return null;
+  const btn = "rounded-full border border-line bg-surface px-3 py-1 text-sm hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <nav aria-label={props.label} className="mt-3 flex flex-wrap items-center justify-end gap-2 text-sm">
+      {props.summary && <span className="mr-auto text-xs text-ink-muted">{props.summary}</span>}
+      <button type="button" className={btn} onClick={() => onPage(0)} disabled={page === 0} aria-label="First page">
+        « First
+      </button>
+      <button type="button" className={btn} onClick={() => onPage(page - 1)} disabled={page === 0} aria-label="Previous page">
+        ‹ Previous
+      </button>
+      <span className="px-1 tabular-nums text-ink-muted" aria-live="polite">
+        Page {page + 1} of {pages}
+      </span>
+      <button type="button" className={btn} onClick={() => onPage(page + 1)} disabled={page >= pages - 1} aria-label="Next page">
+        Next ›
+      </button>
+      <button type="button" className={btn} onClick={() => onPage(pages - 1)} disabled={page >= pages - 1} aria-label="Last page">
+        Last »
+      </button>
+    </nav>
+  );
+}
+
+/**
+ * A "please confirm" box over the page (the browser's built-in <dialog>, so
+ * Esc closes it and keyboard focus stays inside). Used before anything that
+ * costs money: downloading, and adding paid services.
+ * Render it only while it should be open; `onCancel` closes it.
+ */
+export function ConfirmDialog(props: {
+  title: string;
+  children: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+    return () => d?.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="confirm-title"
+      onCancel={(e) => {
+        e.preventDefault(); // Esc: let React close it
+        props.onCancel();
+      }}
+      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-ink shadow-[var(--shadow-card)] backdrop:bg-canvas/80 backdrop:backdrop-blur-sm"
+    >
+      <div className="space-y-4 p-5">
+        <h2 id="confirm-title" className="text-lg font-semibold">
+          {props.title}
+        </h2>
+        <div className="space-y-3 text-sm">{props.children}</div>
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={props.onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={props.onConfirm} autoFocus>
+            {props.confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+/** One "label ........ amount" line inside a confirmation. */
+export function TotalRow({ label, value, strong }: { label: ReactNode; value: string; strong?: boolean }) {
+  return (
+    <div className={`flex justify-between gap-4 ${strong ? "border-t border-line pt-2 font-semibold" : ""}`}>
+      <span>{label}</span>
+      <span className="font-mono tabular-nums">{value}</span>
     </div>
   );
 }

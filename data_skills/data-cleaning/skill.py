@@ -5,9 +5,10 @@ Python implementation of README.md in this folder. The actual pipeline lives in
 api/services/cleaning.py (the website uses it on every upload); this skill
 wraps it so it can also run from the command line or the skills API.
 
-Steps: tidy text → drop empty rows → drop exact duplicates → restore whole
+Steps: your transform steps → clean column names (lowercase snake_case) → tidy text → drop empty rows → drop exact duplicates → restore whole
 numbers → missing-value report with advice (20% / 90% rules, mean vs. median
-by skewness). Nothing is filled or removed unless `column_actions` asks for it.
+by skewness; IDs: remove rows with no ID) → wrong-data and wrong-format checks. Nothing is filled or removed unless
+`column_actions` asks for it.
 """
 
 from __future__ import annotations
@@ -24,16 +25,22 @@ SKILL = SkillSpec(
     description="Remove duplicates and blank rows, tidy text, and report missing values by column.",
     params={
         "missing_strategy": Param("choice", "keep", "Keep rows with gaps, or drop them", ("keep", "drop_any")),
-        "column_actions": Param("json", None, 'Per column: keep, drop, mean, median, mode or auto, '
-                                              'e.g. {"age_group": "mode", "notes": "drop"}'),
+        "column_actions": Param("json", None, 'Per column (cleaned names): keep, drop, mean, median, mode, auto, '
+                                              'or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"}'),
+        "column_names": Param("json", None, 'Your own column names, by cleaned name, '
+                                            'e.g. {"unnamed_column_4": "store_code", "amount_2": "refund_amount"}'),
+        "transforms": Param("json", None, 'Transform steps in order (like Power Query), e.g. '
+                                          '[{"op": "change_type", "column": "order_date", "to": "date"}]'),
     },
 )
 
 
-def run(df: pd.DataFrame, missing_strategy: str = "keep", column_actions=None) -> SkillResult:
+def run(df: pd.DataFrame, missing_strategy: str = "keep", column_actions=None, column_names=None,
+        transforms=None) -> SkillResult:
     try:
-        cleaned, report = clean_dataframe(df, missing_strategy=missing_strategy, column_actions=column_actions)
-    except ValueError as exc:   # e.g. an unknown fill method
+        cleaned, report = clean_dataframe(df, missing_strategy=missing_strategy, column_actions=column_actions,
+                                          column_names=column_names, transforms=transforms)
+    except ValueError as exc:   # e.g. an unknown fill method, or two columns given one name
         raise SkillInputError(str(exc)) from exc
     worst = sorted(report.column_reports, key=lambda c: c.missing_pct, reverse=True)[:3]
     findings = list(report.notes)

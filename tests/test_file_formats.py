@@ -168,3 +168,11 @@ def test_nested_json_becomes_columns_and_text():
 def test_read_errors_are_plain_english(name, raw, says):
     with pytest.raises(FileReadError, match=says):
         read_file(name, raw)
+
+
+def test_blank_and_repeated_headers_in_excel_are_marked():
+    # An Excel sheet whose header row has two blank cells and a repeated name.
+    buf = io.BytesIO()
+    pd.DataFrame([[1, "x", 3, 4, 9]], columns=["Order ID", None, "Amount", "Amount", None]).to_excel(buf, index=False)
+    [ds] = read_file("orders.xlsx", buf.getvalue())
+    assert list(ds.df.columns) == ["Order ID", "unnamed_column_2", "Amount", "Amount_2", "unnamed_column_5"]

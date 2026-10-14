@@ -21,12 +21,13 @@ import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
 import StepUpload from "./StepUpload";
 import StepResults from "./StepResults";
+import { AddServiceConfirm } from "./ServiceConfirm";
 import StepServices from "./StepServices";
 import StepAccount from "./StepAccount";
 
@@ -54,6 +55,8 @@ export default function Wizard() {
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   // Per-column missing-value choices, by table: {"0": {"amount": "median"}}.
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
+  const [columnNames, setColumnNames] = useState<ColumnNames>({});
+  const [transforms, setTransforms] = useState<Transforms>({});
   const [serviceIds, setServiceIds] = useState<string[]>(["data_cleaning"]);
   const [session, setSession] = useState<Session | null>(null);
 
@@ -75,17 +78,42 @@ export default function Wizard() {
 
   const bookingUrl = options?.booking_url ?? FALLBACK_BOOKING_URL;
   // Memoized so the dashboard and skills only re-run when the data really changes.
-  const input: CleaningInput = useMemo(() => ({ files, strategy, columnActions }), [files, strategy, columnActions]);
+  const input: CleaningInput = useMemo(
+    () => ({ files, strategy, columnActions, columnNames, transforms }),
+    [files, strategy, columnActions, columnNames, transforms],
+  );
 
   // Re-run the cleaning with new fill/remove choices for one table. The new
   // report replaces the old one only if the server accepts the choices.
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
-    setAnalysis(await analyzeFiles({ files, strategy, columnActions: next }));
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions: next, columnNames, transforms }));
     setColumnActions(next);
   }
-  // A service picked from a locked badge in Explore is added to the order.
-  const addService = (id: string) => setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  // Same for the client's own column names (and, optionally, column choices
+  // made at the same time — e.g. "remove all unnamed columns").
+  async function applyNames(groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) {
+    const nextNames = { ...columnNames, [String(groupId)]: names };
+    const nextActions = actions ? { ...columnActions, [String(groupId)]: actions } : columnActions;
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions: nextActions, columnNames: nextNames, transforms }));
+    setColumnNames(nextNames);
+    setColumnActions(nextActions);
+  }
+  // The table's transform steps (Power Query-style "Applied steps"), in order.
+  async function applyTransforms(groupId: number, steps: TransformStep[]) {
+    const next = { ...transforms, [String(groupId)]: steps };
+    setAnalysis(await analyzeFiles({ files, strategy, columnActions, columnNames, transforms: next }));
+    setTransforms(next);
+  }
+
+  // A service picked from a locked badge in Explore is added to the order —
+  // after a confirmation that shows its price and the new total.
+  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  const addService = (id: string) => setPendingAdd(id);
+  const confirmAdd = (id: string) => {
+    setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    setPendingAdd(null);
+  };
   const go = (n: number) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -111,6 +139,16 @@ export default function Wizard() {
   return (
     <div>
       <Progress step={step} total={LABELS.length} labels={LABELS} />
+
+      {pendingAdd && options.services.find((s) => s.id === pendingAdd) && (
+        <AddServiceConfirm
+          service={options.services.find((s) => s.id === pendingAdd)!}
+          currentIds={serviceIds}
+          runtimeSeconds={analysis?.runtime.runtime_seconds ?? 0}
+          onConfirm={() => confirmAdd(pendingAdd)}
+          onCancel={() => setPendingAdd(null)}
+        />
+      )}
 
       {step === 0 && (
         <StepAccountType
@@ -149,11 +187,15 @@ export default function Wizard() {
             setFiles(f);
             setAnalysis(null); // new files invalidate the old results
             setColumnActions({});
+            setColumnNames({});
+            setTransforms({});
           }}
           onStrategyChange={(s) => {
             setStrategy(s);
             setAnalysis(null);
             setColumnActions({});
+            setColumnNames({});
+            setTransforms({});
           }}
           onAnalyzed={(result) => {
             setAnalysis(result);
@@ -168,6 +210,8 @@ export default function Wizard() {
           analysis={analysis}
           input={input}
           onApplyActions={applyActions}
+          onApplyNames={applyNames}
+          onApplyTransforms={applyTransforms}
           services={options.services}
           selectedServices={serviceIds}
           onAddService={addService}

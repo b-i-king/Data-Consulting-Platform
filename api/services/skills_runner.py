@@ -42,7 +42,9 @@ CLEANING = "data_cleaning"   # the one category that works on any number of rows
 
 def prepare_input(skill_id: str, datasets: list[LoadedDataset], group_id: int,
                   missing_strategy: str = "keep",
-                  column_actions: dict[int, dict[str, str]] | None = None) -> pd.DataFrame | dict[str, pd.DataFrame]:
+                  column_actions: dict[int, dict[str, str]] | None = None,
+                  column_names: dict[int, dict[str, str]] | None = None,
+                  transforms: dict[int, list[dict]] | None = None) -> pd.DataFrame | dict[str, pd.DataFrame]:
     spec = load_skill(skill_id).SKILL
     needs_rows = describe(skill_id)["category"] != CLEANING
     if spec.wants_raw:
@@ -54,7 +56,7 @@ def prepare_input(skill_id: str, datasets: list[LoadedDataset], group_id: int,
             return list(tables.values())[min(group_id, len(tables) - 1)]
         return tables
 
-    result = run_pipeline(datasets, missing_strategy, column_actions)
+    result = run_pipeline(datasets, missing_strategy, column_actions, column_names, transforms)
     if needs_rows:
         if spec.input == "tables":
             # Several tables (e.g. an ER diagram): a small lookup table is fine
@@ -75,10 +77,12 @@ def prepare_input(skill_id: str, datasets: list[LoadedDataset], group_id: int,
 
 def run_on_uploads(skill_id: str, datasets: list[LoadedDataset], params: dict, group_id: int = 0,
                    missing_strategy: str = "keep",
-                   column_actions: dict[int, dict[str, str]] | None = None) -> dict:
+                   column_actions: dict[int, dict[str, str]] | None = None,
+                   column_names: dict[int, dict[str, str]] | None = None,
+                   transforms: dict[int, list[dict]] | None = None) -> dict:
     """Run the skill and return its JSON result plus the processing time."""
     started = time.perf_counter()
-    data = prepare_input(skill_id, datasets, group_id, missing_strategy, column_actions)
+    data = prepare_input(skill_id, datasets, group_id, missing_strategy, column_actions, column_names, transforms)
     result = run_skill(skill_id, data, params, from_api=True).to_dict()
     result["runtime_seconds"] = round(time.perf_counter() - started, 3)
     return result

@@ -134,28 +134,89 @@ export interface ColumnReport {
   /** Missing-value advice: under 20% "low", 20%+ "review", 90%+ "remove". */
   missing_level: "none" | "low" | "review" | "remove";
   recommendation: string;
-  /** Suggested fill: mean (symmetric numbers), median (skewed numbers), mode (text). */
-  suggested_fill: FillMethod | null;
+  /** Suggestion: mean (symmetric numbers), median (skewed numbers), mode (text),
+   *  or "drop_rows" for an ID column (remove the rows with no ID). */
+  suggested_fill: FillMethod | "drop_rows" | null;
   skewness: number | null;
   /** method -> the value it would fill in, e.g. { mean: "12.4", median: "9" } */
   fill_options: Partial<Record<FillMethod, string>>;
-  /** What was done: keep, dropped, or the fill method used. */
-  action: "keep" | "dropped" | FillMethod;
+  /** What was done: keep, dropped (the column), rows_dropped (rows with no ID), or the fill method used. */
+  action: "keep" | "dropped" | "rows_dropped" | FillMethod;
   filled_count: number;
+  /** Rows removed because this column was blank ("drop_rows"). */
+  rows_dropped: number;
+  /** Looks like an ID or code: never filled, and shouldn't be blank. */
+  is_id: boolean;
+  /** Stable name for choices and renames (the automatic cleaned name). */
+  key: string;
+  /** The header in the uploaded file ("" when it was blank). */
+  original_name: string;
+  /** Header problem still to fix: a blank header, or a name shared with another column. */
+  name_problem: "unnamed" | "duplicate" | null;
+  /** "Wrong data": values far outside the usual range (3 × IQR), or dates in the future / before 1900. */
+  outliers: OutlierCheck | null;
+  /** "Wrong format": a text column that is really numbers or dates. */
+  format_issue: FormatCheck | null;
   missing_after: number;
+}
+
+export interface OutlierCheck {
+  kind: "number" | "date";
+  count: number;
+  /** The expected range (numbers for number columns, YYYY-MM-DD for dates). */
+  low: number | string;
+  high: number | string;
+  min: string;
+  max: string;
+  /** The most extreme unusual values. */
+  examples: string[];
+  note: string;
+}
+
+export interface FormatCheck {
+  to: "number" | "date";
+  convertible: number;
+  /** Values that wouldn't convert (they'd become blank). */
+  failing: number;
+  examples: string[];
+}
+
+/** One transform step (api/services/transforms.py), like Power Query's "Applied steps". */
+export type TransformStep =
+  | { op: "promote_headers" }
+  | { op: "remove_top_rows"; count: number }
+  | { op: "change_type"; column: string; to: "number" | "date" | "text" }
+  | { op: "replace_values"; column: string; find: string; replace: string }
+  | { op: "outliers"; column: string; method: "cap" | "remove" | "blank"; low?: number | string | null; high?: number | string | null }
+  | { op: "unpivot"; columns: string[]; attribute?: string; value?: string }
+  | { op: "pivot"; column: string; values: string; agg: "sum" | "mean" | "count" | "first" };
+
+/** What one step did (report.transforms_applied). `step` counts from 1. */
+export interface AppliedStep {
+  step: number;
+  op: TransformStep["op"];
+  column?: string;
+  count: number;
+  text: string;
 }
 
 export type FillMethod = "mean" | "median" | "mode";
 /** A choice for one column's missing values ("auto" = our suggestion). */
-export type ColumnAction = "keep" | "drop" | "auto" | FillMethod;
-/** group id -> column -> choice; sent to analyze, download and skills alike. */
+export type ColumnAction = "keep" | "drop" | "auto" | "drop_rows" | FillMethod;
+/** group id -> column key -> choice; sent to analyze, download and skills alike. */
 export type ColumnActions = Record<string, Record<string, ColumnAction>>;
+/** group id -> column key -> the client's own name for it (cleaned to snake_case by the server). */
+export type ColumnNames = Record<string, Record<string, string>>;
+/** group id -> the table's transform steps, in order. */
+export type Transforms = Record<string, TransformStep[]>;
 
 /** Everything needed to re-create the cleaned data on the server. */
 export interface CleaningInput {
   files: File[];
   strategy: MissingStrategy;
   columnActions: ColumnActions;
+  columnNames: ColumnNames;
+  transforms: Transforms;
 }
 
 export interface CleaningReport {
@@ -186,6 +247,19 @@ export interface CleaningReport {
   analysis_ready: boolean;
   /** Why the table can't be analyzed (empty when it can). */
   analysis_note: string;
+  /** Column names cleaned to lowercase snake_case: original name -> new name. */
+  columns_renamed: Record<string, string>;
+  /** Rows removed because an ID was blank (listed on the Excel download's "rows_missing_id" sheet). */
+  rows_missing_id_removed: number;
+  /** Columns whose header was blank in the file, not yet named or removed. */
+  unnamed_columns: string[];
+  /** Groups of columns that had the same name (e.g. ["amount", "amount_2"]), not yet told apart. */
+  duplicate_columns: string[][];
+  /** What each transform step did, in order. */
+  transforms_applied: AppliedStep[];
+  /** Columns with unusual values / in the wrong format. */
+  outlier_columns: string[];
+  format_columns: string[];
 }
 
 export interface SampleSizeCheck {
@@ -211,11 +285,24 @@ export interface SampleSize {
 
 export type Cell = string | number | boolean | null;
 
+/** Wait + charge for downloading one table (api/services/pricing.py download_estimate). */
+export interface DownloadEstimate {
+  rows: number;
+  columns: number;
+  /** rows × fields — what the wait is based on. */
+  cells: number;
+  /** The processing charge the client confirms; the download never charges more. */
+  amount_usd: number;
+  billable_minutes: number;
+  formats: Record<"csv" | "xlsx", { estimated_seconds: number; label: string; under_five_minutes: boolean }>;
+}
+
 export interface GroupOutput {
   group_id: number;
   label: string;
   report: CleaningReport;
   sample_size: SampleSize;
+  download_estimate: DownloadEstimate;
   preview: {
     columns: string[];
     rows: Record<string, Cell>[];

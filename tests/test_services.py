@@ -11,9 +11,9 @@ import pandas as pd
 import pytest
 
 from api.services.categorizer import categorize, combine_group, normalize_column
-from api.services.cleaning import clean_dataframe
+from api.services.cleaning import clean_column_names, clean_dataframe
 from api.services.file_reader import LoadedDataset, UnsupportedFileError, read_file
-from api.services.pricing import build_quote, runtime_cost
+from api.services.pricing import build_quote, download_estimate, runtime_cost, wait_label
 from api.services.sample_size import sample_size_snapshot
 
 
@@ -37,9 +37,12 @@ def test_read_cp1252_csv():
 
 
 def test_duplicate_headers_are_made_unique():
-    # pandas itself renames a repeated CSV header to "id.1".
+    # pandas renames a repeated CSV header to "id.1"; we make it a clear second "id".
     [ds] = read_file("dup.csv", b"id,id,name\n1,2,a\n")
-    assert list(ds.df.columns) == ["id", "id.1", "name"]
+    assert list(ds.df.columns) == ["id", "id_2", "name"]
+    # Blank headers get their position, so the client can find them.
+    [ds] = read_file("blank.csv", b"a,,amount,amount,\n1,2,3,4,5\n")
+    assert list(ds.df.columns) == ["a", "unnamed_column_2", "amount", "amount_2", "unnamed_column_5"]
 
 
 def test_unsupported_extension():
@@ -236,6 +239,87 @@ def test_id_columns_are_never_filled():
     df = pd.DataFrame({"order_id": range(10), "customer_id": [1001, None, 1003, None, 1005, 1006, None, 1008, 1009, 1010]})
     cleaned, report = clean_dataframe(df, column_actions={"customer_id": "mean"})
     cid = next(c for c in report.column_reports if c.column == "customer_id")
-    assert cid.fill_options == {} and cid.suggested_fill is None and "ID" in cid.recommendation
+    # Never filled — the suggestion is to remove the rows with no ID instead.
+    assert cid.fill_options == {} and cid.suggested_fill == "drop_rows" and "ID" in cid.recommendation
     assert cleaned["customer_id"].isna().sum() == 3            # the request is refused, gaps kept
     assert any("IDs" in n for n in report.notes)
+
+
+def test_download_estimate_scales_with_rows_times_fields():
+    small = download_estimate(0.2, rows=100, columns=5)
+    big = download_estimate(0.2, rows=400_000, columns=20)
+    assert small["cells"] == 500 and big["cells"] == 8_000_000
+    # Excel is slower to write than CSV, and more cells take longer.
+    assert big["formats"]["xlsx"]["estimated_seconds"] > big["formats"]["csv"]["estimated_seconds"]
+    assert big["formats"]["csv"]["estimated_seconds"] > small["formats"]["csv"]["estimated_seconds"]
+    assert small["formats"]["csv"]["under_five_minutes"]
+    assert not big["formats"]["xlsx"]["under_five_minutes"]   # 8M cells / 20k per second = 400 s
+    # The charge is the processing time only (1 started minute here).
+    assert small["amount_usd"] == runtime_cost(0.2)["amount_usd"]
+
+
+def test_wait_label_reads_like_plain_english():
+    assert wait_label(4) == "under 10 seconds"
+    assert wait_label(34) == "about 40 seconds"
+    assert wait_label(61) == "about 2 minutes"
+
+
+def test_column_names_become_lowercase_snake_case():
+    assert clean_column_names(["Order Date", "Unit Price ($)", "CustomerID", "DisplayName", "Café Name",
+                               "amount", "Amount", "", "2024 Sales", "  e-mail  "]) == [
+        "order_date", "unit_price", "customer_id", "display_name", "cafe_name",
+        "amount", "amount_2", "column_8", "col_2024_sales", "e_mail"]
+    df = pd.DataFrame({"Order ID": range(3), "Total Amount": [1.0, 2.0, 3.0], "source_file": ["a.csv"] * 3})
+    cleaned, report = clean_dataframe(df)
+    assert list(cleaned.columns) == ["order_id", "total_amount", "source_file"]   # ours keeps its name
+    assert report.columns_renamed == {"Order ID": "order_id", "Total Amount": "total_amount"}
+    assert report.column_reports[0].column == "order_id" and report.column_reports[0].is_id
+
+
+def test_rows_missing_an_id_can_be_removed_and_are_set_aside():
+    df = pd.DataFrame({"Order ID": [1, None, 3, None, 5], "amount": [10, 20, 30, 40, 50]})
+    # Choices use the CLEANED column names (the ones the report shows).
+    cleaned, report = clean_dataframe(df, column_actions={"order_id": "drop_rows"})
+    assert cleaned["order_id"].tolist() == [1, 3, 5]
+    assert report.rows_missing_id_removed == 2
+    assert report.rows_missing_id["amount"].tolist() == [20, 40]     # kept for the Excel sheet
+    oid = report.column_reports[0]
+    assert oid.action == "rows_dropped" and oid.rows_dropped == 2 and oid.filled_count == 0
+    assert report.cells_filled == 0
+    assert any("rows_missing_id" in n for n in report.notes)
+    d = report.to_dict()                                              # JSON report leaves the DataFrame out
+    assert "rows_missing_id" not in d and d["rows_missing_id_removed"] == 2
+
+
+def test_blank_and_repeated_headers_are_flagged_until_fixed():
+    [ds] = read_file("orders.csv", b"Order ID,,Amount,Amount,\n1,x,3,4,\n2,y,5,6,\n")
+    cleaned, report = clean_dataframe(ds.df)
+    assert list(cleaned.columns) == ["order_id", "unnamed_column_2", "amount", "amount_2", "unnamed_column_5"]
+    assert report.unnamed_columns == ["unnamed_column_2", "unnamed_column_5"]
+    assert report.duplicate_columns == [["amount", "amount_2"]]
+    by = {c.column: c for c in report.column_reports}
+    assert by["unnamed_column_2"].name_problem == "unnamed" and by["unnamed_column_2"].original_name == ""
+    assert by["amount_2"].name_problem == "duplicate" and by["amount_2"].original_name == "Amount"
+    assert any("no name" in n for n in report.notes) and any("same name" in n for n in report.notes)
+
+    # The client names one blank column and tells the two amounts apart.
+    # Choices made under the old (automatic) names still apply.
+    cleaned, report = clean_dataframe(
+        ds.df,
+        column_names={"unnamed_column_2": "Store Code", "amount_2": "Refund Amount"},
+        column_actions={"unnamed_column_5": "drop"},
+    )
+    assert list(cleaned.columns) == ["order_id", "store_code", "amount", "refund_amount"]
+    assert report.unnamed_columns == []          # one named, the other removed: both fixed
+    assert report.duplicate_columns == []
+    by = {c.column: c for c in report.column_reports}
+    assert by["refund_amount"].key == "amount_2" and by["refund_amount"].name_problem is None
+    assert by["unnamed_column_5"].action == "dropped"
+
+
+def test_client_names_must_be_usable_and_unique():
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    with pytest.raises(ValueError, match="share a name"):
+        clean_dataframe(df, column_names={"b": "A"})
+    with pytest.raises(ValueError, match="can't be used"):
+        clean_dataframe(df, column_names={"b": "  $$ "})

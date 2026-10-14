@@ -92,11 +92,12 @@ function ResultTable({ rows }: { rows: Record<string, Cell>[] }) {
   return (
     <div className="max-h-72 overflow-auto rounded-xl border border-line">
       <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted">
+        {/* Column names exactly as in the cleaned data (lowercase snake_case). */}
+        <thead className="sticky top-0 bg-surface-2 text-left font-mono text-xs text-ink-muted">
           <tr>
             {cols.map((c) => (
               <th key={c} className="whitespace-nowrap px-3 py-2">
-                {c.replace(/_/g, " ")}
+                {c}
               </th>
             ))}
           </tr>

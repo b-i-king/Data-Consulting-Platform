@@ -52,7 +52,7 @@ columns than the header ("Row 3 … has 2 columns but the header has 1").
 - **Header row:** the first row is assumed to hold column names.
 - **Encodings tried:** UTF-8 (with/without BOM), Windows-1252, Latin-1 — covers
   most US exports, including older Excel "Save as CSV" files.
-- **Column names:** trimmed of spaces; duplicates made unique (`id`, `id.1`).
+- **Column names:** trimmed of spaces; a blank header becomes `unnamed_column_<position>`, and a repeated one becomes `amount`, `amount_2` (pandas' `amount.1` included). Both are flagged for the client to fix (see Step 0 below).
 
 ## 2. One file or many?
 
@@ -74,14 +74,39 @@ Entity labels are a keyword-based guess and are shown to clients as such.
 
 | Step | What | Example |
 |---|---|---|
+| 0. Column names | Lowercase snake_case: spaces/punctuation → `_`, camelCase split, accents removed, names kept unique | `Order Date` → `order_date`, `Unit Price ($)` → `unit_price`, `CustomerID` → `customer_id`, second `Amount` → `amount_2` |
 | 1. Tidy text | Trim spaces; blank text → missing | `" Acme "` → `"Acme"`, `"  "` → missing |
 | 2. Empty rows | Drop rows with no values at all | Blank lines at the bottom of a spreadsheet |
 | 3. Duplicates | Drop rows identical in every column (keep first) | Same order exported twice |
 | 3b. Whole numbers | `1001.0` → `1001` when a column only has whole numbers | ID columns with some blanks |
 | 4. Missing report + advice | Count, % missing, a level and a fill suggestion per column | `phone`: 31% missing → "think about removing" |
-| 5a. Column choices | Per column: **keep** gaps (default), **remove** the column, or **fill** with the mean / median / mode | Client picks on the results step, then **Apply changes** |
+| 5a. Column choices | Per column: **keep** gaps (default), **remove** the column, **fill** with the mean / median / mode, or (ID columns) **remove rows with no ID** | Client picks on the results step, then **Apply changes** |
 | 5b. Row strategy | **Keep** rows with gaps (default) or **remove** them (after 5a) | Client picks on the upload step |
 | 6. Profile | Type, unique values, examples per column | `order_date`: date (stored as text) |
+
+**Header problems** (Step 0 flags them; the results screen shows a warning and
+the fixes):
+
+| Problem | How it looks after reading | What the client can do |
+|---|---|---|
+| A blank header cell (one or several; common in Excel and CSV exports) | `unnamed_column_4` — the number is its position from the left | Type a name, **Remove all unnamed columns** (one button), or fix the header row in the file and upload again |
+| Two columns with the same name | `amount`, `amount_2` (pandas' own `amount.1` is turned into this) | Rename them so the analysis can tell them apart, e.g. `amount_paid`, `amount_refunded` |
+
+**Edit column names** (on the results screen) renames any column, 10 per page.
+The client's names are sent as `column_names` (`{"0": {"amount_2":
+"refund_amount"}}`, by column **key**), cleaned the same way (lowercase,
+underscores) and must be unique — a clash is refused with a clear message.
+Each column keeps its automatic name as a stable `key`, so missing-value
+choices made before a rename still apply. Renaming or removing a column marks
+its problem fixed (`name_problem`, `unnamed_columns`, `duplicate_columns` in the
+report). Nothing is stored: the names travel with every request, like the
+missing-value choices.
+
+Step 0 runs first, so every later step, the column choices (`column_actions`
+use the cleaned names), the preview, the skills and the download all use the
+new names. The report lists each change in `columns_renamed`, and each column
+carries its `original_name` (the app shows "was "Order Date"" under the column,
+or "no name in your file"). The platform's own `source_file` column keeps its name.
 
 Steps 2 and 3 ignore the platform's own `source_file` column, so a blank row is
 still blank and a record repeated across two overlapping exports is still a
@@ -102,18 +127,80 @@ How gaps would be filled (the suggested method is starred in the dropdown):
   0.5), otherwise the **median** — sales and prices usually have a long tail of
   big values that drags the mean up. pandas: `s.skew()`, `s.mean()`, `s.median()`.
 - **Text, categories, true/false:** the **mode** (most common value), `s.mode()[0]`.
-- **Dates, IDs and codes** (`customer_id`, order numbers, zip codes, SKUs): no fill.
-  An average ID means nothing, and a blank ID usually means "none" — in the
-  sample data, a blank `customer_id` is a walk-in customer.
+- **Dates:** no fill.
+- **IDs and codes** (`customer_id`, order numbers, zip codes, SKUs): never
+  filled — an average ID means nothing. An ID **should not be blank** (like a
+  `NOT NULL` rule in a database), so the suggestion is **Remove rows with no
+  ID** (`drop_rows`). Removed rows are not lost: the Excel download lists them
+  on a **`rows_missing_id`** sheet, so the client can look up the right IDs,
+  fill them in, and upload again. (In the sample data a blank `customer_id` is a
+  walk-in customer; there, keeping the gaps is a reasonable choice too.)
 - Whole-number columns get a rounded value, so `1001` stays `1001`.
 
-**Use our suggestions** removes 90%+ columns and fills small gaps (under 20%).
-Columns in between are left for the client: filling a third of a column with one
+**Use our suggestions** removes 90%+ columns, removes rows with a blank ID
+(ID columns under 90% missing), and fills small gaps (under 20%). Other columns
+in between are left for the client: filling a third of a column with one
 value changes the data a lot. Choices are sent as `column_actions` (JSON, by
 table: `{"0": {"age_group": "mode"}}`) with every request that needs the data —
 analyze, dashboard, skills, download — so all of them see the same cleaned data.
 The report keeps the **before** numbers and adds what was done (`action`,
-`filled_count`, `missing_after`).
+`filled_count`, `rows_dropped`, `missing_after`), plus `rows_missing_id_removed`
+for the table.
+
+### Wrong data (unusual values) and wrong format
+
+Code: `api/services/transforms.py`. Both checks only **report**; nothing changes
+until the client picks a fix on the results screen ("Fix wrong data").
+
+**Wrong data — unusual values** (`outliers` on each column, `outlier_columns`):
+
+| Column type | Flagged when | Why this rule |
+|---|---|---|
+| Numbers (not IDs), 10+ values | Outside Tukey's "far out" fences: Q1 − 3 × IQR to Q3 + 3 × IQR (IQR = Q3 − Q1). The low limit never goes below 0 when the column has no negatives. | The usual box-plot rule (1.5 × IQR) flagged ~13% of the sample bakery's prices — its cakes are real, just rare. 3 × IQR flags only the extremes, like a 450-minute workout among 30–60 minute ones. |
+| Dates | In the future, or before 1900 | Usually typing mistakes (2202 instead of 2022) |
+
+The report gives the count, the expected range, the data's min and max, and the
+most extreme examples. Fixes (the W3Schools "cleaning wrong data" techniques):
+
+| Fix | pandas | Example |
+|---|---|---|
+| Keep them (default) | — | A very large order is real |
+| Cap to the range | `df[col].clip(low, high)` | "If Duration > 120, set it to 120" |
+| Remove those rows | `df = df[df[col].between(low, high)]` | Drop the rows with impossible values |
+| Make them blank | `df.loc[outside, col] = NaN` | Then fill or remove them like other gaps |
+| Replace one value | `df.loc[df[col] == 450, col] = 45` | The **Replace values** tool |
+
+The client can edit the range before applying. Once a column has a rule, it
+isn't flagged again.
+
+**Wrong format** (`format_issue`, `format_columns`): a text column where 80%+
+of the values are really **numbers** (`"$1,200"`, `"15%"`) or **dates**
+(`"2020/12/26"`, `"20201226"` is treated as a number). The report says how many
+convert and shows the ones that won't. **Convert to date / number** runs
+`pd.to_datetime(..., format="mixed")` or `pd.to_numeric(...)`. Values that don't
+convert become blank, and **Remove rows where this is blank** (offered for every
+column, `drop_rows`) removes them, i.e. `df.dropna(subset=[col])`.
+
+### Transform data (simplified Power Query)
+
+Like Power BI's "Applied steps", the client builds an ordered list of steps
+(sent as `transforms`, by table) that re-runs on every request. Each step is
+listed with what it did (`transforms_applied`) and can be removed.
+
+| Step | When to use it | pandas | Runs |
+|---|---|---|---|
+| Use first row as headers | The real column names are in row 1 (e.g. the file starts with a title line) | `df.columns = df.iloc[0]; df = df.iloc[1:]` | Before column names are cleaned |
+| Remove top rows | Extra title or note rows at the top of the data | `df.iloc[n:]` | Before column names are cleaned |
+| Change data type | Number / date / text | `pd.to_numeric`, `pd.to_datetime`, `astype(str)` | After names, in order |
+| Replace values | Fix one wrong value; fill blanks with a value ("Find" empty); blank a value out ("Replace with" empty) | `df.loc[df[col] == find, col] = new` | After names, in order |
+| Unusual values rule | Cap / remove / blank values outside a range (from "Fix wrong data") | `clip`, filter, `NaN` | After names, in order |
+| Unpivot columns | Jan, Feb, Mar columns → a month column + a value column | `pd.melt` | After names, in order |
+| Pivot column | The reverse: one column per value (sum, average, count or first); up to 100 new columns | `groupby(...).agg(...).unstack()` | After names, in order |
+
+Renaming columns, removing columns and removing duplicates — the other Power
+Query basics — are covered by "Column names", the missing-values table, and the
+automatic duplicate removal. A step that names a column that no longer exists
+gets a plain-English error (e.g. "Step 2: there's no column called 'x'").
 
 ### Enough rows to analyze? (30-row minimum)
 
@@ -134,9 +221,9 @@ use several tables (e.g. an ER diagram), at least one table must have 30+ rows.
 ### What we deliberately do NOT do automatically
 
 Fill in missing values or drop columns without the client choosing to, fill IDs,
-remove near-duplicates, remove outliers, or reformat dates/currency. These need
-business context — they are the client's call or part of the consultant-assisted
-services.
+remove near-duplicates, change unusual values, or convert dates/currency. We
+flag and suggest; the client decides (or a consultant helps), because these
+need business context.
 
 ## 4. Preview and download
 
@@ -145,9 +232,14 @@ services.
 - **Preview:** the first 5 cleaned rows, like pandas' `df.head()`
   (`PREVIEW_MAX_ROWS`, default 5 — raise it to page through more on screen).
   Kept short because the cleaning re-runs each time a missing-value choice is applied.
+- **10 fields per page:** the "Missing values by column" table and the preview
+  show 10 columns at a time, with First / Previous / Next / Last buttons.
 - **Download:** requires an account. CSV (UTF-8 with BOM so Excel shows accents
-  correctly) or Excel (with a second sheet holding the missing-value report).
-  Downloads always contain every row.
+  correctly) or Excel (with a second sheet holding the missing-value report, and
+  a `rows_missing_id` sheet when rows were removed for a blank ID).
+  Downloads always contain every row. Before it starts, a confirmation shows
+  rows × fields, the estimated wait and the total charge (see
+  [PRICING.md](PRICING.md) → Estimates and confirmations).
 
 ## 5. "Is there enough data?"
 

@@ -41,6 +41,10 @@ def test_guest_analyze_then_signup_then_download():
     assert group["report"]["duplicate_rows_removed"] == 1
     assert group["preview"]["total_rows"] == 2
     assert body["runtime"]["billable_minutes"] == 1
+    est = group["download_estimate"]
+    assert est["rows"] == 2 and est["columns"] == 2
+    assert est["amount_usd"] == body["runtime"]["amount_usd"]
+    assert est["formats"]["csv"]["label"] == "under 10 seconds"
 
     # 2. Download without an account is refused.
     res = client.post("/api/files/download", files=_files(("sales.csv", CSV)))
@@ -66,6 +70,12 @@ def test_guest_analyze_then_signup_then_download():
     df = pd.read_csv(io.BytesIO(res.content), encoding="utf-8-sig")
     assert len(df) == 2
     assert "X-Amount-USD" in res.headers
+
+    # 5. The charge never goes above the total the client confirmed.
+    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV)),
+                      data={"file_format": "csv", "confirmed_amount_usd": "0.25"})
+    assert res.status_code == 200
+    assert res.headers["X-Amount-USD"] == "0.25"
 
 
 def test_individual_cannot_add_team_members():
@@ -197,3 +207,63 @@ def test_a_forgotten_account_signs_out_with_a_clear_message():
     token = create_access_token("00000000-0000-0000-0000-000000000000", "gone@example.com", "individual")
     res = client.get("/api/accounts/services", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401 and "create your account again" in res.json()["detail"]
+
+
+def test_excel_download_lists_rows_removed_for_a_missing_id():
+    token = client.post("/api/accounts/signup", json={
+        "account_type": "individual", "first_name": "Ida", "last_name": "Ng", "email": "ida@example.com",
+    }).json()["access_token"]
+    rows = "".join(f"{'' if i % 10 == 0 else i},{i}\n" for i in range(40))   # 4 blank IDs
+    csv = f"Order ID,Total Amount\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("orders.csv", csv))).json()
+    report = body["groups"][0]["report"]
+    assert [c["column"] for c in report["column_reports"]] == ["order_id", "total_amount"]
+    assert report["column_reports"][0]["suggested_fill"] == "drop_rows"
+    res = client.post("/api/files/download", headers={"Authorization": f"Bearer {token}"},
+                      files=_files(("orders.csv", csv)),
+                      data={"file_format": "xlsx", "column_actions": '{"0": {"order_id": "drop_rows"}}'})
+    assert res.status_code == 200, res.text
+    sheets = pd.read_excel(io.BytesIO(res.content), sheet_name=None)
+    assert len(sheets["cleaned_data"]) == 36
+    assert sheets["rows_missing_id"]["total_amount"].tolist() == [0, 10, 20, 30]
+
+
+def test_client_column_names_apply_to_analyze_and_skills():
+    rows = "".join(f"{i},{i * 2},{i * 3},\n" for i in range(40))
+    csv = f"order_id,amount,amount,\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("o.csv", csv))).json()
+    report = body["groups"][0]["report"]
+    assert report["duplicate_columns"] == [["amount", "amount_2"]]
+    assert report["unnamed_columns"] == ["unnamed_column_4"]
+
+    names = '{"0": {"amount": "Amount Paid", "amount_2": "Amount Refunded"}}'
+    actions = '{"0": {"unnamed_column_4": "drop"}}'
+    body = client.post("/api/files/analyze", files=_files(("o.csv", csv)),
+                       data={"column_names": names, "column_actions": actions}).json()
+    g = body["groups"][0]
+    assert g["preview"]["columns"] == ["order_id", "amount_paid", "amount_refunded"]
+    assert g["report"]["duplicate_columns"] == [] and g["report"]["unnamed_columns"] == []
+
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("o.csv", csv)),
+                      data={"column_names": names, "column_actions": actions})
+    assert res.status_code == 200, res.text
+    assert "amount_refunded" in res.text
+
+    bad = client.post("/api/files/analyze", files=_files(("o.csv", csv)),
+                      data={"column_names": '{"0": {"amount_2": "amount"}}'})
+    assert bad.status_code == 400 and "share a name" in bad.json()["detail"]
+
+
+def test_transform_steps_apply_to_analyze_and_skills():
+    rows = "".join(f"{i},{60 if i != 7 else 450}\n" for i in range(40))
+    csv = f"order_id,duration\n{rows}".encode()
+    body = client.post("/api/files/analyze", files=_files(("w.csv", csv))).json()
+    assert body["groups"][0]["report"]["outlier_columns"] == []     # all 60s: no spread, nothing to compare
+    steps = '{"0": [{"op": "outliers", "column": "duration", "method": "cap", "high": 120}]}'
+    body = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": steps}).json()
+    report = body["groups"][0]["report"]
+    assert report["transforms_applied"][0]["count"] == 1
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("w.csv", csv)), data={"transforms": steps})
+    assert res.status_code == 200, res.text
+    bad = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": '{"0": [{"op": "x"}]}'})
+    assert bad.status_code == 400 and "unknown step" in bad.json()["detail"]

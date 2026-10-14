@@ -16,7 +16,7 @@ coding, so **understanding the code matters as much as the code itself**.
   what it does and why. Non-obvious lines get a short comment. Write comments
   for a reader who knows pandas and data work well but is not a web developer.
 - **Keep docs and skills in sync with code.** A change to
-  - `api/services/cleaning.py` → update `data_skills/data-cleaning/README.md` and `docs/DATA_CLEANING.md`
+  - `api/services/cleaning.py` or `api/services/transforms.py` → update `data_skills/data-cleaning/README.md` and `docs/DATA_CLEANING.md`
   - `api/services/categorizer.py` → update `data_skills/flat-file-intake/README.md` and `docs/DATA_CLEANING.md`
   - `api/services/sample_size.py` → update `data_skills/sample-size/README.md`
   - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)

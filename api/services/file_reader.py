@@ -455,25 +455,42 @@ def read_file(filename: str, raw: bytes) -> list[LoadedDataset]:
     for name, df in frames.items():
         # Column names: make sure they are strings and trim stray spaces,
         # e.g. " Email " -> "Email". Duplicated names get a numeric suffix.
-        df.columns = _dedupe_column_names([str(c).strip() for c in df.columns])
+        df.columns = dedupe_column_names([str(c).strip() for c in df.columns])
         df = _flatten_cells(df)
         datasets.append(LoadedDataset(name=name, source_file=filename, file_type=fmt.label, df=df, size_bytes=len(raw)))
     return datasets
 
 
-def _dedupe_column_names(columns: list[str]) -> list[str]:
-    """
-    Make column names unique: ['id', 'id', 'name'] -> ['id', 'id_2', 'name'].
+# pandas' own names for problem headers: a blank header becomes "Unnamed: 3",
+# and a repeated one becomes "amount.1", "amount.2" when reading CSV/Excel.
+PANDAS_BLANK = re.compile(r"^Unnamed: \d+(_level_\d+)?$")
+PANDAS_REPEAT = re.compile(r"^(.*)\.(\d+)$")
 
-    Duplicate headers break most downstream tools (databases, dashboards).
-    pandas already renames repeats when reading CSVs ('id', 'id.1'), but
-    names can still collide after we trim spaces (' id' and 'id'), so this
-    is the final safety net for every format.
+
+def dedupe_column_names(columns: list[str]) -> list[str]:
     """
+    Make column names unique and mark the two header problems so the cleaning
+    report can ask the client to fix them (api/services/cleaning.py, Step 0):
+
+      * a BLANK header (or pandas' "Unnamed: 3") -> "unnamed_column_4"
+        (its position, counting from 1, so the client can find it)
+      * a REPEATED header -> "amount", "amount_2", "amount_3"
+        (pandas' "amount.1" is turned back into a repeat of "amount" first)
+
+    Duplicate headers break most downstream tools (databases, dashboards), and
+    names can also collide after we trim spaces (' id' and 'id'), so this is
+    the final safety net for every format.
+    """
+    present = set(columns)
     seen: dict[str, int] = {}
     result = []
-    for col in columns:
-        col = col or "unnamed"
+    for position, col in enumerate(columns, start=1):
+        if not col or PANDAS_BLANK.match(col):
+            result.append(f"unnamed_column_{position}")
+            continue
+        repeat = PANDAS_REPEAT.match(col)
+        if repeat and repeat.group(1) in present:
+            col = repeat.group(1)          # "amount.1" is really a second "amount"
         if col in seen:
             seen[col] += 1
             result.append(f"{col}_{seen[col]}")
