@@ -20,7 +20,7 @@ def _catalog():
 
 
 def _skill_folders() -> set[str]:
-    return {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
+    return {p.parent.name for p in SKILLS_DIR.glob("*/README.md")}
 
 
 def test_every_skill_is_in_exactly_one_category():
@@ -47,7 +47,7 @@ def test_every_skill_has_a_known_source():
 
 def test_skill_front_matter_name_matches_folder():
     for folder in _skill_folders():
-        text = (SKILLS_DIR / folder / "SKILL.md").read_text(encoding="utf-8")
+        text = (SKILLS_DIR / folder / "README.md").read_text(encoding="utf-8")
         assert f"\nname: {folder}\n" in text.split("---")[1] + "\n", folder
 
 

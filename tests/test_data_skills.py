@@ -70,7 +70,7 @@ def test_every_skill_has_a_test_case():
 
 def test_every_skill_md_has_a_skill_py():
     root = SAMPLES.parent / "data_skills"
-    md = {p.parent.name for p in root.glob("*/SKILL.md")}
+    md = {p.parent.name for p in root.glob("*/README.md")}
     assert md == set(skill_ids())
 
 
@@ -184,7 +184,7 @@ def test_ask_your_data_matches_pandas(sales):
 
 
 def test_skill_docs_match_the_code():
-    """Each SKILL.md's "Run it" options table is generated from skill.py (scripts/sync_skill_docs.py)."""
+    """Each README.md's "Run it" options table is generated from skill.py (scripts/sync_skill_docs.py)."""
     import importlib.util
     path = Path(__file__).resolve().parents[1] / "scripts" / "sync_skill_docs.py"
     spec = importlib.util.spec_from_file_location("sync_skill_docs", path)

@@ -1,7 +1,7 @@
 """
 build-dashboard — KPI dashboard driven by transaction TYPES (Data Visualization).
 
-Python implementation of SKILL.md in this folder, extended with Copilot
+Python implementation of README.md in this folder, extended with Copilot
 Money-style time views (see data_skills/_time.py).
 
 HOW THE DASHBOARD IS BUILT

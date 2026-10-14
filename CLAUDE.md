@@ -16,16 +16,16 @@ coding, so **understanding the code matters as much as the code itself**.
   what it does and why. Non-obvious lines get a short comment. Write comments
   for a reader who knows pandas and data work well but is not a web developer.
 - **Keep docs and skills in sync with code.** A change to
-  - `api/services/cleaning.py` → update `data_skills/data-cleaning/SKILL.md` and `docs/DATA_CLEANING.md`
-  - `api/services/categorizer.py` → update `data_skills/flat-file-intake/SKILL.md` and `docs/DATA_CLEANING.md`
-  - `api/services/sample_size.py` → update `data_skills/sample-size/SKILL.md`
+  - `api/services/cleaning.py` → update `data_skills/data-cleaning/README.md` and `docs/DATA_CLEANING.md`
+  - `api/services/categorizer.py` → update `data_skills/flat-file-intake/README.md` and `docs/DATA_CLEANING.md`
+  - `api/services/sample_size.py` → update `data_skills/sample-size/README.md`
   - `api/services/pricing.py` → update `docs/PRICING.md` (service ids are also skill category ids)
   - any API response → update `web/lib/types.ts`
   - any table → update `db/schema.sql` and `api/services/account_store.py`
   - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
   - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
-  - `data_skills/<id>/skill.py` → keep its `SKILL.md` procedure in step, and run
+  - `data_skills/<id>/skill.py` → keep its `README.md` procedure in step, and run
     `python scripts/sync_skill_docs.py` to regenerate the "Run it" options table (`pytest` checks it)
   - `data_skills/_time.py` or `data_skills/build-dashboard/` → update `docs/DASHBOARDS.md`
 - **Never read pickle or HDF5 uploads** — they can run code. Untrusted files only
@@ -53,7 +53,7 @@ cd web && npm run build            # production build
 python -m data_skills list         # skills by category
 python -m data_skills run build-dashboard samples/sales.csv   # run a skill -> outputs/
 python scripts/make_sample_data.py # regenerate samples/ (fictional bakery)
-python scripts/sync_skill_docs.py  # regenerate each SKILL.md "Run it" section from skill.py
+python scripts/sync_skill_docs.py  # regenerate each README.md "Run it" section from skill.py
 ```
 
 ## Skills
@@ -62,11 +62,11 @@ python scripts/sync_skill_docs.py  # regenerate each SKILL.md "Run it" section f
   the Anthropic data plugin v1.1.0), each in exactly ONE of the seven service
   categories listed in `data_skills/catalog.json`. See
   `data_skills/README.md` for the categorized list and when to use each.
-- Each skill folder has `SKILL.md` (the procedure) **and** `skill.py` (the
+- Each skill folder has `README.md` (the procedure) **and** `skill.py` (the
   same procedure as code, run by the CLI, `POST /api/skills/{id}/run` and the
   web Explore panel). In the app, a skill is offered only when the client has
   chosen its service (Data Cleaning is always included).
-- A new skill needs `SKILL.md`, `skill.py`, a `catalog.json` entry, and a
+- A new skill needs `README.md`, `skill.py`, a `catalog.json` entry, and a
   case in `tests/test_data_skills.py`; `pytest` enforces it.
 
 ## Design

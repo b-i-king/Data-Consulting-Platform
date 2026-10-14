@@ -1,8 +1,8 @@
 """
 analyze — answer a business question with a breakdown (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
-Apache-2.0). The SKILL.md describes the full analyst workflow; this code runs
+Python implementation of README.md in this folder (Anthropic data plugin,
+Apache-2.0). The README.md describes the full analyst workflow; this code runs
 its core move: "what is <metric> by <dimension>, what drives it, and how has
 it changed?"
 

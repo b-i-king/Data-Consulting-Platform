@@ -5,7 +5,7 @@ WHAT THIS FILE DOES
 -------------------
 Each skill folder has two files:
 
-    data_skills/<skill-name>/SKILL.md   the written procedure (for people and Claude)
+    data_skills/<skill-name>/README.md   the written procedure (for people; GitHub shows it)
     data_skills/<skill-name>/skill.py   the same procedure as runnable pandas code
 
 Every skill.py follows ONE pattern so the API, the command line and the web

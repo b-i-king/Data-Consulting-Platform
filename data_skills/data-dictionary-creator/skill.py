@@ -1,7 +1,7 @@
 """
 data-dictionary-creator — document every column (Data Engineering).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). For each column: name, storage type, MEANING guess
 (identifier, email, phone, currency amount, quantity, percentage, date,
 category, free text, flag), nullability, distinct count, allowed values (for

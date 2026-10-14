@@ -424,7 +424,11 @@ def clean_dataframe(
                      "a consultant can help find the missing data before any analysis.")
 
     # Step 5a — per-column choices (drop / fill).
-    out, done = _apply_column_actions(out.copy(), column_actions or {}, profiles, notes)
+    # (Only copy when there are choices to apply: big tables are expensive to copy.)
+    if column_actions:
+        out, done = _apply_column_actions(out.copy(), column_actions, profiles, notes)
+    else:
+        done = {}
     dropped_cols = [c for c, (a, _) in done.items() if a == "dropped"]
     cells_filled = sum(k for _, k in done.values())
     if dropped_cols:

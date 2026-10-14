@@ -1,7 +1,7 @@
 """
 write-query — turn a question into SQL (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). Builds a readable, dialect-correct query from a structured
 request (no free-form text → SQL guessing):
 

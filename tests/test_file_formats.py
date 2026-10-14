@@ -138,3 +138,33 @@ def test_zip_bomb_is_refused(monkeypatch):
 def test_detect_delimiter(text, expected):
     from api.services.file_reader import detect_delimiter
     assert detect_delimiter(text) == expected
+
+
+def test_semicolon_csv_with_decimal_commas_reads_as_numbers():
+    # European/Latin American Excel saves ".csv" with ";" and 1.234,56 numbers.
+    text = "name;amount\n" + "".join(f"n{i};{i}.000,5\n" for i in range(5))
+    df = read_file("export.csv", text.encode())[0].df
+    assert list(df.columns) == ["name", "amount"]
+    assert df["amount"].tolist() == [0.5, 1000.5, 2000.5, 3000.5, 4000.5]
+    # US style stays as it was: comma separator, quoted thousands untouched.
+    us = read_file("us.csv", b'name,amount\n"Lee, Ana",1.25\nBo,2.5\n')[0].df
+    assert us.shape == (2, 2) and us["amount"].tolist() == [1.25, 2.5]
+
+
+def test_nested_json_becomes_columns_and_text():
+    raw = b'{"records": [{"a": 1, "meta": {"k": 2}, "tags": ["x", "y"]}, {"a": 2, "meta": {"k": 3}, "tags": []}]}'
+    df = read_file("nested.json", raw)[0].df
+    assert sorted(df.columns) == ["a", "meta.k", "tags"]   # nested fields are added as "parent.child"
+    assert df["tags"].tolist() == ['["x", "y"]', "[]"]          # lists stored as text, so duplicates can be checked
+    lines = read_file("rows.jsonl", b'{"a": 1, "m": {"k": 1}}\n{"a": 2, "m": {"k": 2}}\n')[0].df
+    assert list(lines.columns) == ["a", "m.k"]
+
+
+@pytest.mark.parametrize("name, raw, says", [
+    ("empty.csv", b"", "is empty"),
+    ("fake.xlsx", b"not really excel", "doesn't look like a real Excel file"),
+    ("ragged.csv", b"a\n1\n2,3\n", "Row 3"),
+])
+def test_read_errors_are_plain_english(name, raw, says):
+    with pytest.raises(FileReadError, match=says):
+        read_file(name, raw)

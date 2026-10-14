@@ -36,6 +36,7 @@ export default function Wizard() {
   // Options (questions + answer choices) come from the backend.
   const [options, setOptions] = useState<IntakeOptions | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);   // still loading after 4 s: the server is probably waking up
 
   // Answers collected along the way.
   const [step, setStep] = useState(0);
@@ -59,13 +60,17 @@ export default function Wizard() {
   useEffect(() => {
     // Restore a sign-in from earlier in this browser tab.
     setSession(loadSession());
+    const timer = setTimeout(() => setSlow(true), 4000);
     getIntakeOptions()
       .then(setOptions)
-      .catch(() =>
+      .catch((e) =>
         setLoadError(
-          "We couldn't reach the server. If you're running locally, start the API with `uvicorn api.main:app --reload`.",
+          e instanceof Error && e.message
+            ? e.message
+            : "We couldn't reach the server. If you're running locally, start the API with `uvicorn api.main:app --reload`.",
         ),
-      );
+      )
+      .finally(() => clearTimeout(timer));
   }, []);
 
   const bookingUrl = options?.booking_url ?? FALLBACK_BOOKING_URL;
@@ -96,7 +101,12 @@ export default function Wizard() {
   };
 
   if (loadError) return <ErrorBox message={loadError} />;
-  if (!options) return <p className="text-ink-muted">Loading…</p>;
+  if (!options)
+    return (
+      <p className="text-ink-muted" aria-live="polite">
+        {slow ? "Waking up the server — on free hosting this can take up to a minute the first time…" : "Loading…"}
+      </p>
+    );
 
   return (
     <div>

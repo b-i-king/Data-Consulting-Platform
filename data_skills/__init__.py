@@ -2,8 +2,8 @@
 data_skills — the platform's data skills, as documents AND as code.
 
 Each folder holds one skill:
-    SKILL.md   the procedure in plain English (Claude Code reads these too,
-               through the .claude/skills shortcut that points here)
+    README.md  the procedure in plain English (GitHub shows it when you open
+               the folder; it starts with the skill's name and description)
     skill.py   the same procedure as runnable pandas code
 
 Run them from Python:

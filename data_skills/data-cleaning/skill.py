@@ -1,7 +1,7 @@
 """
 data-cleaning — the platform's cleaning standard (Data Cleaning).
 
-Python implementation of SKILL.md in this folder. The actual pipeline lives in
+Python implementation of README.md in this folder. The actual pipeline lives in
 api/services/cleaning.py (the website uses it on every upload); this skill
 wraps it so it can also run from the command line or the skills API.
 

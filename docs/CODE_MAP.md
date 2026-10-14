@@ -103,13 +103,13 @@ services the client chose are offered; the rest are badges from
 | `db/schema.sql` | Database tables | Any table change (also update `account_store.py`) |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
-| `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its SKILL.md in step) |
+| `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its README.md in step) |
 | `data_skills/_time.py` | Date ranges, DoD/WoW/MoM | Adding a range or comparison (update DASHBOARDS.md) |
 | `data_skills/registry.py` | Load, validate, run skills | Changing how options are checked |
 | `api/services/skills_runner.py` | Uploads → cleaned tables → skill | Changing which data a skill receives |
 | `web/components/explore/*.tsx` | Dashboard + skills panel | Changing the Explore UI |
 | `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
-| `scripts/sync_skill_docs.py` | Regenerates each SKILL.md "Run it" section | After changing a skill's options |
+| `scripts/sync_skill_docs.py` | Regenerates each README.md "Run it" section | After changing a skill's options |
 | `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |
 | `web/components/explore/LockedService.tsx` | Locked-service badges | Changing how services unlock skills |
 | `web/components/explore/TimeBar.tsx` | Floating range + comparison panels, short labels | Changing the time controls |

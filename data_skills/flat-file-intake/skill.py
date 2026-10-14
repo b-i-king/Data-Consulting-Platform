@@ -1,7 +1,7 @@
 """
 flat-file-intake — how several files relate (Data Cleaning).
 
-Python implementation of SKILL.md in this folder. Wraps the categorizer in
+Python implementation of README.md in this folder. Wraps the categorizer in
 api/services/categorizer.py: group tables by shared columns, detect year
 partitions, guess the business entity, find join keys (or fuzzy links).
 Takes SEVERAL tables: {name: DataFrame}.

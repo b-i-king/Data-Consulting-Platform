@@ -35,6 +35,13 @@ from api.services.pricing import catalog
 
 router = APIRouter(prefix="/accounts")
 
+# A valid sign-in token whose account no longer exists. Without a database
+# (DATABASE_URL empty, e.g. a free test deploy) accounts live in memory and
+# vanish whenever the server restarts or sleeps, so say that plainly. 401 tells
+# the website to sign the person out.
+ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without a database, it may "
+                "have restarted and forgotten accounts — please create your account again.")
+
 
 def _account_out(acc: dict) -> AccountOut:
     """Convert a stored account (dict with UUIDs/dates) to the API shape."""
@@ -119,7 +126,7 @@ async def signin(body: SigninIn):
 async def me(token: Annotated[dict, Depends(get_current_account)]):
     acc = await account_store.get_account(token["sub"])
     if acc is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Account not found.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
     return _account_out(acc)
 
 
@@ -186,7 +193,7 @@ async def _services_out(acc: dict) -> dict:
 async def my_services(token: Annotated[dict, Depends(get_current_account)]):
     acc = await account_store.get_account(token["sub"])
     if acc is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Account not found.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
     return await _services_out(acc)
 
 
@@ -194,7 +201,7 @@ async def my_services(token: Annotated[dict, Depends(get_current_account)]):
 async def add_service(body: AddServiceIn, token: Annotated[dict, Depends(get_current_account)]):
     acc = await account_store.get_account(token["sub"])
     if acc is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Account not found.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
     try:
         await entitlements.add_services(acc, [body.service_id])
     except entitlements.NotPlanOwnerError as exc:

@@ -1,6 +1,6 @@
 # License notice — sample-size skill
 
-`SKILL.md` in this folder is adapted from:
+`README.md` in this folder is adapted from:
 
 - **Source:** https://github.com/danielrosehill/Claude-Data-Analyst-plugin/tree/master/skills/sample-size
 - **Author:** Daniel Rosehill
@@ -30,4 +30,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-Changes made for this project are summarized at the top of `SKILL.md`.
+Changes made for this project are summarized at the top of `README.md`.

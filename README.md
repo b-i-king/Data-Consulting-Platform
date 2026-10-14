@@ -97,7 +97,7 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
 | [docs/TESTING.md](docs/TESTING.md) | **Try it yourself** with the sample data (web, command line, API) |
 | [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | How KPIs, filters, date ranges and DoD/WoW/MoM comparisons work |
-| [data_skills/README.md](data_skills/README.md) | 30 skills (SKILL.md + skill.py), organized by service category |
+| [data_skills/README.md](data_skills/README.md) | 30 skills (README.md + skill.py), organized by service category |
 
 ## Project layout
 
@@ -110,7 +110,7 @@ samples/        fictional bakery data for trying everything (docs/TESTING.md)
 tests/          pytest suite
 web/            Next.js frontend
 docs/           documentation
-data_skills/    30 skills: SKILL.md + runnable skill.py each (python -m data_skills)
+data_skills/    30 skills: README.md + runnable skill.py each (python -m data_skills)
 licenses/       third-party license texts
 ```
 

@@ -108,7 +108,15 @@ export default function Workspace() {
     if (!s) return;
     getMyServices(s.token)
       .then(setPlan)
-      .catch((e) => setError(e.status === 401 ? "Your sign-in expired. Please sign in again." : e.message));
+      .catch((e) => {
+        if (e.status === 401) {
+          // Expired sign-in, or an account the (database-less) test server forgot:
+          // sign out so the header and this page offer sign-in / create account again.
+          clearSession();
+          setSession(null);
+        }
+        setError(e.message);
+      });
     getSkills()
       .then(setSkills)
       .catch(() => {});
@@ -199,7 +207,7 @@ export default function Workspace() {
     return (
       <Card className="mx-auto max-w-md text-center">
         <h1 className="text-xl font-semibold">Sign in to open your workspace</h1>
-        <p className="mt-1 text-sm text-ink-muted">Use the email address you signed up with.</p>
+        <p className="mt-1 text-sm text-ink-muted">{error ?? "Use the email address you signed up with."}</p>
         <div className="mt-4 flex justify-center gap-3">
           <Link href="/signin" className="rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
             Sign in

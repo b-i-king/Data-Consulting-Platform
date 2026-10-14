@@ -4,10 +4,11 @@ Each skill is **two files in one folder**:
 
 | File | What it is | Who uses it |
 |---|---|---|
-| `SKILL.md` | The procedure in plain English: steps, rules, client wording | Claude Code, consultants |
+| `README.md` | The procedure in plain English: steps, rules, client wording | Claude Code, consultants |
 | `skill.py` | The same procedure as runnable Python (pandas, scipy, scikit-learn) | The web app, the API, the command line |
 
-The `SKILL.md` files are instruction files Claude Code loads when a task matches. They keep
+Each procedure is named `README.md` so GitHub shows it as soon as you open the
+skill's folder. The procedures keep
 the way we clean, analyze, and deliver data **consistent and reproducible**,
 whether the work is done by the web app, by you, by Claude, or by a future
 consultant on the team.
@@ -41,7 +42,7 @@ python -m data_skills run build-dashboard samples/sales.csv   # -> outputs/build
 
 Files are cleaned first (the platform standard) unless the skill works on the
 raw upload (`data-cleaning`, `type-consistency-sweep`, `forensic-sweep`,
-`discovery-call-prep`). Each `SKILL.md` ends with a generated **Run it** section
+`discovery-call-prep`). Each `README.md` ends with a generated **Run it** section
 listing the skill's options. Try everything on the sample data: see
 [`docs/TESTING.md`](../docs/TESTING.md).
 
@@ -56,9 +57,11 @@ listing the skill's options. Try everything on the sample data: see
 | `<skill>/skill.py` | One skill: `SKILL = SkillSpec(...)` and `run(data, **options) -> SkillResult` |
 
 **Why the folder is here:** skills used to live in `.claude/skills/`. They are
-now product code (the web app and API run them), so they live in `data_skills/`.
-To let Claude Code also load them as skills in your own sessions, point it here,
-e.g. `mkdir -p .claude && ln -s ../data_skills .claude/skills` (not committed).
+now product code (the web app and API run them), so they live in `data_skills/`,
+and each procedure is a `README.md` (GitHub displays it automatically).
+Claude Code only auto-loads skill folders whose procedure file is named
+`SKILL.md`; to use one as a Claude Code skill in your own session, copy its
+folder into `.claude/skills/` and rename `README.md` to `SKILL.md` there (not committed).
 
 **In the web app** a skill is offered only when the client has chosen its
 service; Data Cleaning is always included. The others show as locked badges
@@ -69,60 +72,60 @@ with a price and an **Add** button.
 ### 1. Data Cleaning — *make the data trustworthy*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`data-cleaning`](data-cleaning/SKILL.md) | project | Remove duplicates/blank rows, report missing values (the platform standard) |
-| [`flat-file-intake`](flat-file-intake/SKILL.md) | project | Sort multiple files: same structure, split by year, or different entities |
-| [`type-consistency-sweep`](type-consistency-sweep/SKILL.md) | Rosehill | Find mixed types and mismatched key types across files |
-| [`anomaly-analysis`](anomaly-analysis/SKILL.md) | Rosehill | Flag outliers and impossible values (negative ages, future dates) |
-| [`forensic-sweep`](forensic-sweep/SKILL.md) | Rosehill | Detect data that was already imputed/smoothed before it reached you |
-| [`pii-flag`](pii-flag/SKILL.md) | Rosehill | Flag personal information before data is shared or analyzed |
+| [`data-cleaning`](data-cleaning/README.md) | project | Remove duplicates/blank rows, report missing values (the platform standard) |
+| [`flat-file-intake`](flat-file-intake/README.md) | project | Sort multiple files: same structure, split by year, or different entities |
+| [`type-consistency-sweep`](type-consistency-sweep/README.md) | Rosehill | Find mixed types and mismatched key types across files |
+| [`anomaly-analysis`](anomaly-analysis/README.md) | Rosehill | Flag outliers and impossible values (negative ages, future dates) |
+| [`forensic-sweep`](forensic-sweep/README.md) | Rosehill | Detect data that was already imputed/smoothed before it reached you |
+| [`pii-flag`](pii-flag/README.md) | Rosehill | Flag personal information before data is shared or analyzed |
 
 ### 2. Data Strategy & Discovery — *decide what to do and whether the data can support it*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`discovery-call-prep`](discovery-call-prep/SKILL.md) | project | Brief + roadmap draft from a client's intake answers |
-| [`sample-size`](sample-size/SKILL.md) | project (adapted from Rosehill) | "Is there enough data to answer this question?" |
-| [`data-enrichment`](data-enrichment/SKILL.md) | Rosehill | Find data gaps and external sources that could fill them |
+| [`discovery-call-prep`](discovery-call-prep/README.md) | project | Brief + roadmap draft from a client's intake answers |
+| [`sample-size`](sample-size/README.md) | project (adapted from Rosehill) | "Is there enough data to answer this question?" |
+| [`data-enrichment`](data-enrichment/README.md) | Rosehill | Find data gaps and external sources that could fill them |
 
 ### 3. Data Exploration & Analysis — *answer questions and find trends*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`explore-data`](explore-data/SKILL.md) | Anthropic | Profile a new dataset in depth |
-| [`analyze`](analyze/SKILL.md) | Anthropic | Answer business questions, from quick lookups to full reports |
-| [`trend-analysis`](trend-analysis/SKILL.md) | Rosehill | Growth rates, seasonality, segment shifts |
-| [`correlation-analysis`](correlation-analysis/SKILL.md) | Rosehill | What moves together (Pearson/Spearman/Kendall) |
-| [`statistical-analysis`](statistical-analysis/SKILL.md) | Anthropic | Descriptive stats, outliers, significance |
-| [`standard-deviation`](standard-deviation/SKILL.md) | Rosehill | Spread and variability, by group |
-| [`hypothesis-testing`](hypothesis-testing/SKILL.md) | Rosehill | Test a specific claim against the data |
-| [`write-query`](write-query/SKILL.md) | Anthropic | Turn a question into SQL |
-| [`validate-data`](validate-data/SKILL.md) | Anthropic | QA an analysis before it goes to the client |
+| [`explore-data`](explore-data/README.md) | Anthropic | Profile a new dataset in depth |
+| [`analyze`](analyze/README.md) | Anthropic | Answer business questions, from quick lookups to full reports |
+| [`trend-analysis`](trend-analysis/README.md) | Rosehill | Growth rates, seasonality, segment shifts |
+| [`correlation-analysis`](correlation-analysis/README.md) | Rosehill | What moves together (Pearson/Spearman/Kendall) |
+| [`statistical-analysis`](statistical-analysis/README.md) | Anthropic | Descriptive stats, outliers, significance |
+| [`standard-deviation`](standard-deviation/README.md) | Rosehill | Spread and variability, by group |
+| [`hypothesis-testing`](hypothesis-testing/README.md) | Rosehill | Test a specific claim against the data |
+| [`write-query`](write-query/README.md) | Anthropic | Turn a question into SQL |
+| [`validate-data`](validate-data/README.md) | Anthropic | QA an analysis before it goes to the client |
 
 ### 4. Data Visualization — *make it visible*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`build-dashboard`](build-dashboard/SKILL.md) | Anthropic | Interactive HTML dashboards with KPIs and filters |
-| [`create-viz`](create-viz/SKILL.md) | Anthropic | Publication-quality charts in Python |
-| [`data-visualization`](data-visualization/SKILL.md) | Anthropic | Chart choice, color, accessibility principles |
-| [`data-reporting`](data-reporting/SKILL.md) | Rosehill | Shareable PDF report about a dataset |
+| [`build-dashboard`](build-dashboard/README.md) | Anthropic | Interactive HTML dashboards with KPIs and filters |
+| [`create-viz`](create-viz/README.md) | Anthropic | Publication-quality charts in Python |
+| [`data-visualization`](data-visualization/README.md) | Anthropic | Chart choice, color, accessibility principles |
+| [`data-reporting`](data-reporting/README.md) | Rosehill | Shareable PDF report about a dataset |
 
 ### 5. Data Engineering — *structure and document*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`er-diagram`](er-diagram/SKILL.md) | project | Verified ER diagrams (Mermaid) with key checks |
-| [`data-dictionary-creator`](data-dictionary-creator/SKILL.md) | Rosehill | Column-by-column documentation |
-| [`sql-queries`](sql-queries/SKILL.md) | Anthropic | Correct, performant SQL across warehouse dialects |
+| [`er-diagram`](er-diagram/README.md) | project | Verified ER diagrams (Mermaid) with key checks |
+| [`data-dictionary-creator`](data-dictionary-creator/README.md) | Rosehill | Column-by-column documentation |
+| [`sql-queries`](sql-queries/README.md) | Anthropic | Correct, performant SQL across warehouse dialects |
 
 ### 6. Data Science & Machine Learning — *predict*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`predictive-modeling`](predictive-modeling/SKILL.md) | project | Forecasts and predictive models with baseline, CV, plain-English results |
-| [`multivariate-analysis`](multivariate-analysis/SKILL.md) | Rosehill | Controlled effects, multicollinearity, dimensionality reduction |
+| [`predictive-modeling`](predictive-modeling/README.md) | project | Forecasts and predictive models with baseline, CV, plain-English results |
+| [`multivariate-analysis`](multivariate-analysis/README.md) | Rosehill | Controlled effects, multicollinearity, dimensionality reduction |
 
 ### 7. AI — *ask questions about your data*
 | Skill | Source | Use it to… |
 |---|---|---|
-| [`ask-your-data`](ask-your-data/SKILL.md) | project | Guardrails + procedure for plain-English Q&A (spec for the AI feature) |
-| [`setup-data-workspace`](setup-data-workspace/SKILL.md) | Rosehill | Local "talk to your data" workspace (DuckDB) |
-| [`data-context-extractor`](data-context-extractor/SKILL.md) | Anthropic | Teach the AI a client's vocabulary and metrics |
+| [`ask-your-data`](ask-your-data/README.md) | project | Guardrails + procedure for plain-English Q&A (spec for the AI feature) |
+| [`setup-data-workspace`](setup-data-workspace/README.md) | Rosehill | Local "talk to your data" workspace (DuckDB) |
+| [`data-context-extractor`](data-context-extractor/README.md) | Anthropic | Teach the AI a client's vocabulary and metrics |
 
 ## How overlaps were resolved
 
@@ -157,7 +160,7 @@ turn off the plugin and use these copies.
 
 ## Adding a new skill
 
-1. Create `data_skills/<name>/SKILL.md` with front matter (`name` must match the folder):
+1. Create `data_skills/<name>/README.md` with front matter (`name` must match the folder):
    ```
    ---
    name: <name>
@@ -170,7 +173,7 @@ turn off the plugin and use these copies.
    (each category marks exactly one skill `"primary": true` — the one its workspace
    page opens on).
 4. Add a case to `CASES` in `tests/test_data_skills.py` that runs it on the sample data.
-5. Run `python scripts/sync_skill_docs.py` to add its "Run it" section to SKILL.md.
+5. Run `python scripts/sync_skill_docs.py` to add its "Run it" section to README.md.
 6. Run `pytest -q` — the tests confirm it's placed exactly once, has a
    `skill.py`, runs, and its docs match the code.
 7. If it's adapted from someone else's work, keep their license notice.

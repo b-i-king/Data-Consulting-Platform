@@ -29,9 +29,25 @@ come through connectors (see CONNECTORS.md).
 entities; SPSS is the one format written to a private temp folder (its reader
 needs a path) and deleted immediately.
 
-**Delimiters:** for `.txt`/`.dat`/`.psv`, the separator is the one of comma,
-tab, pipe, or semicolon that splits every line into the same number of columns.
-(pandas' own "sniffer" sometimes chose a letter — e.g. splitting "customer" on "u".)
+**Delimiters:** for `.csv`, `.txt`, `.dat` and `.psv`, the separator is the one
+of comma, tab, pipe, or semicolon that splits every line into the same number of
+columns (separators inside quotes, like `"Smith, John"`, don't count). This
+matters for `.csv` too: Excel in Europe and Latin America saves "CSV" files with
+semicolons. (pandas' own "sniffer" sometimes chose a letter — e.g. splitting
+"customer" on "u".)
+
+**Decimal commas:** a semicolon file whose numbers look like `1.234,56` (decimal
+comma, dot for thousands) is read as numbers (1234.56). US-style quoted numbers
+like `"1,234.56"` in a comma file stay as text, and the report flags them as
+"number (stored as text)" — we don't guess.
+
+**JSON:** nested objects become columns (`{"meta": {"k": 1}}` → `meta.k`); a
+`{"records": [...]}` wrapper is unwrapped; lists left inside cells are stored as
+text so duplicate checks still work (same for XML/Parquet cells).
+
+**Read errors** are explained in plain English — an empty file, a damaged or
+renamed Excel file ("doesn't look like a real Excel file…"), or a row with more
+columns than the header ("Row 3 … has 2 columns but the header has 1").
 
 - **Header row:** the first row is assumed to hold column names.
 - **Encodings tried:** UTF-8 (with/without BOM), Windows-1252, Latin-1 — covers
@@ -137,4 +153,4 @@ services.
 
 After cleaning, a sample-size snapshot (adapted from Daniel Rosehill's
 `sample-size` skill) reports complete rows and green/yellow/red checks for common
-questions. See `data_skills/sample-size/SKILL.md`.
+questions. See `data_skills/sample-size/README.md`.

@@ -1,7 +1,7 @@
 """
 ask-your-data — plain-English questions, safe pandas answers (AI).
 
-Python implementation of SKILL.md in this folder, following its guardrails:
+Python implementation of README.md in this folder, following its guardrails:
 answers come ONLY from the data, every answer shows its calculation, and the
 code is read-only. Generated code is never `eval`-ed: a question becomes a
 small PLAN (filters → group → aggregate → sort → limit) that is executed with

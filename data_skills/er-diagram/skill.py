@@ -1,7 +1,7 @@
 """
 er-diagram — verified ER diagram in Mermaid (Data Engineering).
 
-Python implementation of SKILL.md in this folder. Takes SEVERAL tables:
+Python implementation of README.md in this folder. Takes SEVERAL tables:
 
   1. Entities      — one per table (singular PascalCase: customers.csv -> Customer)
   2. Primary keys  — a column that is unique AND never empty; ID-looking names first

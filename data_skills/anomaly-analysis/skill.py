@@ -1,7 +1,7 @@
 """
 anomaly-analysis — outliers and impossible values (Data Cleaning).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Four sweeps:
 
   1. Outliers        — robust z-score (median and MAD) above 3.5, plus the

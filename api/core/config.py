@@ -51,7 +51,12 @@ class Settings(BaseSettings):
 
     # ── CORS (which websites may call this API) ───────────────────────────────
     # Comma-separated list, e.g. "http://localhost:3000,https://yourdomain.com"
+    # (a trailing "/" is ignored, so a pasted "https://x.vercel.app/" still works).
     allowed_origins: str = Field(default="http://localhost:3000", alias="ALLOWED_ORIGINS")
+    # Optional pattern for extra origins — e.g. Vercel's preview links, which get
+    # a new address per deploy:  https://data-consulting-platform-.*\.vercel\.app
+    # Leave empty to allow only ALLOWED_ORIGINS.
+    allowed_origin_regex: str = Field(default="", alias="ALLOWED_ORIGIN_REGEX")
 
     # ── Upload limits ─────────────────────────────────────────────────────────
     # Largest single file accepted, in megabytes. Files are processed in
@@ -94,7 +99,12 @@ class Settings(BaseSettings):
     @property
     def origins_list(self) -> list[str]:
         """ALLOWED_ORIGINS split into a clean Python list."""
-        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+        return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]
+
+    @property
+    def using_default_jwt_secret(self) -> bool:
+        """True when JWT_SECRET_KEY wasn't set — fine locally, unsafe online."""
+        return self.jwt_secret_key.startswith("dev-only-secret")
 
     @property
     def max_upload_bytes(self) -> int:

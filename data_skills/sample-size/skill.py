@@ -1,7 +1,7 @@
 """
 sample-size — "is there enough data to answer this?" (Data Strategy & Discovery)
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Steps:
 
   1. Size snapshot + rules of thumb  (api/services/sample_size.py, also shown on the website)

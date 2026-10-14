@@ -1,7 +1,7 @@
 """
 statistical-analysis — descriptive statistics done right (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). For each number column:
 
   * count, mean, median, standard deviation, min/max, 5th/95th percentiles

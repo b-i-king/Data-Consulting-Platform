@@ -182,3 +182,18 @@ def test_analysis_needs_30_rows_before_and_after_cleaning():
     # 40 rows: ready.
     big = client.post("/api/files/analyze", files=_files(("b.csv", BIG))).json()["groups"][0]["report"]
     assert big["analysis_ready"] is True and big["analysis_note"] == ""
+
+
+def test_settings_tolerate_pasted_urls_and_preview_origins(monkeypatch):
+    from api.core.config import Settings
+    s = Settings(ALLOWED_ORIGINS="https://site.vercel.app/, http://localhost:3000")
+    assert s.origins_list == ["https://site.vercel.app", "http://localhost:3000"]
+    assert Settings().using_default_jwt_secret and not Settings(JWT_SECRET_KEY="x" * 40).using_default_jwt_secret
+
+
+def test_a_forgotten_account_signs_out_with_a_clear_message():
+    # A valid token for an account the (database-less) server no longer has.
+    from api.core.security import create_access_token
+    token = create_access_token("00000000-0000-0000-0000-000000000000", "gone@example.com", "individual")
+    res = client.get("/api/accounts/services", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 401 and "create your account again" in res.json()["detail"]

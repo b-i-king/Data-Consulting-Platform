@@ -1,7 +1,7 @@
 """
 explore-data — profile a dataset (Data Exploration & Analysis).
 
-Python implementation of SKILL.md in this folder (Anthropic data plugin,
+Python implementation of README.md in this folder (Anthropic data plugin,
 Apache-2.0). For every column: type, missing %, distinct values, and either
 number stats (min, quartiles, mean, max), date range, or top values. Then
 suggests which columns look like dimensions (group by), metrics (add up),

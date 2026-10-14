@@ -1,7 +1,7 @@
 """
 data-enrichment — fill gaps with reference data (Data Strategy & Discovery).
 
-Python implementation of SKILL.md in this folder (adapted from Daniel
+Python implementation of README.md in this folder (adapted from Daniel
 Rosehill's skill, MIT). Two parts:
 
   1. DIAGNOSE — look at the columns and propose outside data that could join:

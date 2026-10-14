@@ -19,7 +19,12 @@ import type {
   SignupInput,
 } from "./types";
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// A trailing "/" is removed, so ".../" + "/api/..." never becomes "//api/...".
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/+$/, "");
+
+/** True when the site is online but still pointed at a local API (a missing Vercel setting). */
+export const apiMisconfigured = () =>
+  typeof window !== "undefined" && !/^(localhost|127\.0\.0\.1)$/.test(window.location.hostname) && /localhost|127\.0\.0\.1/.test(API_URL);
 
 /** An error with the backend's friendly message (FastAPI's `detail`). */
 export class ApiError extends Error {
@@ -43,14 +48,33 @@ async function raiseForStatus(res: Response): Promise<void> {
   throw new ApiError(res.status, message);
 }
 
+/**
+ * fetch() with friendly messages when the API can't be reached at all:
+ * a missing Vercel setting, or the free Render server waking up.
+ */
+async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    if (apiMisconfigured())
+      throw new ApiError(0, "This site isn't connected to its API yet: set NEXT_PUBLIC_API_URL in Vercel to your Render URL, then redeploy.");
+    throw new ApiError(0, "We couldn't reach the server. If it was asleep (free hosting naps when idle), wait a minute and try again.");
+  }
+}
+
+/** Wake the API early (free Render servers sleep after 15 idle minutes). Fire and forget. */
+export function warmUpApi() {
+  fetch(`${API_URL}/health`).catch(() => {});
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`);
+  const res = await apiFetch(`${API_URL}${path}`);
   await raiseForStatus(res);
   return res.json();
 }
 
 async function postJson<T>(path: string, body: unknown, token?: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await apiFetch(`${API_URL}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -88,7 +112,7 @@ export const searchLocations = (q: string) => getJson<Location[]>(`/api/location
 
 /** Services on the signed-in account's plan (drives the workspace's left pane). */
 export async function getMyServices(token: string): Promise<MyServices> {
-  const res = await fetch(`${API_URL}/api/accounts/services`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await apiFetch(`${API_URL}/api/accounts/services`, { headers: { Authorization: `Bearer ${token}` } });
   await raiseForStatus(res);
   return res.json();
 }
@@ -113,7 +137,7 @@ export async function runSkill(
   params: Record<string, unknown>,
   groupId = 0,
 ): Promise<SkillResult> {
-  const res = await fetch(`${API_URL}/api/skills/${encodeURIComponent(skillId)}/run`, {
+  const res = await apiFetch(`${API_URL}/api/skills/${encodeURIComponent(skillId)}/run`, {
     method: "POST",
     body: filesForm(input.files, { params: JSON.stringify(params), group_id: String(groupId), ...choiceFields(input) }),
   });
@@ -135,7 +159,7 @@ export function saveText(filename: string, text: string, type = "text/plain") {
 
 /** Guest step: upload files and get the cleaning report + preview. */
 export async function analyzeFiles(input: CleaningInput): Promise<AnalyzeResponse> {
-  const res = await fetch(`${API_URL}/api/files/analyze`, {
+  const res = await apiFetch(`${API_URL}/api/files/analyze`, {
     method: "POST",
     body: filesForm(input.files, choiceFields(input)),
   });
@@ -153,7 +177,7 @@ export async function downloadCleaned(opts: {
   groupId: number;
   format: "csv" | "xlsx";
 }): Promise<{ amountUsd: string | null }> {
-  const res = await fetch(`${API_URL}/api/files/download`, {
+  const res = await apiFetch(`${API_URL}/api/files/download`, {
     method: "POST",
     headers: { Authorization: `Bearer ${opts.token}` },
     body: filesForm(opts.input.files, {
