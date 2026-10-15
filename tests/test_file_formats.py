@@ -27,24 +27,74 @@ DF = pd.DataFrame({"customer": ["Ana", "Ben", "Cal"], "amount": [10.5, 20.0, 7.2
 
 
 def _bytes(write) -> bytes:
+    """Run a writer function against an in-memory buffer and return what it wrote.
+
+    Lets us build binary samples (Excel, Parquet, Stata, ...) with pandas without
+    touching the disk.
+
+    Args:
+        write: callable taking one io.BytesIO argument, e.g. ``lambda b: DF.to_parquet(b)``.
+
+    Returns:
+        bytes: the full contents written to the buffer.
+
+    Example:
+        >>> raw = _bytes(lambda b: DF.to_excel(b, index=False))   # an .xlsx file as bytes
+    """
     buf = io.BytesIO()
     write(buf)
     return buf.getvalue()
 
 
 def _spss_bytes(tmp_path) -> bytes:
+    """Write the test table as an SPSS .sav file and return its bytes.
+
+    pyreadstat can only write to a path, so the file goes through pytest's temporary folder.
+
+    Args:
+        tmp_path: pathlib.Path, a temporary folder (pytest's ``tmp_path`` fixture).
+
+    Returns:
+        bytes: the contents of the .sav file.
+    """
     path = tmp_path / "x.sav"
     pyreadstat.write_sav(DF, str(path))
     return path.read_bytes()
 
 
 def _sas_xpt_bytes(tmp_path) -> bytes:
+    """Write the test table as a SAS transport (.xpt, XPORT version 5) file and return its bytes.
+
+    Version 5 is used because that is the XPORT version pandas can read.
+
+    Args:
+        tmp_path: pathlib.Path, a temporary folder (pytest's ``tmp_path`` fixture).
+
+    Returns:
+        bytes: the contents of the .xpt file.
+    """
     path = tmp_path / "x.xpt"
     pyreadstat.write_xport(DF, str(path), file_format_version=5)  # pandas reads XPORT v5
     return path.read_bytes()
 
 
 def samples(tmp_path) -> dict[str, bytes]:
+    """Build one small file per tested format, all holding the same three-row table (DF).
+
+    Each key is a file name whose extension picks the reader in file_reader; each value
+    is the raw file bytes. Text formats are encoded directly; binary ones are written
+    with pandas or pyreadstat.
+
+    Args:
+        tmp_path: pathlib.Path, a temporary folder for writers that need a real file.
+
+    Returns:
+        dict[str, bytes]: file name (e.g. "a.parquet", "a.csv.gz") -> file contents.
+
+    Example:
+        >>> files = samples(tmp_path)
+        >>> [ds] = read_file("a.json", files["a.json"])
+    """
     csv = DF.to_csv(index=False).encode()
     return {
         "a.csv": csv,
@@ -68,6 +118,11 @@ def samples(tmp_path) -> dict[str, bytes]:
 
 
 def test_every_sample_reads_back_the_same_data(tmp_path):
+    """Check every sample file reads back with the same columns and values as DF.
+
+    Args:
+        tmp_path: fixture, a temporary folder used to write the SPSS and SAS samples.
+    """
     for name, raw in samples(tmp_path).items():
         [ds] = read_file(name, raw)
         got = ds.df
@@ -77,7 +132,11 @@ def test_every_sample_reads_back_the_same_data(tmp_path):
 
 
 def test_every_registered_format_has_a_sample(tmp_path):
-    """Adding a format to FORMATS without a sample above fails this test."""
+    """Adding a format to FORMATS without a sample above fails this test.
+
+    Args:
+        tmp_path: fixture, a temporary folder used to build the samples.
+    """
     covered = {name[name.index("."):] for name in samples(tmp_path)}
     # Formats whose sample needs a binary writer pandas doesn't have:
     untested_on_purpose = {".xlsm", ".xls", ".xlsb", ".ods", ".sas7bdat", ".zsav",
@@ -88,11 +147,13 @@ def test_every_registered_format_has_a_sample(tmp_path):
 
 
 def test_csv_and_excel_are_the_recommended_formats():
+    """Check CSV and Excel are the only recommended formats and are listed first."""
     assert {f.id for f in FORMATS if f.recommended} == {"csv", "excel"}
     assert [f.id for f in FORMATS][:2] == ["csv", "excel"]
 
 
 def test_zip_with_several_files_gives_several_datasets():
+    """Check a zip with two CSVs gives two datasets, skipping macOS junk and unsupported files."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("sales_2023.csv", DF.to_csv(index=False))
@@ -105,22 +166,34 @@ def test_zip_with_several_files_gives_several_datasets():
 
 
 def test_html_with_two_tables():
+    """Check an HTML page with two tables gives two datasets."""
     page = (DF.to_html(index=False) + DF.to_html(index=False)).encode()
     assert len(read_file("report.html", page)) == 2
 
 
 @pytest.mark.parametrize("name", sorted(EXCLUDED_FORMATS))
 def test_unsafe_formats_are_refused(name):
+    """Check formats that can run code (pickle, HDF5, ...) are refused, with a message mentioning code.
+
+    Args:
+        name: str, an excluded file extension (e.g. ".pkl").
+    """
     with pytest.raises(UnsupportedFileError, match="code"):
         read_file(f"data{name}", b"anything")
 
 
 def test_unsafe_format_inside_compression_is_refused():
+    """Check a pickle hidden inside a .gz file is still refused."""
     with pytest.raises(UnsupportedFileError):
         read_file("data.pkl.gz", gzip.compress(b"anything"))
 
 
 def test_zip_bomb_is_refused(monkeypatch):
+    """Check a compressed file that expands past the size limit is refused.
+
+    Args:
+        monkeypatch: fixture, used to lower the decompressed-size limit to 1 MB for this test.
+    """
     from api.core import config
     monkeypatch.setattr(config.get_settings(), "max_decompressed_mb", 1)
     big = gzip.compress(b"a,b\n" + b"1,2\n" * 400_000)   # ~1.6 MB once expanded
@@ -136,11 +209,18 @@ def test_zip_bomb_is_refused(monkeypatch):
     ("justonecolumn\nvalue\n", ","),
 ])
 def test_detect_delimiter(text, expected):
+    """Check detect_delimiter picks the right separator, falling back to a comma.
+
+    Args:
+        text: str, the start of a delimited text file.
+        expected: str, the separator it should detect.
+    """
     from api.services.file_reader import detect_delimiter
     assert detect_delimiter(text) == expected
 
 
 def test_semicolon_csv_with_decimal_commas_reads_as_numbers():
+    """Check a ";" CSV with 1.234,56-style numbers reads as numbers, and US-style CSVs are unchanged."""
     # European/Latin American Excel saves ".csv" with ";" and 1.234,56 numbers.
     text = "name;amount\n" + "".join(f"n{i};{i}.000,5\n" for i in range(5))
     df = read_file("export.csv", text.encode())[0].df
@@ -152,6 +232,7 @@ def test_semicolon_csv_with_decimal_commas_reads_as_numbers():
 
 
 def test_nested_json_becomes_columns_and_text():
+    """Check nested JSON objects become "parent.child" columns and lists are stored as text."""
     raw = b'{"records": [{"a": 1, "meta": {"k": 2}, "tags": ["x", "y"]}, {"a": 2, "meta": {"k": 3}, "tags": []}]}'
     df = read_file("nested.json", raw)[0].df
     assert sorted(df.columns) == ["a", "meta.k", "tags"]   # nested fields are added as "parent.child"
@@ -166,11 +247,19 @@ def test_nested_json_becomes_columns_and_text():
     ("ragged.csv", b"a\n1\n2,3\n", "Row 3"),
 ])
 def test_read_errors_are_plain_english(name, raw, says):
+    """Check unreadable files raise FileReadError with a plain-English message.
+
+    Args:
+        name: str, the uploaded file name.
+        raw: bytes, the (broken) file contents.
+        says: str, text the error message must contain.
+    """
     with pytest.raises(FileReadError, match=says):
         read_file(name, raw)
 
 
 def test_blank_and_repeated_headers_in_excel_are_marked():
+    """Check blank Excel headers get "unnamed_column_<position>" and repeats get a "_2" suffix."""
     # An Excel sheet whose header row has two blank cells and a repeated name.
     buf = io.BytesIO()
     pd.DataFrame([[1, "x", 3, 4, 9]], columns=["Order ID", None, "Amount", "Amount", None]).to_excel(buf, index=False)

@@ -19,12 +19,37 @@ SAMPLES = Path(__file__).resolve().parents[1] / "samples"
 
 
 def _load(name: str, clean: bool = True) -> pd.DataFrame:
+    """Read one of the fictional bakery sample CSVs from samples/, cleaned by default.
+
+    Cleaning goes through the same clean_dataframe the app uses, so skills see data
+    shaped the way they would in production (snake_case names, duplicates removed).
+
+    Args:
+        name: str, file name without the ".csv" extension (e.g. "sales", "customers").
+        clean: bool, True (default) to run clean_dataframe and keep only the cleaned
+            DataFrame; False to return the raw pandas read.
+
+    Returns:
+        pd.DataFrame: the sample table, cleaned or raw.
+
+    Example:
+        >>> raw = _load("sales", clean=False)
+        >>> cleaned = _load("sales")   # same rows after clean_dataframe(raw)[0]
+    """
     df = pd.read_csv(SAMPLES / f"{name}.csv")
     return clean_dataframe(df)[0] if clean else df
 
 
 @pytest.fixture(scope="module")
 def sales():
+    """Pytest fixture: the cleaned sales sample, loaded once per test module.
+
+    Scoped to the module so the CSV is read and cleaned only one time; tests must
+    not modify it in place.
+
+    Returns:
+        pd.DataFrame: the cleaned samples/sales.csv table.
+    """
     return _load("sales")
 
 
@@ -65,10 +90,15 @@ CASES = [
 
 
 def test_every_skill_has_a_test_case():
+    """Check that CASES lists every registered skill, and nothing more.
+
+    Adding a skill without a case here fails this test.
+    """
     assert {c[0] for c in CASES} == set(skill_ids())
 
 
 def test_every_skill_md_has_a_skill_py():
+    """Check that every data_skills/<id>/README.md folder is a registered skill (has a skill.py)."""
     root = SAMPLES.parent / "data_skills"
     md = {p.parent.name for p in root.glob("*/README.md")}
     assert md == set(skill_ids())
@@ -76,6 +106,13 @@ def test_every_skill_md_has_a_skill_py():
 
 @pytest.mark.parametrize("skill,build,params", CASES, ids=[c[0] for c in CASES])
 def test_skill_runs_and_returns_a_result(skill, build, params):
+    """Run one skill on its sample input and check the result is named, summarized and JSON-safe.
+
+    Args:
+        skill: str, the skill id from CASES.
+        build: callable, builds the skill input (a DataFrame or a {file name: DataFrame} dict).
+        params: dict, options passed to the skill.
+    """
     result = run_skill(skill, build(), params)
     out = result.to_dict()
     assert out["skill"] == skill and out["summary"]
@@ -85,12 +122,18 @@ def test_skill_runs_and_returns_a_result(skill, build, params):
 
 
 def test_describe_lists_category_and_params():
+    """Check describe() reports a skill's category and options, and that 30 skills are listed."""
     d = describe("build-dashboard")
     assert d["category"] == "data_visualization" and "range" in d["params"]
     assert len(list_skills()) == 30
 
 
 def test_unknown_option_and_file_writing_are_refused(sales):
+    """Check that an unknown option is refused, and that file-writing options are blocked from the API.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     with pytest.raises(SkillInputError, match="Unknown option"):
         run_skill("explore-data", sales, {"nope": 1})
     with pytest.raises(SkillInputError, match="command line"):
@@ -100,6 +143,14 @@ def test_unknown_option_and_file_writing_are_refused(sales):
 # ── Specific numbers, checked against plain pandas ───────────────────────────
 
 def test_dashboard_month_to_date_matches_pandas(sales):
+    """Check the dashboard's month-to-date KPI (current and previous window) against a plain pandas sum.
+
+    Also checks every time range is present and that each range only offers comparisons
+    it has room for (no month-over-month in a 4-week range).
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     r = run_skill("build-dashboard", sales, {"value_columns": "amount"}).data
     mtd = r["ranges"]["month_to_date"]
     d = pd.to_datetime(sales["order_date"])
@@ -115,6 +166,14 @@ def test_dashboard_month_to_date_matches_pandas(sales):
 
 
 def test_dashboard_kpis_are_the_most_common_types(sales):
+    """Check that, with an order-type column, the KPI cards are the most common types (most rows first).
+
+    Also checks the overview cards, that customer columns become filters, and that the
+    3-month totals match plain pandas.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     r = run_skill("build-dashboard", sales, {}).data
     assert r["mode"] == "kpi_types" and r["kpi_column"] == "order_type" and r["value_column"] == "amount"
     top = sales["order_type"].value_counts().head(4).index.tolist()
@@ -132,6 +191,13 @@ def test_dashboard_kpis_are_the_most_common_types(sales):
 
 
 def test_dashboard_filters_use_only_matching_rows(sales):
+    """Check that a dashboard filter totals only matching rows and keeps the KPI list and options stable.
+
+    Also checks include_html=False skips the HTML artifact and an unknown filter value is refused.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     full = run_skill("build-dashboard", sales, {"include_html": False}).data
     r = run_skill("build-dashboard", sales, {"filters": {"customer_type": "Wholesale"}, "include_html": False})
     d = r.data
@@ -146,6 +212,7 @@ def test_dashboard_filters_use_only_matching_rows(sales):
 
 
 def test_dashboard_without_a_type_column_falls_back_to_metrics():
+    """Check that data with no type column (the feedback sample) shows averaged score metrics instead."""
     feedback = _load("feedback")
     d = run_skill("build-dashboard", feedback, {}).data
     assert d["mode"] == "metrics" and d["kpis"] == ["csat", "nps"]          # scores are averaged
@@ -153,6 +220,7 @@ def test_dashboard_without_a_type_column_falls_back_to_metrics():
 
 
 def test_windows():
+    """Check the start/end and comparison dates of the time windows, including the month-end edge case."""
     asof, first = pd.Timestamp("2026-10-13"), pd.Timestamp("2024-01-01")
     w = _time.window("month_to_date", asof, first)
     assert (str(w.start.date()), str(w.prev_start.date()), str(w.prev_end.date())) == ("2026-10-01", "2026-09-01", "2026-09-13")
@@ -166,6 +234,7 @@ def test_windows():
 
 
 def test_week_over_week_and_partial_periods():
+    """Check week-over-week totals, percent change and partial-period flags from period_series."""
     df = pd.DataFrame({"d": pd.date_range("2026-01-05", "2026-01-21"), "v": 1.0})   # Mon Jan 5 .. Wed Jan 21
     s = _time.period_series(df, "d", "v", "wow")
     assert s["value"].tolist() == [7.0, 7.0, 3.0]
@@ -176,6 +245,11 @@ def test_week_over_week_and_partial_periods():
 
 
 def test_ask_your_data_matches_pandas(sales):
+    """Check "total amount by store" matches a pandas groupby, and an unanswerable question is refused.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     r = run_skill("ask-your-data", sales, {"question": "total amount by store"})
     got = {row["store"]: row["value"] for row in r.tables["answer"]}
     assert got == pytest.approx(sales.groupby("store")["amount"].sum().to_dict())
@@ -184,7 +258,10 @@ def test_ask_your_data_matches_pandas(sales):
 
 
 def test_skill_docs_match_the_code():
-    """Each README.md's "Run it" options table is generated from skill.py (scripts/sync_skill_docs.py)."""
+    """Each README.md's "Run it" options table is generated from skill.py (scripts/sync_skill_docs.py).
+
+    Loads the sync script as a module and runs it in check mode; any out-of-date README fails.
+    """
     import importlib.util
     path = Path(__file__).resolve().parents[1] / "scripts" / "sync_skill_docs.py"
     spec = importlib.util.spec_from_file_location("sync_skill_docs", path)
@@ -194,6 +271,11 @@ def test_skill_docs_match_the_code():
 
 
 def test_dashboard_sends_short_labels_for_narrow_screens(sales):
+    """Check the dashboard sends short range and comparison labels ("1W", "MTD", "WoW") for phones.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
     d = run_skill("build-dashboard", sales, {"include_html": False}).data
     assert d["range_short_labels"] == {"last_1_week": "1W", "last_4_weeks": "4W", "last_3_months": "3M", "last_1_year": "1Y",
                                        "month_to_date": "MTD", "year_to_date": "YTD", "all": "All"}
@@ -203,9 +285,22 @@ def test_dashboard_sends_short_labels_for_narrow_screens(sales):
 
 
 def test_time_bar_offers_only_what_the_data_supports(sales):
-    """A week of data: Last week + day over day; "All time" only with more than a year."""
+    """A week of data: Last week + day over day; "All time" only with more than a year.
+
+    Args:
+        sales: fixture, the cleaned sales sample (trimmed to its last N days inside the test).
+    """
     d = pd.to_datetime(sales["order_date"])
     def offered(days):
+        """Build a dashboard from only the last few days of sales and report its time-bar choices.
+
+        Args:
+            days: int, how many days back from the latest order date to keep.
+
+        Returns:
+            tuple[list[str], list[str], str | None]: the available range ids, the available
+                comparison ids ("dod", "wow", "mom"), and the default range id.
+        """
         r = run_skill("build-dashboard", sales[d > d.max() - pd.Timedelta(days=days)], {"include_html": False}).data
         return r["available_ranges"], r["available_comparisons"], r["default_range"]
     assert offered(1)[:2] == ([], [])                                        # nothing to compare: no time bar
@@ -217,6 +312,7 @@ def test_time_bar_offers_only_what_the_data_supports(sales):
 
 
 def test_dashboard_offers_up_to_nine_filters():
+    """Check that at most 9 filter columns are picked automatically, and asking for 10 is refused."""
     import numpy as np
     n = 60
     rng = np.random.default_rng(0)

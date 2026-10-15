@@ -18,6 +18,12 @@ client = TestClient(app)
     ("D’Angelo", "D’Angelo"), ("  Ana   Lee ", "Ana Lee"), ("李", "李"), ("Zoë", "Zoë"),
 ])
 def test_person_names_allow_accents_and_name_punctuation(raw, clean):
+    """Check person names keep accents, apostrophes and hyphens, with extra spaces squeezed.
+
+    Args:
+        raw: str, the name as typed.
+        clean: str, the expected cleaned name.
+    """
     assert clean_person_name(raw) == clean
 
 
@@ -26,11 +32,18 @@ def test_person_names_allow_accents_and_name_punctuation(raw, clean):
     ("Ana-", "end with"), ("", "required"), ("Ana!", "only use letters"), ("-Ana", "start with a letter"),
 ])
 def test_person_names_reject_bad_input(raw, why):
+    """Check bad person names raise ValueError with a helpful message.
+
+    Args:
+        raw: str, the invalid name as typed.
+        why: str, text the error message must contain.
+    """
     with pytest.raises(ValueError, match=why):
         clean_person_name(raw)
 
 
 def test_company_names():
+    """Check real company names (with &, digits, accents) pass and bad ones raise ValueError."""
     assert clean_company_name("Ben & Jerry's, LLC") == "Ben & Jerry's, LLC"
     assert clean_company_name("1-800-Flowers.com") == "1-800-Flowers.com"
     assert clean_company_name("Café Olé") == "Café Olé"
@@ -40,6 +53,7 @@ def test_company_names():
 
 
 def test_emails_are_checked_and_lowercased():
+    """Check emails are trimmed and lowercased, and malformed ones raise ValueError."""
     assert clean_email("  Ana@Example.COM ") == "ana@example.com"
     for bad in ["ana@", "ana@example", "a b@x.com", "ana.example.com"]:
         with pytest.raises(ValueError):
@@ -47,6 +61,7 @@ def test_emails_are_checked_and_lowercased():
 
 
 def test_signup_rejects_bad_names_and_a_missing_business_name():
+    """Check signup returns 422 for a bad name, a bad email, or a business with no company name."""
     base = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee", "email": "v1@example.com"}
     assert client.post("/api/accounts/signup", json={**base, "first_name": "ana"}).status_code == 422
     assert client.post("/api/accounts/signup", json={**base, "email": "not-an-email"}).status_code == 422
@@ -54,6 +69,7 @@ def test_signup_rejects_bad_names_and_a_missing_business_name():
 
 
 def test_one_email_per_account_case_insensitive_and_no_half_signups():
+    """Check an email can be used only once (any case), and a failed team signup creates nothing."""
     base = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee"}
     assert client.post("/api/accounts/signup", json={**base, "email": "once@example.com"}).status_code == 201
     again = client.post("/api/accounts/signup", json={**base, "email": "ONCE@Example.com"})
@@ -72,6 +88,7 @@ def test_one_email_per_account_case_insensitive_and_no_half_signups():
 
 
 def test_location_search_and_signup():
+    """Check city search (accent-insensitive, 2+ letters) and that signup saves a valid location id."""
     hits = client.get("/api/locations", params={"q": "atl"}).json()
     assert hits[0]["label"] == "Atlanta, Georgia, United States"
     assert locations.search("sao paulo")[0]["city"] == "São Paulo"            # accent-insensitive
