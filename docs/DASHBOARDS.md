@@ -49,7 +49,7 @@ row is. The dashboard finds it automatically, best match first:
 
 1. an exact name: `event_type`, `transaction_type`, `txn_type`, `type`,
    `event_subtype`, `record_type`, `entry_type`, `activity_type` (the platform
-   warehouse uses `event_type` / `event_subtype`, see `db/warehouse.sql`);
+   stored data uses `event_type` / `event_subtype`, see `db/schema.sql`);
 2. any `*_type`, `*_kind`, `*_class` or `*_category` column — except ones about
    the customer (`customer_type` is a filter, not a KPI);
 3. a column named `category`, `kind` or `class`.

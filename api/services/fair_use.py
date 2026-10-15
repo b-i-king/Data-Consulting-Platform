@@ -24,7 +24,7 @@ billing fair.
 
 Duplicate data going INTO managed storage (Data Engineering) is handled where
 data is stored: api/services/unified.py (plan_upsert) and the unique key on
-warehouse.unified_data.
+fact.account_data.
 """
 
 from __future__ import annotations

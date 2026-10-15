@@ -80,6 +80,8 @@ export default function StepServices(props: {
           onInterval={pickInterval}
           value={picked}
           onChange={(plans) => props.onSubscription(plans.length ? { plans, interval } : null)}
+          // A new account has no stored data yet, and AI works on stored data.
+          locked={{ ai: "Add it after your data is stored (Data Engineering)" }}
           consultantSlot={
             // "Done for you": wide, in lavender, right under All tools.
             <div

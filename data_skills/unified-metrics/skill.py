@@ -1,7 +1,7 @@
 """
 unified-metrics — the TEST BENCH for the unified data design (Data Engineering).
 It runs a cleaned table through the same code that will fill
-`warehouse.unified_data` (api/services/unified.py), shows every decision, and
+`fact.account_data` (api/services/unified.py), shows every decision, and
 proves by round trip that nothing is lost. It stores nothing.
 
 Python implementation of README.md in this folder (written for this platform).
@@ -38,7 +38,7 @@ HOW IT DECIDES (and where a person must)
    (unified.classify_metric) with a confidence; "low" / "medium" -> NEEDS
    REVIEW. Correct them with `metric_map` and run again — that's the loop to
    test before loading. The reviewed columns come out as ready-made
-   `warehouse.field_map` rows, so the next client file with the same headers
+   `fact.field_map` rows, so the next client file with the same headers
    is mapped automatically.
 3. ROUND TRIP (unified.round_trip): the unified rows are pivoted back to the
    original columns and compared cell by cell — every column, not just the metrics.
@@ -59,7 +59,7 @@ SKILL = SkillSpec(
     title="Unified metrics (long format) test bench",
     description="Turn metric columns into rows (metric_type, subtype, unit, value), keep IDs, dates and "
                 "categories, and verify by round trip that no information is lost — the same code that fills "
-                "warehouse.unified_data. Stores nothing.",
+                "fact.account_data (the stored data table). Stores nothing.",
     params={
         "metric_columns": Param("columns", None, "Columns to treat as metrics (default: every number column that isn't an ID)"),
         "id_columns": Param("columns", None, "Columns to keep as IDs (default: guessed from the names)"),
@@ -72,32 +72,9 @@ SKILL = SkillSpec(
 )
 
 
-def _record_id_column(df: pd.DataFrame, plan: list[dict]) -> str | None:
-    """
-    The ID column that names each record, if there is one.
-
-    First choice: an id column with no blanks and no repeats (one row per
-    record). Second: a document number (order / invoice / receipt number,
-    unified name reference_number) with no blanks that repeats — one row per
-    LINE of an order; unified.py then numbers the lines 1, 2, 3. A repeating
-    customer_id is never used (a customer is not a record). Without either,
-    unified.py gives each row an ID made from its content.
-
-    Example:
-        >>> d = pd.DataFrame({"customer_id": [1, 1], "order_id": [7, 7]})
-        >>> _record_id_column(d, [{"column": "customer_id", "role": "id", "field_name": "customer_source_id"},
-        ...                       {"column": "order_id", "role": "id", "field_name": "reference_number"}])
-        'order_id'
-    """
-    ids = [p for p in plan if p["role"] == "id" and df[p["column"]].notna().all()]
-    unique = next((p["column"] for p in ids if df[p["column"]].is_unique), None)
-    document = next((p["column"] for p in ids if p["field_name"] == "reference_number"), None)
-    return unique or document
-
-
 def _field_map_sql(plan: list[dict]) -> str:
     """
-    Ready-to-run warehouse.field_map rows for the columns the shared map doesn't know yet.
+    Ready-to-run fact.field_map rows for the columns the shared map doesn't know yet.
 
     Run them (after checking) and the next upload with the same headers is
     named and described automatically, with mapped = true.
@@ -113,14 +90,14 @@ def _field_map_sql(plan: list[dict]) -> str:
 
     new = [p for p in plan if not p["mapped"] or p["confidence"] == "set by you"]
     if not new:
-        return "-- Every column is already in warehouse.field_map: nothing to add."
+        return "-- Every column is already in fact.field_map: nothing to add."
     rows = [f"    ('file_upload', {q(unified.snake_case(p['column']))}, {q(p['field_name'])}, {q(p['value_type'])}, "
             f"{q(p['metric_type'])}, {q(p['metric_subtype'])}, {q(p['metric_unit'])}, "
             f"{q('reviewed with the unified-metrics skill' if p['metric_type'] else None)})" for p in new]
-    return ("-- Proposed warehouse.field_map rows for this file's new columns (check them first;\n"
+    return ("-- Proposed fact.field_map rows for this file's new columns (check them first;\n"
             "-- metric_type NULL = kept as an attribute). Then add the same pairs to\n"
             "-- FILE_UPLOAD_FIELD_MAP in api/services/unified.py (a test keeps them identical).\n"
-            "INSERT INTO warehouse.field_map (system, source_field, field_name, value_type,\n"
+            "INSERT INTO fact.field_map (system, source_field, field_name, value_type,\n"
             "                                 metric_type, metric_subtype, metric_unit, notes) VALUES\n"
             + ",\n".join(rows) + "\nON CONFLICT (system, source_field) DO NOTHING;")
 
@@ -155,7 +132,7 @@ def run(df, metric_columns=None, id_columns=None, metric_map=None, event="auto",
         (+ "unified_full"); findings incl. columns needing review; data
         {"round_trip", "rows_in", "rows_out", "metrics", "needs_review", "event",
         "record_id_column"}; artifacts "json_metric_map" (edit and re-run) and
-        "sql_field_map" (warehouse.field_map rows for the new columns).
+        "sql_field_map" (fact.field_map rows for the new columns).
 
     Raises:
         SkillInputError: when no metric column is found, or an option is malformed.
@@ -188,7 +165,7 @@ def run(df, metric_columns=None, id_columns=None, metric_map=None, event="auto",
                                     [str(c) for c in df.columns])
     store_type, store_subtype = chosen.split("/")
 
-    id_col = _record_id_column(df, plan)
+    id_col = unified.pick_record_id_column(df, plan)
     date_col = next((p["column"] for p in plan if p["role"] == "date"), None)
     # keep_identical_rows: compare row for row in the round trip (the database
     # would store identical rows once; that's reported below).
@@ -233,7 +210,7 @@ def run(df, metric_columns=None, id_columns=None, metric_map=None, event="auto",
         findings.append(f"Round trip FAILED: {check['mismatches']:,} of {check['cells_checked']:,} cells differ "
                         f"(first: {check['examples'][:1]}). Check columns holding text in a number column.")
     if identical and not id_col:
-        findings.append(f"{identical:,} row(s) are exact copies of an earlier row; the warehouse would store "
+        findings.append(f"{identical:,} row(s) are exact copies of an earlier row; the database would store "
                         "each of them once.")
     if review:
         findings.append("Needs a person's decision: " + ", ".join(review)

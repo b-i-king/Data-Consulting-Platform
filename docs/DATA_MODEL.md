@@ -1,208 +1,148 @@
-# Data model: many clients, one database
+# Data model: every client's data in one shape
 
 **Question:** *"How would I set up a database if I have different companies and
 probably different tables for each company?"*
 
-**Short answer:** don't give each company its own tables. Use **one shared star
-schema** where every row carries a `client_id`, keep client-specific extras in a
-JSONB `attributes` column, and let Postgres **Row Level Security** keep each
-client's rows private. Files: [`db/schema.sql`](../db/schema.sql) (platform) and
-[`db/warehouse.sql`](../db/warehouse.sql) (client data). Both were tested on
-PostgreSQL 16, including cross-client isolation.
+**Short answer:** don't give each company its own tables. Store **every
+client's data in one table**, `fact.account_data`, in one shape: IDs, dates and
+categories kept exactly as they are, and every number that is measured turned
+into its own row described by `metric_type`, `metric_subtype`, `metric_unit`
+and `metric_value`. Every row carries the `account_id` it belongs to, and
+Postgres **Row Level Security** keeps each client's rows private. File:
+[`db/schema.sql`](../db/schema.sql) (the `fact` schema). Tested on PostgreSQL 16,
+including cross-client isolation.
 
 ## Why not one set of tables per company?
 
-| Per-company tables | One shared schema (recommended) |
+| Per-company tables | One shared table (this design) |
 |---|---|
-| 50 clients × 8 tables = 400 tables to migrate on every change | 8 tables, one migration |
-| Every dashboard/query rewritten per client | One query works for every client (filter by `client_id`) |
-| Cross-client benchmarks ("bakeries like you…") need giant UNIONs | `GROUP BY naics_subsector` |
+| 50 clients × 8 tables = 400 tables to migrate on every change | 1 table, one migration |
+| Every dashboard/query rewritten per client | One query works for every client (filter by `account_id`) |
+| Cross-client benchmarks ("bakeries like you…") need giant UNIONs | `GROUP BY` the NAICS subsector |
 | Easy to point a query at the wrong client's tables | RLS makes leaking another client's rows impossible from the API |
-| Different column names per client | Same columns; extras go in `attributes` |
+| Different column names per client | Shared names (`field_map`); each client's own name kept in `source_field` |
 
 The only time to split is a large client who **contractually** requires their own
 database — then they get a copy of the same schema, not a different one.
 
-## Two layers
+## Two schemas
 
 ```
-public   (db/schema.sql)     — the PLATFORM: who signed up, teams, usage/billing
-warehouse (db/warehouse.sql) — CLIENT DATA, only for Data Engineering clients who opt in
+dim   (db/schema.sql) — the PLATFORM: who signed up, consultants, plans, consent, load log
+fact  (db/schema.sql) — CLIENT DATA, only for Data Engineering clients who opt in:
+                        account_data (the data) + field_map (shared names)
 ```
 
-The free cleaning flow still stores **no** client data. The warehouse is an
-explicit, opt-in service (see "Stateless processing" in ARCHITECTURE.md).
+The free cleaning flow still stores **no** client data. Storing it is an
+explicit, opt-in service (see "Managed storage" in ARCHITECTURE.md). The `dim`
+tables are described in [DATABASE.md](DATABASE.md).
 
 ## How your design maps to the tables
 
 | Your idea | Where it lives | Notes |
 |---|---|---|
-| User table, split individual vs. business, names, IDs, created at, last logged in | `public.accounts` | `account_type`, `created_at`, `last_login_at` (new), industry columns (new) |
-| "Do they have a team, and who is on it?" | `accounts.team_id` + `team_role` → `public.teams` | Individuals have `team_id = NULL` |
-| Goods vs. services → NAICS sector → subsector | `accounts.industry_supersector`, `naics_sector`, `naics_subsector` | Asked on step 1 of the funnel; copied to `warehouse.dim_client` |
-| Location (optional, signup only) | `accounts.location_geoname_id`, `location_city`, `location_region`, `location_country_code`, `location_label` | Picked from a city list (GeoNames, `api/services/locations.py`); only the id is trusted, the rest is looked up on the server |
-| Business size | `accounts.company_size` | LinkedIn size codes: `A` self-employed, `B` 1–10, `C` 11–50, `D` 51–200, `E` 201–500, `F` 501–1,000, `G` 1,001–5,000, `H` 5,001–10,000, `I` 10,001+ employees. Asked on step 1; copied to `warehouse.dim_client` so benchmarks can compare similar-sized businesses |
-| Services the client has | `public.account_services` | One row per service on an account's plan (the team owner's, for businesses); drives the workspace's left pane. See `docs/PRICING.md` |
-| Fact table with ID, type, subtype, date | `warehouse.fact_event` + `dim_event_type` | Type/subtype are a lookup table, so a new kind of event is a new **row**, not a new column or table |
-| Expenses, income | `dim_event_type` rows `transaction/income`, `transaction/expense` | `direction` (+1 / −1) makes net cash a single `SUM(amount * direction)` |
-| CSAT score, rating | rows `feedback/csat`, `feedback/rating`, `feedback/nps` | Stored in `fact_event.score` |
-| Employee | `warehouse.dim_employee` + events `employee/hire`, `employee/termination`, `payroll/gross_pay` | |
-| Invoice received / sent | events `invoice/received`, `invoice/sent`, `invoice/paid` | Invoice #, status, due date are columns on the fact |
-| Customer table | `warehouse.dim_customer` | With source IDs **and** fuzzy-match fields (below) |
-| "Unified data": IDs, dates and categories as they are, metrics pivoted into type / value / unit / subtype | `warehouse.unified_data` + `field_map` | One row per metric; the rest in `attributes`. See "Unified data" below |
-| Invoice type table, feedback table | *Not needed as separate tables* | They are rows in `dim_event_type`. Add a dedicated dimension only when a thing has many descriptive fields of its own (as customers and employees do). |
+| User table, split individual vs. business, names, IDs, created at, last logged in | `dim.accounts` | `account_type`, `created_at`, `last_login_at`, industry columns |
+| "Do they have a team, and who is on it?" | `dim.accounts.team_id` + `team_role` → `dim.teams` | Individuals have `team_id = NULL` |
+| Goods vs. services → NAICS sector → subsector | `dim.accounts.industry_supersector`, `naics_sector`, `naics_subsector` | Asked on step 1 of the funnel |
+| Location (optional, signup only) | `dim.accounts.location_*` | Picked from a city list (GeoNames); only the id is trusted |
+| Business size | `dim.accounts.company_size` | LinkedIn size codes `A` (self-employed) … `I` (10,001+ employees) |
+| What a client pays for | `dim.subscriptions` (its tools in `items`) | Projects they'd like help with: `dim.accounts.interested_services` (interest only) |
+| Fact table with ID, type, subtype, date | `fact.account_data` | `record_id`, `event_type` / `event_subtype` (what the rows are), `event_date` |
+| "Unified data": IDs, dates and categories as they are, metrics pivoted into type / value / unit / subtype | `fact.account_data` | One row per metric; IDs, dates and categories in `attributes` on every row |
+| Expenses, income | `event_type` / `event_subtype` = `transaction/income`, `transaction/expense` | In an expense an `amount` is described as a **cost** |
+| CSAT score, rating | `feedback/csat`, `feedback/nps` rows; `metric_type = 'score'` | `csat` and `nps` columns become two rows, subtypes `csat` / `nps` |
+| Invoice received / sent | `invoice/received`, `invoice/sent`, `invoice/paid` | Invoice #, status, due date ride along in `attributes` |
+| Customer table, product list | `list/records` rows (no numbers): one row per record with all its details | The same table; no separate customer or product tables |
+| QuickBooks fields with different names | `fact.field_map` | `TxnDate` → `transaction_date`, `Line.Amount` → `line_amount` (amount / line / usd) |
 
 ## ER diagram
 
 ```mermaid
 erDiagram
-    accounts ||--o| teams : "owns (business)"
-    teams ||--o{ accounts : "has members"
-    accounts ||--o| dim_client : "individual client"
-    teams ||--o| dim_client : "business client"
-    dim_client ||--o{ dim_source : "connects"
-    dim_client ||--o{ dim_customer : has
-    dim_client ||--o{ dim_employee : has
-    dim_client ||--o{ dim_product : sells
-    dim_client ||--o{ fact_event : records
-    dim_event_type ||--o{ fact_event : "type / subtype"
-    dim_date ||--o{ fact_event : "on"
-    dim_source ||--o{ fact_event : "loaded from"
-    dim_customer |o--o{ fact_event : "about"
-    dim_employee |o--o{ fact_event : "about"
-    dim_product |o--o{ fact_event : "about"
-    dim_customer |o--o{ dim_customer : "master record"
-    dim_client ||--o{ unified_data : "every metric"
-    dim_source ||--o{ unified_data : "loaded from"
-    dim_event_type ||--o{ unified_data : "type / subtype"
-    field_map ||..o{ unified_data : "names + describes"
+    accounts ||--o{ account_data : "whose data (account_id)"
+    consultants |o--o{ account_data : "loaded by"
+    field_map ||..o{ account_data : "names + describes (by source_field)"
+    accounts ||--o{ load_runs : "each load (column_plan)"
+    accounts ||--o{ storage_consents : "store my data"
 
-    accounts {
-        uuid id PK
-        text account_type "individual | business"
-        text first_name
-        text last_name
-        text email
-        uuid team_id FK "NULL for individuals"
-        text team_role "owner | member"
-        text industry_supersector "goods | services"
-        text naics_sector "e.g. 44-45"
-        text naics_subsector "e.g. 445"
-        text company_size "LinkedIn code A-I"
-        text location_label "optional, e.g. Atlanta, Georgia, United States"
-        timestamptz created_at
-        timestamptz last_login_at
-    }
-    dim_client {
-        uuid client_id PK
-        uuid account_id FK "individual"
-        uuid team_id FK "business"
-        text client_type
-        text naics_subsector
-        text company_size
-    }
-    dim_event_type {
-        smallint event_type_id PK
-        text event_type "transaction, invoice, feedback..."
-        text event_subtype "income, sent, csat..."
-        text measure "amount | quantity | score | count"
-        smallint direction "+1 in, -1 out"
-    }
-    fact_event {
-        bigint event_id PK
-        uuid client_id FK
-        smallint event_type_id FK
-        int date_key FK
-        bigint customer_key FK
-        bigint employee_key FK
-        bigint product_key FK
-        numeric amount
-        numeric quantity
-        numeric score
-        text reference_number
-        text status
-        date due_date
-        jsonb attributes
-    }
-    dim_customer {
-        bigint customer_key PK
-        uuid client_id FK
-        text source_customer_id "NULL if none"
-        text name
-        text email
-        bigint master_customer_key FK
-        text match_status
-    }
-    unified_data {
+    account_data {
         bigint row_id PK
-        uuid client_id FK
-        bigint source_id FK
-        text record_id "Invoice:130 or sha256:..."
-        int line_number "0 header, 1.. lines"
-        text event_type FK
-        text event_subtype FK
+        uuid account_id FK "dim.accounts, the plan holder"
+        uuid consultant_id FK "who loaded it, if a consultant"
+        text source_system "file_upload | quickbooks"
+        text source_name "sales.csv"
+        text record_id "50001, Invoice:130, sha256:..."
+        int line_number "0, or 1, 2, 3 for order lines"
+        text event_type "transaction"
+        text event_subtype "income"
         date event_date
-        text field_name "line_amount"
-        text source_field "Line.Amount / amount"
-        text metric_type "amount, price, cost..."
-        text metric_subtype "line, unit, total..."
+        text field_name "line_amount (or _no_metric)"
+        text source_field "amount (the client's column)"
+        text metric_type "amount, price, cost, score..."
+        text metric_subtype "line, unit, csat..."
         text metric_unit "usd, count, percent..."
         numeric metric_value
         jsonb attributes "IDs, dates, categories"
-        text row_hash "skips no-op reloads"
+        text row_hash "skips unchanged reloads"
+        bool mapped "false = a guess, review it"
+        timestamptz added_at
+        timestamptz modified_at
+        timestamptz source_modified_at
     }
     field_map {
         int field_map_id PK
         text system "quickbooks | file_upload"
-        text source_field
-        text field_name
-        text metric_type "NULL = attribute"
+        text source_field "TxnDate, order_date"
+        text field_name "transaction_date"
+        text value_type
+        text metric_type "NULL = not a metric"
         text metric_subtype
         text metric_unit
+        text notes
+    }
+    accounts {
+        uuid id PK
+        text account_type
+        text naics_subsector
+    }
+    consultants {
+        uuid id PK
+        uuid account_id FK
+    }
+    load_runs {
+        bigint id PK
+        uuid account_id FK
+        text source_name
+        jsonb column_plan
+    }
+    storage_consents {
+        bigint id PK
+        uuid account_id FK
+        timestamptz withdrawn_at
     }
 ```
 
-## The grain: one row per event, at the smallest level available
-
-| Business event | event_type / subtype | Measure | Links |
-|---|---|---|---|
-| A café sells a $4.50 latte | transaction / income | amount 4.50 | product, customer (if known) |
-| Rent paid | transaction / expense | amount 2,000 | — |
-| Invoice #1001 sent to Acme | invoice / sent | amount 450, status "open", due date | customer |
-| Acme pays #1001 | invoice / paid | amount 450 | customer |
-| Survey response, 4 of 5 | feedback / csat | score 4 | customer |
-| Maria hired | employee / hire | count | employee |
-| Pay run | payroll / gross_pay | amount 12,300 | employee (one row per employee per run) |
-
-If a source only has monthly totals, load monthly totals — the grain is "the
-smallest the source provides". Record it in `attributes` (e.g. `{"grain": "month"}`).
-
 ## Unified data: one shape for every source
 
-**Your idea:** after cleaning, IDs, dates and categorical (demographic) columns
-stay as they are, and the *metrics* are pivoted so every client's numbers fit
-the same columns: `metric_type`, `metric_subtype` (optional), `metric_unit`,
-`metric_value` — plus the original name, so each value can always be traced
-back. Same information, one shape. That is `warehouse.unified_data`.
-
 ```
-wide (the client's file)                                 unified_data (one row per metric)
+wide (the client's file)                                 fact.account_data (one row per metric)
 order_id | date       | store   | qty | unit_price | amount     field_name  | metric_type | metric_subtype | metric_unit | metric_value | source_field | attributes
 50001    | 2024-10-11 | Midtown | 3   | 7.00       | 21.00  ->  quantity    | quantity    |                | count       | 3            | qty          | {reference_number: 50001, transaction_date: 2024-10-11, location_name: Midtown}
                                                                 unit_price  | price       | unit           | usd         | 7.00         | unit_price   | (same)
                                                                 line_amount | amount      | line           | usd         | 21.00        | amount       | (same)
 ```
 
-**How the pieces fit** (code: `api/services/unified.py`, table: `db/warehouse.sql`):
+**How the pieces fit** (code: `api/services/unified.py`; the load:
+`warehouse_loader.py` plans it, `warehouse_store.py` writes it):
 
 | Piece | What it does |
 |---|---|
-| `field_map` (table) + `QUICKBOOKS_FIELD_MAP` / `FILE_UPLOAD_FIELD_MAP` (code) | Lines names up across sources (QuickBooks `TxnDate` and a file's `order_date` both become `transaction_date`) **and** says which fields are metrics and what they measure (`Line.Amount` → amount / line / usd). A test keeps the table seed and the code identical. |
-| `classify_metric()` | Describes a number column nobody mapped yet from the words in its name (`shipping_cost` → cost / shipping / usd), with a confidence. Low or medium = a person reviews it. |
-| `attributes` (JSONB) | Everything that is not a metric — IDs, dates, categories, names — kept as is, by unified name, on every metric row of its record line. Filter with `attributes->>'location_name'` (indexed). |
-| `flatten_quickbooks()` / `dataframe_to_unified()` | Turn a QuickBooks API object or a cleaned file into unified rows. QuickBooks header fields are line 0, its `Line` items lines 1, 2, 3. A file whose order number repeats (one row per item) is numbered the same way. |
-| `unified_to_wide()` / `round_trip()` | Pivot back to a normal table and compare every cell with the original — proof that nothing was lost. |
-| `record_id` + `row_hash` + `plan_upsert()` | No duplicates: the source's ID (or a fingerprint of the row), a unique key per metric, and a content fingerprint so an unchanged reload writes nothing. |
+| `fact.field_map` (table) + `QUICKBOOKS_FIELD_MAP` / `FILE_UPLOAD_FIELD_MAP` (code) | Lines names up across sources (QuickBooks `TxnDate` and a file's `order_date` both become `transaction_date`) **and** says which fields are metrics and what they measure (`Line.Amount` → amount / line / usd). A test keeps the table seed and the code identical. |
+| `classify_metric()` | Describes a number column nobody mapped yet from the words in its name (`shipping_cost` → cost / shipping / usd), with a confidence. Low or medium = a person reviews it (the preview shows it; the `unified-metrics` skill too). |
+| `attributes` (JSONB) | Everything that is not a metric — IDs, dates, categories, names — kept as is, by shared name, on every metric row of its record line. Filter with `attributes->>'location_name'` (indexed). |
+| `flatten_quickbooks()` / `dataframe_to_unified()` | Turn a QuickBooks API object or a cleaned file into rows. QuickBooks header fields are line 0, its `Line` items lines 1, 2, 3. A file whose order number repeats (one row per item) is numbered the same way. |
+| `unified_to_wide()` / `round_trip()` | Pivot back to a normal table and compare every cell with the original. The preview refuses to load if the round trip fails, and "Use my stored data" uses the same pivot to give the client their table back with their own column names (from `dim.load_runs.column_plan`). |
+| `record_id` + `row_hash` + the upsert | No duplicates: the source's ID (or a fingerprint of the row), a unique key per metric, and a content fingerprint, so an unchanged reload writes nothing and a changed value updates one row. |
 | `spark_engine.melt_to_unified()` | The same reshape in Spark, for tables too big for pandas ([SPARK.md](SPARK.md)). |
 
 **Rules that need context, not just the column name:**
@@ -212,94 +152,88 @@ order_id | date       | store   | qty | unit_price | amount     field_name  | me
   it's certain; from column names it's flagged for a person to confirm.
 - A record in another currency (QuickBooks `CurrencyRef`) gets that unit (`cad`)
   instead of `usd`. **Never sum across units** — filter on `metric_unit`.
-- A line with no numbers at all (a description-only QuickBooks line) gets one
-  row with `field_name = '_no_metric'`, so its attributes are still kept.
-- Numbers that only count positions (QuickBooks `LineNum`) are attributes, not metrics.
+- A line with no numbers at all (a customer list, a description-only QuickBooks
+  line) gets one row with `field_name = '_no_metric'`, so its details are kept.
+- Numbers that only count positions (QuickBooks `LineNum`) or name things
+  (`order_id`, `zip`) are kept as attributes, not metrics.
+- A date column with a few non-dates ("TBD") is still the date column; the odd
+  values are kept as written, and those rows have no `event_date`.
+- Negative numbers stay negative (a refund line is −4.00): nothing is changed,
+  only reshaped.
 
-**How it compares with `fact_event`:** `fact_event` has fixed measure
-columns (`amount`, `quantity`, `score`) and real dimension keys; the event
-type describes the *row*. It is what the warehouse load in the app writes
-today and what the dashboards read. `unified_data` describes each *number*, so
-a file with ten metric columns (cost, tax, discount, tip, hours…) or a new
-QuickBooks field needs no new columns, and nothing is thrown away. The two
-live side by side; `fact_event` can be rebuilt from `unified_data`.
-
-| | `fact_event` (wide) | `unified_data` (metric rows) |
-|---|---|---|
-| New kind of metric | needs a column (or `attributes`) | just a new `metric_type` value |
-| Rows | one per event | one per event **per metric** (3 metrics = 3× rows) |
-| "Revenue minus cost" | one row, simple | filter + pivot (a view can hide it) |
-| Mixed units in one column | not possible | `metric_unit` keeps them apart |
-| Fields nobody planned for | dropped (or `attributes`) | kept, flagged `mapped = false` |
-
-**Test a client's file before loading it** — the `unified-metrics` skill
-(Data Engineering) runs the same code and stores nothing:
+**Test a client's file without storing it** — the `unified-metrics` skill
+(Data Engineering) runs the same code:
 
 ```bash
 python -m data_skills run unified-metrics samples/sales.csv
 python -m data_skills run unified-metrics samples/expenses.csv --param event=transaction/expense
-python -m data_skills run unified-metrics samples/expenses.csv --param 'metric_map={"amount": {"type": "cost", "subtype": "operating", "unit": "usd"}}'
 ```
 
-For each file it reports every column's role and unified name, each metric's
-type / subtype / unit with a confidence, the columns that **need a person's
-decision**, a preview of the unified rows, the **round-trip check** (every
-cell of every column), the editable `json_metric_map`, and `sql_field_map`:
-ready-made `field_map` rows for the reviewed columns, so the next file with
-the same headers is mapped automatically.
+It also writes `sql_field_map`: ready-made `fact.field_map` rows for a file's
+new columns, so the next file with the same headers is mapped automatically.
 
-**Status:** the table, field map, reshape code, round trip and duplicate
-planning are built and tested — including a load of the 18,210-row sales
-sample into PostgreSQL 16 (54,630 metric rows; a second identical load wrote
-0 rows; totals matched pandas to the cent). Still to build: the loader step
-in the app that writes `unified_data` next to `fact_event` (the upsert is
-written out at the bottom of `db/warehouse.sql`), and the QuickBooks
-connector that feeds `flatten_quickbooks()`.
+## The grain: one row per metric, at the smallest level available
+
+| Business event | event_type / subtype | Rows in account_data |
+|---|---|---|
+| A café sells 2 lattes at $4.50 | transaction / income | `quantity` 2, `unit_price` 4.50, `line_amount` 9.00 |
+| Rent paid | transaction / expense | `line_amount` 2,000 (cost / line / usd) |
+| Invoice #1001 sent to Acme (2 lines) | invoice / sent | line 0: `total_amount`, `balance_due`; lines 1–2: `quantity`, `unit_price`, `line_amount` |
+| Survey response, CSAT 4, NPS 9 | feedback / csat | `csat` 4 (score / csat), `nps` 9 (score / nps) |
+| A customer list | list / records | one `_no_metric` row per customer, all details in `attributes` |
+
+If a source only has monthly totals, load monthly totals — the grain is "the
+smallest the source provides".
 
 ## Loading data safely
 
-- `(client_id, source_id, source_record_id)` is unique, so re-loading the same
-  file or re-syncing QuickBooks uses `INSERT ... ON CONFLICT DO NOTHING` and never
-  creates duplicates.
-- Every row keeps `source_id`, so you can always answer "where did this number come from?".
+- **Preview first:** the client sees each column's role, each metric's
+  description, every step with its *why*, the first rows as stored and the
+  round-trip check; nothing is stored until "Accept and load" — and only if
+  the data and choices still match the preview (its fingerprint).
+- `(account_id, source_system, source_name, record_id, line_number,
+  field_name)` is unique. One statement inserts new rows, **skips** rows whose
+  `row_hash` is unchanged, and **updates** rows whose content changed
+  (`modified_at` moves, `added_at` never does). Tested: reloading the 18,210-row
+  sales sample wrote 0 rows; changing one amount updated 1.
+- Every row keeps `source_name` and `source_field`, so you can always answer
+  "where did this number come from?".
 
 ## Customers without IDs (fuzzy matching)
 
-QuickBooks has customer IDs; a client's spreadsheet often doesn't. When a new
-customer row arrives without an ID that matches:
-
-1. exact email → same customer (`match_status = 'exact_email'`)
-2. exact phone → same customer (`'exact_phone'`)
-3. fuzzy name ≥ 92 → same customer (`'fuzzy_auto'`); 80–91 → queued for a person to
-   confirm (`'fuzzy_reviewed'` once confirmed)
-4. otherwise a new customer (`'unmatched'`)
-
-Matched rows point at one `master_customer_key`, so reports count each real
-customer once. Code: `api/services/entity_matching.py`.
+QuickBooks has customer IDs; a client's spreadsheet often doesn't. Matching
+the same customer across sources (exact email → exact phone → fuzzy name ≥ 92
+automatically, 80–91 for a person to confirm) is done in pandas when the data
+is read (`api/services/entity_matching.py`, [CONNECTORS.md](CONNECTORS.md)),
+not stored as a separate customer table.
 
 ## Privacy: Row Level Security (tested)
 
-Each warehouse table has a policy `client_id = current_setting('app.client_id')`.
-The API sets `SET LOCAL app.client_id = '<uuid>'` inside each transaction.
-Verified on PostgreSQL 16 with a non-superuser role:
+`fact.account_data` has the policy `account_id = current_setting('app.account_id')`,
+forced for the table owner too. The API sets it with
+`set_config('app.account_id', '<uuid>', true)` inside each transaction **and**
+filters every query by `account_id`. Verified on PostgreSQL 16 with a login
+that doesn't bypass RLS:
 
-- client A's session sees only client A's rows;
-- with no client set, **zero** rows are visible;
-- inserting a row tagged with another client's ID is **rejected**.
+- the owning account's session sees its rows;
+- another account, or no account set, sees **zero** rows.
 
-Use a dedicated non-superuser role for the API (grants are at the bottom of
-`db/warehouse.sql`); superusers bypass RLS.
+The API's own login (Supabase's `postgres`) can bypass RLS — it needs to, to
+read the `dim` tables — which is why every query also names the account.
 
 ## Industry benchmarks (why we ask for NAICS)
 
-Because every client is in the same tables with a NAICS subsector, you can
-compare a client to anonymized peers in one query, e.g. average invoice size for
-all `naics_subsector = '722'` (restaurants). Only show peer groups of 5+ clients
-so no single business can be identified.
+Because every client is in the same table, and `dim.accounts` has the NAICS
+subsector, you can compare a client to anonymized peers in one query, e.g.
+average invoice size for all restaurants (`naics_subsector = '722'`). Only show
+peer groups of 5+ clients so no single business can be identified.
 
 ## Growing later
 
-- **Hundreds of millions of events:** partition `fact_event` by `date_key` range.
-- **A client needs a field everyone will need:** promote it from `attributes`
-  to a real column (one migration, all clients benefit).
+- **Hundreds of millions of rows:** partition `account_data` by `account_id`
+  hash or `event_date` range.
+- **A field everyone needs:** promote it from `attributes` to a real column
+  (one migration, all clients benefit).
+- **Fast dashboards on huge data:** a materialized view per common question
+  (monthly revenue by store), refreshed after each load.
 - **Dedicated database for one big client:** same schema, separate instance.

@@ -1,18 +1,22 @@
 """
-Plan a load into the warehouse — and explain every change BEFORE anything is stored.
+Plan a load into fact.account_data — and explain every change BEFORE anything is stored.
 
 WHAT THIS FILE DOES
 -------------------
-Data Engineering clients can have their cleaned data stored in the shared
-warehouse (db/warehouse.sql, docs/DATA_MODEL.md). A spreadsheet doesn't fit
-those tables as-is: one sales file has to become a customers table, a
-products table, and one "event" row per sale. This module works out that
-TRANSFORMATION and produces:
+Data Engineering clients can have their cleaned data stored in
+fact.account_data (db/schema.sql; the design is "Unified data" in
+docs/DATA_MODEL.md). Every file is stored in the same shape: IDs, dates and
+categories kept as they are, every number that is measured turned into its
+own row (metric_type, metric_subtype, metric_unit, metric_value). This module
+works out that reshape with api/services/unified.py and produces:
 
   * the STEPS, each with a plain-English WHY (shown to the client),
-  * a PREVIEW of the first rows of each warehouse table as it will look,
-  * the COUNTS (rows to load, rows skipped and why, customers, products),
-  * a FINGERPRINT of the plan.
+  * the COLUMN PLAN: each column's role, its shared name, and — for metrics —
+    what it measures, with a confidence (the client can change any of it),
+  * a PREVIEW of the first rows exactly as they will be stored,
+  * the ROUND-TRIP CHECK: the rows are turned back into the original table
+    and compared cell by cell, so nothing can be lost by storing them,
+  * the COUNTS and a FINGERPRINT of the plan.
 
 The client reads the preview and either accepts or walks away. Only an
 accepted plan is loaded (api/services/warehouse_store.py), and only if its
@@ -20,27 +24,12 @@ fingerprint still matches — so what gets stored is exactly what they saw.
 
 Everything here is plain pandas and stores nothing.
 
-THE MAPPING
------------
-Each warehouse field ("role") is filled from one of the client's columns:
-
-    date             when it happened (required)          -> fact_event.date_key
-    amount           money                                -> fact_event.amount
-    quantity         units                                -> fact_event.quantity
-    score            CSAT / rating / NPS                  -> fact_event.score
-    record_id        the row's own id (order line id)     -> fact_event.source_record_id
-    reference        invoice # / order #                  -> fact_event.reference_number
-    status           open / paid / ...                    -> fact_event.status
-    customer_id      the customer's id in their system    -> dim_customer.source_customer_id
-    customer_name    \
-    customer_email    }-> dim_customer
-    customer_phone   /
-    product          product or service name              -> dim_product.name
-    product_category                                      -> dim_product.category
-
-The columns are guessed from their names (and types); the client can change
-any guess in the preview. Columns not used go into `attributes` (JSON), so
-nothing is lost and no client ever needs tables of their own.
+THE CLIENT'S CHOICES (all optional; the server guesses the rest)
+-----------------------------------------------------------------
+    event_type      what the rows are: "transaction/income", "list/records", ...
+    metric_columns  exactly which columns are metrics (numbers that are measured)
+    id_columns      columns that are IDs (never summed, even if they are numbers)
+    metric_map      {column: {"type", "subtype", "unit"}}: fix a metric's description
 """
 
 from __future__ import annotations
@@ -51,11 +40,11 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from api.services.entity_matching import normalize_email, normalize_name
-from data_skills._core import as_datetime, date_columns, numeric_columns
+from api.services import unified
 
-# The event types a file can be loaded as. Mirrors the seed rows of
-# warehouse.dim_event_type in db/warehouse.sql ("type/subtype").
+# What the rows can be stored as (account_data.event_type / event_subtype).
+# The QuickBooks entities in unified.QUICKBOOKS_ENTITIES use these pairs too
+# (tests/test_unified.py checks it).
 EVENT_TYPES: dict[str, dict] = {
     "transaction/income": {"label": "Sales / income (money in)", "measure": "amount"},
     "transaction/expense": {"label": "Expenses (money out)", "measure": "amount"},
@@ -67,36 +56,14 @@ EVENT_TYPES: dict[str, dict] = {
     "feedback/rating": {"label": "Ratings / reviews", "measure": "score"},
     "feedback/nps": {"label": "Net Promoter Score responses", "measure": "score"},
     "inventory/adjustment": {"label": "Inventory changes", "measure": "quantity"},
+    "payroll/gross_pay": {"label": "Payroll (gross pay)", "measure": "amount"},
+    "list/records": {"label": "A list, not events (customers, products, employees...)", "measure": "count"},
 }
 
-# A negative amount means the money went the OTHER way. The warehouse keeps
-# amounts positive, so the row moves to the opposite event type.
-FLIP_NEGATIVE = {
-    "transaction/income": "transaction/refund",
-    "transaction/expense": "transaction/income",
-    "transaction/refund": "transaction/income",
-}
-
-# (role id, label shown in the preview, words in a column name that suggest it)
-ROLES: list[tuple[str, str, tuple[str, ...]]] = [
-    ("date", "Date (required)", ("order_date", "date", "day", "created", "time", "_at")),
-    ("amount", "Amount ($)", ("amount", "total", "revenue", "sales", "price", "cost", "paid", "balance", "value")),
-    ("quantity", "Quantity", ("quantity", "qty", "units")),
-    ("score", "Score (CSAT / rating / NPS)", ("csat", "score", "rating", "nps", "stars")),
-    ("record_id", "Row ID", ("line_id", "transaction_id", "record_id", "row_id", "event_id")),
-    ("reference", "Reference # (order / invoice)", ("order_id", "invoice", "order_number", "receipt", "reference")),
-    ("status", "Status", ("status", "state_of")),
-    ("customer_id", "Customer ID", ("customer_id", "client_id", "cust_id")),
-    ("customer_name", "Customer name", ("customer_name", "client_name", "displayname", "full_name", "company", "name")),
-    ("customer_email", "Customer email", ("email", "e_mail")),
-    ("customer_phone", "Customer phone", ("phone", "mobile", "cell")),
-    ("product", "Product / service", ("product", "item", "service", "sku")),
-    ("product_category", "Product category", ("category", "product_type", "department")),
-]
-ROLE_IDS = [r[0] for r in ROLES]
-ID_ROLES = {"record_id", "reference", "customer_id"}   # the only roles an "..._id" column may fill
-PREVIEW_ROWS = 5
-FIRST_DAY, LAST_DAY = pd.Timestamp("2000-01-01"), pd.Timestamp("2040-12-31")   # dim_date's range
+ROLES = {"metric": "Metric (a number that is measured)", "id": "ID", "date": "Date",
+         "category": "Category / description"}
+PREVIEW_ROWS = 8
+CHOICE_KEYS = ("metric_columns", "id_columns", "metric_map")
 
 
 @dataclass
@@ -105,18 +72,18 @@ class LoadPlan:
 
     source_name: str
     event_type: str
-    mapping: dict[str, str | None]
     columns: list[str]
+    column_plan: list[dict]
+    choices: dict
     steps: list[dict]
     tables: dict[str, dict]
     counts: dict[str, int]
-    skipped: dict[str, int]
+    round_trip: dict
     fingerprint: str
     problem: str | None = None
-    # Prepared rows for warehouse_store (not sent to the browser).
-    facts: list[dict] = field(default_factory=list)
-    customers: list[dict] = field(default_factory=list)
-    products: list[dict] = field(default_factory=list)
+    source_system: str = "file_upload"
+    # The unified rows for warehouse_store (not sent to the browser).
+    rows: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def to_dict(self) -> dict:
         """
@@ -126,13 +93,12 @@ class LoadPlan:
             dict: everything except the prepared rows.
         """
         return {
-            "source_name": self.source_name, "event_type": self.event_type,
+            "source_name": self.source_name, "source_system": self.source_system, "event_type": self.event_type,
             "event_types": [{"id": k, **v} for k, v in EVENT_TYPES.items()],
-            "mapping": self.mapping, "columns": self.columns,
-            "roles": [{"id": rid, "label": label} for rid, label, _ in ROLES],
-            "steps": self.steps, "tables": self.tables, "counts": self.counts,
-            "skipped": self.skipped, "fingerprint": self.fingerprint,
-            "problem": self.problem, "ready": self.problem is None,
+            "roles": [{"id": k, "label": v} for k, v in ROLES.items()],
+            "columns": self.columns, "column_plan": self.column_plan, "choices": self.choices,
+            "steps": self.steps, "tables": self.tables, "counts": self.counts, "round_trip": self.round_trip,
+            "fingerprint": self.fingerprint, "problem": self.problem, "ready": self.problem is None,
         }
 
 
@@ -141,67 +107,17 @@ def _norm(col: str) -> str:
     return str(col).strip().lower().replace(" ", "_").replace("-", "_")
 
 
-def suggest_mapping(df: pd.DataFrame) -> dict[str, str | None]:
-    """
-    Guess which column fills each warehouse field, from column names and types.
-
-    Each column is used at most once, roles are filled in the order of ROLES,
-    and earlier hints win ("order_date" before any other "date"). The date must
-    actually hold dates; amount / quantity / score must be numbers.
-
-    Args:
-        df: pd.DataFrame, the cleaned table.
-
-    Returns:
-        dict: role id -> column name (or None when nothing fits).
-
-    Example:
-        >>> suggest_mapping(pd.DataFrame({"order_date": ["2024-10-11"], "amount": [21.0],
-        ...                               "product": ["Sourdough Loaf"]}))["product"]
-        'product'
-    """
-    dates = set(date_columns(df))
-    numbers = set(numeric_columns(df, exclude_ids=False))
-    used: set[str] = set()
-    mapping: dict[str, str | None] = {}
-    for role, _, hints in ROLES:
-        choice = None
-        for hint in hints:
-            for col in df.columns:
-                name = _norm(col)
-                if col in used or hint not in name:
-                    continue
-                if role == "date" and col not in dates:
-                    continue
-                if role in ("amount", "quantity", "score") and col not in numbers:
-                    continue
-                if role != "date" and col in dates:
-                    continue
-                if role not in ID_ROLES and name.endswith("_id"):
-                    continue    # "line_item_id" is not a product name
-                choice = col
-                break
-            if choice:
-                break
-        if role == "date" and choice is None and dates:
-            choice = next(c for c in df.columns if c in dates)   # any date column will do
-        mapping[role] = choice
-        if choice:
-            used.add(choice)
-    return mapping
-
-
 def suggest_event_type(mapping: dict[str, str | None], columns: list[str] | None = None,
                        source_name: str = "") -> str:
     """
-    Guess what the rows ARE from the fields found, the column names and the file name.
+    Guess what the rows ARE from the metrics found, the column names and the file name.
 
-    A score and no amount -> CSAT feedback; expense-like words (expense,
-    vendor, supplier, bill, spend) in a column or the file name -> expenses;
-    otherwise sales / income. The client can change the guess in the preview.
+    A score and no amount -> CSAT (or NPS) feedback; expense-like words
+    (expense, vendor, supplier, bill, spend) in a column or the file name ->
+    expenses; otherwise sales / income. The client can change the guess.
 
     Args:
-        mapping: dict, role id -> column name.
+        mapping: dict, {"amount": a money column or None, "score": a score column or None}.
         columns: list[str] | None, every column name in the table.
         source_name: str, the table's label or file name.
 
@@ -222,270 +138,222 @@ def suggest_event_type(mapping: dict[str, str | None], columns: list[str] | None
     return "transaction/income"
 
 
-def _clean_text(value) -> str | None:
-    """A cell as trimmed text; None for blanks and missing values."""
-    if value is None or (not isinstance(value, str) and pd.isna(value)):
-        return None
-    text = str(value).strip()
-    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():   # 1155.0 (an id read as a float) -> 1155
-        text = text[:-2]
-    return text or None
+def _clean_choices(choices: dict | None, df: pd.DataFrame) -> dict:
+    """
+    Check the client's choices and keep only what applies.
+
+    Returns:
+        dict: {"metric_columns": list | None, "id_columns": list | None, "metric_map": dict | None}.
+
+    Raises:
+        ValueError: an unknown key, a wrong type, or a column that isn't in the table.
+    """
+    choices = dict(choices or {})
+    unknown = [k for k in choices if k not in CHOICE_KEYS]
+    if unknown:
+        raise ValueError(f"Unknown choice(s): {', '.join(unknown)}.")
+    out: dict = {}
+    for key in ("metric_columns", "id_columns"):
+        value = choices.get(key)
+        if value is not None and (not isinstance(value, list) or not all(isinstance(c, str) for c in value)):
+            raise ValueError(f"'{key}' must be a list of column names.")
+        out[key] = value
+    metric_map = choices.get("metric_map")
+    if metric_map is not None and not isinstance(metric_map, dict):
+        raise ValueError("'metric_map' must be an object like {\"amount\": {\"type\": \"amount\", \"unit\": \"usd\"}}.")
+    out["metric_map"] = metric_map or None
+    for col in (out["metric_columns"] or []) + (out["id_columns"] or []) + list(out["metric_map"] or {}):
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' isn't in this table.")
+    return out
 
 
-def _json_value(value):
-    """One cell made JSON-safe for `attributes` (dates as ISO text; NaN dropped by the caller)."""
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if hasattr(value, "item"):     # numpy number -> plain Python number
-        return value.item()
-    return value
+def _table(rows: list[dict], columns: list[str], total: int, limit: int | None = PREVIEW_ROWS) -> dict:
+    """A preview table: the first rows (all when limit is None) and the full count."""
+    shown = rows if limit is None else rows[:limit]
+    return {"columns": columns, "rows": [{c: r.get(c) for c in columns} for r in shown], "total": total}
 
 
-def _table(rows: list[dict], columns: list[str], total: int) -> dict:
-    """A preview table: the first PREVIEW_ROWS rows and the full count."""
-    return {"columns": columns, "rows": [{c: r.get(c) for c in columns} for r in rows[:PREVIEW_ROWS]], "total": total}
+def _join(names: list[str], limit: int = 8) -> str:
+    """Up to `limit` names joined with commas, then "…"."""
+    return ", ".join(map(str, names[:limit])) + ("…" if len(names) > limit else "")
 
 
-def build_plan(df: pd.DataFrame, source_name: str, mapping: dict | None = None,
+def build_plan(df: pd.DataFrame, source_name: str, choices: dict | None = None,
                event_type: str | None = None) -> LoadPlan:
     """
-    Work out how a cleaned table becomes warehouse rows, with the WHY of each step.
+    Work out how a cleaned table becomes fact.account_data rows, with the WHY of each step.
 
     Args:
         df: pd.DataFrame, the cleaned table (the same data the client previewed).
         source_name: str, what the source is called (the table's label / file name).
-        mapping: dict | None, role id -> column the client chose. Missing roles
-            are guessed; a role sent as "" or None is switched OFF.
+        choices: dict | None, the client's changes (see the module docstring).
         event_type: str | None, an EVENT_TYPES key; guessed when None.
 
     Returns:
-        LoadPlan: steps, previews, counts, fingerprint and the prepared rows.
-        `problem` is set (and nothing can be loaded) when no date column is
-        mapped or no row is left to load.
+        LoadPlan: steps, column plan, preview, round-trip check, counts,
+        fingerprint and the prepared rows. `problem` is set (and nothing can be
+        loaded) when the table is empty or the round trip fails.
 
     Raises:
-        ValueError: for an unknown event type or a mapped column that doesn't exist.
+        ValueError: for an unknown event type, a bad choice, or a column that doesn't exist.
 
     Example:
         >>> plan = build_plan(pd.DataFrame({"order_date": ["2024-10-11"], "amount": [21.0]}), "sales.csv")
-        >>> plan.event_type, plan.counts["rows_to_load"]
-        ('transaction/income', 1)
+        >>> plan.event_type, plan.counts["rows_to_load"], plan.round_trip["ok"]
+        ('transaction/income', 1, True)
     """
-    guessed = suggest_mapping(df)
-    chosen = dict(guessed)
-    for role, col in (mapping or {}).items():
-        if role not in ROLE_IDS:
-            raise ValueError(f"Unknown field '{role}'.")
-        if col and col not in df.columns:
-            raise ValueError(f"Column '{col}' isn't in this table.")
-        chosen[role] = col or None
-    if not chosen["product"]:
-        chosen["product_category"] = None   # a category with no product stays in the extras
-    event_type = event_type or suggest_event_type(chosen, [str(c) for c in df.columns], source_name)
-    if event_type not in EVENT_TYPES:
+    clean = _clean_choices(choices, df)
+    if event_type is not None and event_type not in EVENT_TYPES:
         raise ValueError(f"Unknown event type '{event_type}'.")
-    measure = EVENT_TYPES[event_type]["measure"]
-    steps: list[dict] = []
-    skipped: dict[str, int] = {}
-    m = chosen
+    guessing = event_type is None
+    etype, esub = event_type.split("/") if event_type else (None, None)
+    # A guessed event leaves "amount means cost?" as a question for the client;
+    # a chosen one settles it.
+    plan = unified.plan_columns(df, event_type=etype, event_subtype=esub, **clean)
+    metrics = [p for p in plan if p["role"] == "metric"]
+    kept = [p for p in plan if p["role"] != "metric"]
+    if guessing:
+        first = lambda types: next((p["column"] for p in metrics if p["metric_type"] in types), None)   # noqa: E731
+        event_type = (suggest_event_type({"amount": first(("amount", "cost")), "score": first(("score",))},
+                                         [str(c) for c in df.columns], source_name)
+                      if metrics else "list/records")
+    store_type, store_sub = event_type.split("/")
+    columns = [str(c) for c in df.columns]
 
-    def plan_with_problem(problem: str) -> LoadPlan:
-        return LoadPlan(source_name=source_name, event_type=event_type, mapping=m, columns=[str(c) for c in df.columns],
-                        steps=steps, tables={}, counts={"rows_in": len(df), "rows_to_load": 0, "rows_skipped": len(df),
-                                                        "customers": 0, "products": 0},
-                        skipped=skipped, fingerprint="", problem=problem)
+    def finish(steps, tables, counts, check, rows, problem=None) -> LoadPlan:
+        # The fingerprint covers the choices AND the data, so a changed file or
+        # choice can't be loaded under an old acceptance.
+        keys = rows[["record_id", "line_number", "field_name", "row_hash"]].astype(str).values.tolist() if len(rows) else []
+        digest = hashlib.sha256(json.dumps(
+            {"source": source_name, "type": event_type, "choices": clean, "rows": keys},
+            sort_keys=True, default=str).encode()).hexdigest()[:24]
+        return LoadPlan(source_name=source_name, event_type=event_type, columns=columns, column_plan=plan,
+                        choices=clean, steps=steps, tables=tables, counts=counts, round_trip=check,
+                        fingerprint="" if problem else digest, problem=problem, rows=rows)
 
-    steps.append({
-        "title": f"Store each row as one \"{EVENT_TYPES[event_type]['label']}\" event",
-        "why": "The warehouse keeps every kind of business event (sales, expenses, invoices, feedback) in ONE "
-               "table, fact_event. A type and subtype say what each row is, so one dashboard or query works "
-               "across all of your sources.",
-    })
-    if not m["date"]:
-        return plan_with_problem("Pick the date column: every event needs the day it happened.")
+    steps: list[dict] = [{
+        "title": f"Store the rows as \"{EVENT_TYPES[event_type]['label']}\"",
+        "why": "Every source is stored in one table, fact.account_data. The type says what the rows are, so one "
+               "query or dashboard works across your sales, expenses, invoices and feedback.",
+    }]
+    if df.empty:
+        return finish(steps, {}, {"rows_in": 0, "records": 0, "rows_to_load": 0, "metrics": 0, "kept": 0,
+                                  "needs_review": 0, "duplicates": 0, "blanks": 0},
+                      {"ok": False, "cells_checked": 0, "mismatches": 0, "examples": []},
+                      pd.DataFrame(), "The table has no rows, so there is nothing to load.")
 
-    # 1. Dates -> date keys, dropping rows that can't be placed on the calendar.
-    when = as_datetime(df[m["date"]])
-    no_date = when.isna()
-    out_of_range = ~no_date & ((when < FIRST_DAY) | (when > LAST_DAY))
-    if no_date.any():
-        skipped["no readable date"] = int(no_date.sum())
-    if out_of_range.any():
-        skipped["date outside 2000–2040"] = int(out_of_range.sum())
-    keep = ~(no_date | out_of_range)
-    rows = df[keep].copy()
-    when = when[keep]
-    steps.append({
-        "title": f"Turn \"{m['date']}\" into a date key (YYYYMMDD)",
-        "why": "Each event links to the calendar table (dim_date), which already knows the month, quarter, "
-               "week and weekday — so reports can group by any of them without recalculating.",
-    })
-    if skipped:
+    # 1. Name each record, then reshape. keep_identical_rows=True keeps the
+    #    rows lined up for the round-trip proof; exact copies are then dropped
+    #    below (stored once), exactly as the database would.
+    id_col = unified.pick_record_id_column(df, plan)
+    date_col = next((p["column"] for p in plan if p["role"] == "date"), None)
+    long = unified.dataframe_to_unified(df, event_type=store_type, event_subtype=store_sub, date_column=date_col,
+                                        id_column=id_col, plan=plan, keep_identical_rows=True)
+    check = unified.round_trip(df, long, plan)
+    # Exact copies got IDs ending in "#2", "#3"... (a fingerprint never contains "#").
+    copy = long["record_id"].str.contains("#", regex=False) if not id_col else pd.Series(False, index=long.index)
+    rows = long[~copy].reset_index(drop=True)
+    rows.attrs["plan"] = plan
+    duplicates = int(long.loc[copy, "record_id"].nunique())
+
+    # 2. The steps, in plain English.
+    if kept:
         steps.append({
-            "title": f"Skip {sum(skipped.values()):,} row(s) that can't be placed on the calendar",
-            "why": "An event must happen on a day the calendar table knows. "
-                   + "; ".join(f"{n:,} with {reason}" for reason, n in skipped.items()) + ".",
+            "title": f"Keep {len(kept)} column(s) exactly as they are: {_join([p['column'] for p in kept])}",
+            "why": "IDs, dates and categories (store, customer, product, age group...) describe each record. They "
+                   "are stored unchanged with every number of that record, so you can filter and group by them.",
         })
-    if rows.empty:
-        return plan_with_problem("No rows have a usable date, so there is nothing to load.")
-
-    # 2. The measure (amount / quantity / score), and negative amounts.
-    types = pd.Series(event_type, index=rows.index)
-    amount = pd.to_numeric(rows[m["amount"]], errors="coerce") if m["amount"] else pd.Series(pd.NA, index=rows.index)
-    if m["amount"]:
-        negative = amount < 0
-        n_neg = int(negative.sum())
-        if n_neg:
-            flipped = FLIP_NEGATIVE.get(event_type)
-            if flipped:
-                types[negative] = flipped
-            steps.append({
-                "title": f"Make {n_neg:,} negative amount(s) positive"
-                         + (f" and store them as \"{EVENT_TYPES[flipped]['label']}\"" if flipped else ""),
-                "why": "The warehouse stores every amount as a positive number; the event type says which way "
-                       "the money moved (in or out). That keeps totals right when sources mix signs, and net "
-                       "cash is simply money in minus money out.",
-            })
-        amount = amount.abs()
-    elif measure == "amount":
-        steps.append({"title": "No amount column picked",
-                      "why": "These events will be counted but carry no dollar value. Pick an amount column to "
-                             "include money."})
-    quantity = pd.to_numeric(rows[m["quantity"]], errors="coerce") if m["quantity"] else None
-    score = pd.to_numeric(rows[m["score"]], errors="coerce") if m["score"] else None
-
-    # 3. Customers: one row per real customer, events point to it.
-    def customer_key(r) -> tuple[str | None, str]:
-        if m["customer_id"] and (v := _clean_text(r[m["customer_id"]])):
-            return f"id:{v}", "source_id"
-        if m["customer_email"] and (v := normalize_email(r[m["customer_email"]])):
-            return f"email:{v}", "exact_email"
-        if m["customer_name"] and (v := normalize_name(r[m["customer_name"]])):
-            return f"name:{v}", "unmatched"
-        return None, ""
-
-    customers: dict[str, dict] = {}
-    cust_keys: list[str | None] = []
-    for _, r in rows.iterrows():
-        key, how = customer_key(r)
-        cust_keys.append(key)
-        if key and key not in customers:
-            customers[key] = {
-                "source_customer_id": key, "match_status": how,
-                "name": _clean_text(r[m["customer_name"]]) if m["customer_name"] else None,
-                "email": normalize_email(r[m["customer_email"]]) or None if m["customer_email"] else None,
-                "phone": _clean_text(r[m["customer_phone"]]) if m["customer_phone"] else None,
-            }
-    if customers:
-        used = [m[k] for k in ("customer_id", "customer_name", "customer_email", "customer_phone") if m[k]]
+    renamed = [p for p in plan if p["mapped"] and unified.snake_case(p["column"]) != p["field_name"]]
+    if renamed:
         steps.append({
-            "title": f"Move customers into their own table: {len(customers):,} customer(s) from {len(rows):,} row(s)",
-            "why": f"Customer details ({', '.join(used)}) are stored ONCE in dim_customer and every sale points to "
-                   "that record. A fixed email or name then updates everywhere, and customers from other sources "
-                   "(QuickBooks later) can be matched to the same person.",
+            "title": "Use the shared names: " + _join([f"{p['column']} → {p['field_name']}" for p in renamed], 6),
+            "why": "Different sources name the same thing differently (QuickBooks says TxnDate, your file says "
+                   "order_date). Shared names line them up; your own column name is kept too (source_field), so "
+                   "every value can be traced back.",
         })
-
-    # 4. Products: one row per product, with its category.
-    products: dict[str, dict] = {}
-    prod_keys: list[str | None] = []
-    for _, r in rows.iterrows():
-        name = _clean_text(r[m["product"]]) if m["product"] else None
-        key = f"name:{name.lower()}" if name else None
-        prod_keys.append(key)
-        if key and key not in products:
-            products[key] = {"source_product_id": key, "name": name,
-                             "category": _clean_text(r[m["product_category"]]) if m["product_category"] else None}
-    if products:
+    if metrics:
         steps.append({
-            "title": f"Move products into their own table: {len(products):,} product(s)",
-            "why": "Product names and categories are stored once in dim_product, so renaming a product or "
-                   "changing its category doesn't mean editing every sale.",
+            "title": f"Turn {len(metrics)} number column(s) into metric rows: {_join([p['column'] for p in metrics])}",
+            "why": "Each number becomes one row with what it measures (type), which one (subtype), its unit and the "
+                   "value. A new kind of number from a new source is then just a new type — never a new column.",
         })
-
-    # 5. A stable id per row, so loading the same file twice never duplicates.
-    record_col = m["record_id"]
-    unique_ids = record_col and rows[record_col].notna().all() and rows[record_col].is_unique
-    mapped_cols = {c for c in m.values() if c}
-    extras = [c for c in df.columns if c not in mapped_cols]
-    if unique_ids:
-        record_ids = [_clean_text(v) or "" for v in rows[record_col]]
-        steps.append({"title": f"Use \"{record_col}\" as each row's ID",
-                      "why": "Loading the same rows again (say, next month's export that overlaps) won't create "
-                             "duplicates: a row whose ID is already stored is skipped."})
     else:
-        snapshot = rows.astype("string").fillna("")
-        record_ids = [hashlib.sha1("\x1f".join(vals).encode()).hexdigest()[:20] for vals in snapshot.itertuples(index=False)]
-        why = ("Each row gets an ID made from its contents (a fingerprint), so loading the same rows again "
-               "won't create duplicates.")
-        if record_col:
-            why += f" \"{record_col}\" can't be used: some values are blank or repeated."
-        steps.append({"title": "Give each row a fingerprint ID", "why": why})
-    if extras:
         steps.append({
-            "title": f"Keep {len(extras)} other column(s) as extras: {', '.join(map(str, extras[:8]))}"
-                     + ("…" if len(extras) > 8 else ""),
-            "why": "Columns that aren't standard warehouse fields go into each event's \"attributes\" (JSON). "
-                   "Nothing is lost, and no client ever needs tables or columns of their own.",
+            "title": "No number columns: store one row per record with its details",
+            "why": "This table has nothing to add up (a list of customers or products, say). Each record is still "
+                   "stored once, with all of its columns, so it can be joined with your other data later.",
         })
-    steps.append({
-        "title": "Tag every row with your client ID",
-        "why": "All clients share the same tables; row-level security means a query only ever sees your rows.",
-    })
-
-    # The fact rows, ready to write.
-    facts: list[dict] = []
-    for i, (idx, r) in enumerate(rows.iterrows()):
-        attrs = {str(c): _json_value(r[c]) for c in extras if not (not isinstance(r[c], str) and pd.isna(r[c]))}
-        amt = amount.loc[idx]
-        facts.append({
-            "event_type": types.loc[idx],
-            "date_key": int(when.loc[idx].strftime("%Y%m%d")),
-            "source_record_id": record_ids[i],
-            "customer": cust_keys[i], "product": prod_keys[i],
-            "amount": None if pd.isna(amt) else round(float(amt), 2),
-            "quantity": None if quantity is None or pd.isna(quantity.loc[idx]) else round(float(quantity.loc[idx]), 3),
-            "score": None if score is None or pd.isna(score.loc[idx]) else round(float(score.loc[idx]), 2),
-            "reference_number": _clean_text(r[m["reference"]]) if m["reference"] else None,
-            "status": _clean_text(r[m["status"]]) if m["status"] else None,
-            "attributes": attrs,
+    review = [p["column"] for p in metrics if p["confidence"] in ("low", "medium")]
+    if review:
+        steps.append({
+            "title": f"Please check: {_join(review)}",
+            "why": "We guessed what these measure from their names (see the confidence below). Change the type, "
+                   "subtype or unit if it's wrong — they are stored with every value.",
         })
-    # Two rows with the same id: only the first can be stored (same as the database's UNIQUE rule).
-    seen: set[str] = set()
-    unique_facts = []
-    for f in facts:
-        if f["source_record_id"] not in seen:
-            seen.add(f["source_record_id"])
-            unique_facts.append(f)
-    if len(unique_facts) < len(facts):
-        skipped["repeated row ID"] = len(facts) - len(unique_facts)
-        steps.insert(-1, {
-            "title": f"Skip {skipped['repeated row ID']:,} repeated row(s)",
-            "why": "These rows have the same ID as an earlier row (exact copies), so only the first is stored.",
+    if id_col:
+        repeats = not df[id_col].is_unique
+        steps.append({
+            "title": f"Use \"{id_col}\" as each record's ID" + (" (repeats = lines 1, 2, 3 of that record)" if repeats else ""),
+            "why": "Loading the same rows again (an export that overlaps, say) won't create duplicates: a stored "
+                   "record whose content hasn't changed is skipped; a changed one is updated.",
         })
-    facts = unique_facts
+    else:
+        steps.append({
+            "title": "Give each row an ID made from its content (a fingerprint)",
+            "why": "The table has no column that names each row, so the row's own values make its ID. The same row "
+                   "loaded again gets the same ID, so it is never stored twice.",
+        })
+    if duplicates:
+        steps.append({"title": f"Store {duplicates:,} exact duplicate row(s) once",
+                      "why": "These rows are identical to an earlier row in the file, so storing them again would "
+                             "double-count them."})
+    if date_col is not None:
+        undated = int(df[date_col].notna().sum() - pd.to_datetime(df[date_col].astype("string"), errors="coerce",
+                                                                    format="mixed").notna().sum())
+        if undated:
+            steps.append({"title": f"Keep {undated:,} value(s) of \"{date_col}\" that aren't dates as written",
+                          "why": "They are stored unchanged (nothing is lost), but those rows have no date, so "
+                                 "they won't show on time charts until the value is fixed."})
+    measured = rows[rows["field_name"] != unified.NO_METRIC]
+    blanks = int(df[[p["column"] for p in metrics]].isna().sum().sum()) if metrics else 0
+    if blanks:
+        steps.append({"title": f"Don't store {blanks:,} blank number(s)",
+                      "why": "A blank has no value to store: no row means no value. Rebuilding the table still "
+                             "gives back the blank."})
+    if check["ok"]:
+        steps.append({
+            "title": f"Checked: rebuilding your table from these rows gives back all {check['cells_checked']:,} "
+                     "cells exactly",
+            "why": "We turned the rows back into your original table and compared every cell. Nothing is lost by "
+                   "storing your data this way, and \"Use my stored data\" gives you the same table back.",
+        })
+    steps.append({"title": "Tag every row with your account",
+                  "why": "All accounts share the same table; each query only ever reads your rows, and \"Delete "
+                         "stored data\" removes all of them at once."})
 
-    fact_cols = ["date_key", "event_type", "amount", "quantity", "score", "customer", "product",
-                 "reference_number", "status", "source_record_id", "attributes"]
-    preview_facts = [{**f, "attributes": json.dumps(f["attributes"], default=str)} for f in facts]
-    tables = {"fact_event": _table(preview_facts, fact_cols, len(facts))}
-    if customers:
-        tables["dim_customer"] = _table(list(customers.values()),
-                                        ["source_customer_id", "name", "email", "phone", "match_status"], len(customers))
-    if products:
-        tables["dim_product"] = _table(list(products.values()), ["source_product_id", "name", "category"], len(products))
-
-    # The fingerprint covers the choices AND the data, so a changed file or
-    # mapping can't be loaded under an old acceptance.
-    digest = hashlib.sha256(json.dumps(
-        {"source": source_name, "type": event_type, "mapping": m,
-         "rows": [(f["source_record_id"], f["event_type"], f["amount"]) for f in facts]},
-        sort_keys=True, default=str).encode()).hexdigest()[:24]
-
-    return LoadPlan(
-        source_name=source_name, event_type=event_type, mapping=m, columns=[str(c) for c in df.columns],
-        steps=steps, tables=tables,
-        counts={"rows_in": len(df), "rows_to_load": len(facts), "rows_skipped": sum(skipped.values()),
-                "customers": len(customers), "products": len(products)},
-        skipped=skipped, fingerprint=digest, facts=facts,
-        customers=list(customers.values()), products=list(products.values()),
-    )
+    # 3. What the client sees: the column plan and the first stored rows.
+    plan_rows = [{"column": p["column"], "role": p["role"], "stored_as": p["field_name"],
+                  "metric_type": p["metric_type"], "metric_subtype": p["metric_subtype"],
+                  "metric_unit": p["metric_unit"], "confidence": p["confidence"]} for p in plan]
+    preview = [{"record_id": r["record_id"], "line_number": r["line_number"], "field_name": r["field_name"],
+                "metric_type": r["metric_type"], "metric_subtype": r["metric_subtype"],
+                "metric_unit": r["metric_unit"],
+                "metric_value": None if pd.isna(r["metric_value"]) else float(r["metric_value"]),
+                "source_field": r["source_field"], "attributes": unified.attributes_json(r["attributes"])}
+               for r in rows.head(PREVIEW_ROWS).to_dict("records")]
+    tables = {
+        "columns": _table(plan_rows, ["column", "role", "stored_as", "metric_type", "metric_subtype", "metric_unit",
+                                      "confidence"], len(plan_rows), limit=None),
+        "account_data": _table(preview, ["record_id", "line_number", "field_name", "metric_type", "metric_subtype",
+                                         "metric_unit", "metric_value", "source_field", "attributes"], len(rows)),
+    }
+    counts = {"rows_in": len(df), "records": int(rows[["record_id", "line_number"]].drop_duplicates().shape[0]),
+              "rows_to_load": len(rows), "metrics": len(metrics), "kept": len(kept), "needs_review": len(review),
+              "duplicates": duplicates, "blanks": blanks, "metric_rows": len(measured)}
+    problem = None
+    if not check["ok"]:
+        problem = (f"Rebuilding the table from the rows didn't give back every cell ({check['mismatches']:,} of "
+                   f"{check['cells_checked']:,} differ, e.g. {check['examples'][:1]}). Nothing can be loaded: "
+                   "check that number columns hold only numbers, or mark the column as a category.")
+    return finish(steps, tables, counts, check, rows, problem)

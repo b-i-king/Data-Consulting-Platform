@@ -7,7 +7,8 @@ All reads/writes of account data go through the functions below, so the
 rest of the app never writes SQL directly. Each function has two paths:
 
   * DATABASE path  — when `DATABASE_URL` is set, rows are written to
-                     Supabase/PostgreSQL (tables defined in db/schema.sql).
+                     Supabase/PostgreSQL: the `dim` schema of db/schema.sql
+                     (every table name below is written as dim.<table>).
   * MEMORY path    — when no database is configured (local development),
                      rows live in Python dictionaries and vanish on restart.
 
@@ -16,20 +17,21 @@ setting up Supabase first. Never rely on it in production.
 
 WHAT IS STORED (and what is NOT)
 --------------------------------
-Stored: name, email, account type, team membership, the services on each
-account's plan, the consultant (if any) assigned to each client, subscriptions
-and prepaid consulting hours (kept in sync by Stripe), a usage record per
-download (file name, row count, runtime, amount, and a one-way fingerprint of
-the result for fair use) for billing, each connector's refresh schedule,
-consultations (free and paid calls), storage consents and load-run summaries.
+Stored: name, email, account type, team membership, project interests, the
+consultant (if any) assigned to each client, subscriptions (kept in sync by
+Stripe), a usage record per download (file name, row count, runtime, amount,
+and a one-way fingerprint of the result for fair use) for billing, each
+connector's refresh schedule, consultations (free and paid calls), storage
+consents and load-run summaries.
 Passwords: only a Supabase user id, or a one-way hash in local mode.
 NOT stored here: the client's uploaded data. Files are processed in memory
 only. (Clients who consent to managed storage have cleaned rows loaded into
-the separate warehouse schema — api/services/warehouse_store.py.)
+fact.account_data — api/services/warehouse_store.py.)
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -39,11 +41,8 @@ from api.core import database
 _accounts: dict[str, dict] = {}         # account_id -> account
 _teams: dict[str, dict] = {}            # team_id -> team
 _usage: list[dict] = []                 # usage events
-_services: dict[str, dict[str, dict]] = {}   # account_id -> service_id -> row
 _consultants: dict[str, dict] = {}       # consultant_id -> consultant
-_subscriptions: dict[str, dict] = {}     # subscription id -> subscription
-_consulting: list[dict] = []             # prepaid consulting hours
-_plans: dict[str, dict] = {}             # plan id -> subscription_plans row (Stripe ids)
+_subscriptions: dict[str, dict] = {}     # subscription id -> subscription (with "items")
 _consultations: dict[str, dict] = {}     # consultation id -> consultations row
 _consents: list[dict] = []               # storage_consents rows
 _load_runs: list[dict] = []              # load_runs rows
@@ -88,7 +87,7 @@ async def get_account_by_email(email: str) -> dict | None:
     email = email.lower()
     if database.pool is None:
         return next((a for a in _accounts.values() if a["email"] == email), None)
-    row = await database.pool.fetchrow("SELECT * FROM accounts WHERE email = $1", email)
+    row = await database.pool.fetchrow("SELECT * FROM dim.accounts WHERE email = $1", email)
     return dict(row) if row else None
 
 
@@ -111,7 +110,7 @@ async def get_account(account_id: str) -> dict | None:
     """
     if database.pool is None:
         return _accounts.get(account_id)
-    row = await database.pool.fetchrow("SELECT * FROM accounts WHERE id = $1", uuid.UUID(account_id))
+    row = await database.pool.fetchrow("SELECT * FROM dim.accounts WHERE id = $1", uuid.UUID(account_id))
     return dict(row) if row else None
 
 
@@ -214,6 +213,7 @@ async def create_account(
         # Consultant: wants_consultant false -> consultant_id stays NULL.
         "wants_consultant": bool(wants_consultant),
         "consultant_id": consultant_id if wants_consultant else None,
+        "interested_services": [],      # "Projects with a consultant" (interest only)
         "stripe_customer_id": None,     # set the first time they pay (billing.py)
         # Password (api/services/auth.py): Supabase user id OR local hash.
         "auth_user_id": auth_user_id,
@@ -231,7 +231,7 @@ async def create_account(
     async with database.pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                """INSERT INTO accounts (id, account_type, first_name, last_name, email,
+                """INSERT INTO dim.accounts (id, account_type, first_name, last_name, email,
                                          company_name, team_id, team_role, status, last_login_at,
                                          industry_supersector, naics_sector, naics_subsector,
                                          company_size, location_geoname_id, location_city,
@@ -251,12 +251,12 @@ async def create_account(
             )
             if team:
                 await conn.execute(
-                    "INSERT INTO teams (id, name, owner_account_id) VALUES ($1, $2, $3)",
+                    "INSERT INTO dim.teams (id, name, owner_account_id) VALUES ($1, $2, $3)",
                     uuid.UUID(team_id), team["name"], uuid.UUID(account_id),
                 )
             if team_id:
                 await conn.execute(
-                    "UPDATE accounts SET team_id = $1 WHERE id = $2",
+                    "UPDATE dim.accounts SET team_id = $1 WHERE id = $2",
                     uuid.UUID(team_id), uuid.UUID(account_id),
                 )
     return account
@@ -282,7 +282,7 @@ async def touch_last_login(account_id: str) -> None:
             _accounts[account_id]["last_login_at"] = _now()
         return
     await database.pool.execute(
-        "UPDATE accounts SET last_login_at = now() WHERE id = $1", uuid.UUID(account_id)
+        "UPDATE dim.accounts SET last_login_at = now() WHERE id = $1", uuid.UUID(account_id)
     )
 
 
@@ -310,7 +310,7 @@ async def set_credentials(account_id: str, *, auth_user_id: str | None, password
             _accounts[account_id].update(auth_user_id=auth_user_id, password_hash=password_hash, status="active")
         return
     await database.pool.execute(
-        """UPDATE accounts SET auth_user_id = $2, password_hash = $3, status = 'active'
+        """UPDATE dim.accounts SET auth_user_id = $2, password_hash = $3, status = 'active'
            WHERE id = $1""",
         uuid.UUID(account_id), uuid.UUID(auth_user_id) if auth_user_id else None, password_hash,
     )
@@ -333,7 +333,7 @@ async def list_team_members(team_id: str) -> list[dict]:
     if database.pool is None:
         return [a for a in _accounts.values() if a["team_id"] == team_id]
     rows = await database.pool.fetch(
-        "SELECT * FROM accounts WHERE team_id = $1 ORDER BY created_at", uuid.UUID(team_id)
+        "SELECT * FROM dim.accounts WHERE team_id = $1 ORDER BY created_at", uuid.UUID(team_id)
     )
     return [dict(r) for r in rows]
 
@@ -354,7 +354,7 @@ async def get_team(team_id: str) -> dict | None:
     """
     if database.pool is None:
         return _teams.get(team_id)
-    row = await database.pool.fetchrow("SELECT * FROM teams WHERE id = $1", uuid.UUID(team_id))
+    row = await database.pool.fetchrow("SELECT * FROM dim.teams WHERE id = $1", uuid.UUID(team_id))
     return dict(row) if row else None
 
 
@@ -393,7 +393,7 @@ async def record_usage(
         _usage.append(event)
         return
     await database.pool.execute(
-        """INSERT INTO usage_events (account_id, dataset_name, row_count, runtime_seconds,
+        """INSERT INTO dim.usage_events (account_id, dataset_name, row_count, runtime_seconds,
                                      billable_minutes, amount_usd, consultant_id, data_fingerprint)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
         uuid.UUID(account_id), dataset_name, rows, runtime_seconds, billable_minutes, amount_usd,
@@ -426,7 +426,7 @@ async def recent_usage(account_id: str, since: datetime) -> list[dict]:
                         "amount_usd": u["amount_usd"]} for u in rows),
                       key=lambda r: r["created_at"], reverse=True)
     rows = await database.pool.fetch(
-        """SELECT created_at, data_fingerprint, amount_usd FROM usage_events
+        """SELECT created_at, data_fingerprint, amount_usd FROM dim.usage_events
            WHERE account_id = $1 AND created_at >= $2 ORDER BY created_at DESC""",
         uuid.UUID(account_id), since,
     )
@@ -434,67 +434,62 @@ async def recent_usage(account_id: str, since: datetime) -> list[dict]:
              "amount_usd": float(r["amount_usd"])} for r in rows]
 
 
-# ── Services on the plan (table account_services) ───────────────────────────
+# ── Project interests (column dim.accounts.interested_services) ─────────────
 
-async def list_services(account_id: str) -> list[str]:
+async def list_interests(account_id: str) -> list[str]:
     """
-    List the active service ids stored for this account (no defaults added here).
+    List the services this account would like a consultant's help with (interest only).
 
-    These are the account_services rows (project interests). Data Cleaning is not
-    added automatically; see entitlements.py for that rule.
+    These do NOT unlock tools (only a subscription does); see entitlements.py.
 
     Args:
         account_id: str, the plan holder's account id.
 
     Returns:
-        list[str]: service ids with status "active" (database order, not catalog order).
+        list[str]: service ids, in the order they were added.
 
     Example:
-        >>> await list_services(account_id)
+        >>> await list_interests(account_id)
         ['data_visualization']
     """
     if database.pool is None:
-        return [sid for sid, row in _services.get(account_id, {}).items() if row["status"] == "active"]
-    rows = await database.pool.fetch(
-        "SELECT service_id FROM account_services WHERE account_id = $1 AND status = 'active'",
-        uuid.UUID(account_id),
-    )
-    return [r["service_id"] for r in rows]
+        return list((_accounts.get(account_id) or {}).get("interested_services") or [])
+    value = await database.pool.fetchval(
+        "SELECT interested_services FROM dim.accounts WHERE id = $1", uuid.UUID(account_id))
+    return list(value or [])
 
 
-async def add_services(account_id: str, service_ids: list[str], source: str) -> None:
+async def add_interests(account_id: str, service_ids: list[str]) -> None:
     """
-    Add (or re-activate) services on an account's plan.
-
-    An id already on the plan is switched back to "active"; on the database path
-    its original `source` is kept, on the memory path the row is replaced.
+    Add services to an account's project interests (ids already there are kept once).
 
     Args:
         account_id: str, the plan holder's account id.
         service_ids: list[str], service ids to add.
-        source: str, where the request came from (e.g. "signup", "added").
 
     Returns:
-        None. Upserts account_services rows.
+        None. Updates dim.accounts.interested_services.
 
     Example:
-        >>> await add_services(account_id, ["data_visualization"], "added")
+        >>> await add_interests(account_id, ["data_visualization"])
     """
     if database.pool is None:
-        plan = _services.setdefault(account_id, {})
-        for sid in service_ids:
-            plan[sid] = {"status": "active", "source": source, "added_at": _now()}
+        acc = _accounts.get(account_id)
+        if acc is not None:
+            acc["interested_services"] = list(dict.fromkeys([*(acc.get("interested_services") or []), *service_ids]))
         return
-    for sid in service_ids:
-        await database.pool.execute(
-            """INSERT INTO account_services (account_id, service_id, status, source)
-               VALUES ($1, $2, 'active', $3)
-               ON CONFLICT (account_id, service_id) DO UPDATE SET status = 'active'""",
-            uuid.UUID(account_id), sid, source,
-        )
+    # array(SELECT DISTINCT ...) would lose the order, so add only the new ids, in order.
+    await database.pool.execute(
+        """UPDATE dim.accounts
+           SET interested_services = interested_services
+               || ARRAY(SELECT s FROM unnest($2::text[]) WITH ORDINALITY AS t(s, n)
+                        WHERE NOT s = ANY(interested_services) ORDER BY n)
+           WHERE id = $1""",
+        uuid.UUID(account_id), list(dict.fromkeys(service_ids)),
+    )
 
 
-# ── Consultants (table consultants) and their clients ───────────────────────
+# ── Consultants (table dim.consultants) and their clients ───────────────────────
 
 async def get_consultant_by_account(account_id: str) -> dict | None:
     """
@@ -512,7 +507,7 @@ async def get_consultant_by_account(account_id: str) -> dict | None:
     """
     if database.pool is None:
         return next((c for c in _consultants.values() if c["account_id"] == account_id), None)
-    row = await database.pool.fetchrow("SELECT * FROM consultants WHERE account_id = $1", uuid.UUID(account_id))
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultants WHERE account_id = $1", uuid.UUID(account_id))
     return dict(row) if row else None
 
 
@@ -532,7 +527,7 @@ async def get_consultant(consultant_id: str) -> dict | None:
     """
     if database.pool is None:
         return _consultants.get(consultant_id)
-    row = await database.pool.fetchrow("SELECT * FROM consultants WHERE id = $1", uuid.UUID(consultant_id))
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultants WHERE id = $1", uuid.UUID(consultant_id))
     return dict(row) if row else None
 
 
@@ -553,7 +548,7 @@ async def get_consultant_by_email(email: str) -> dict | None:
     email = email.lower()
     if database.pool is None:
         return next((c for c in _consultants.values() if c["email"] == email), None)
-    row = await database.pool.fetchrow("SELECT * FROM consultants WHERE email = $1", email)
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultants WHERE email = $1", email)
     return dict(row) if row else None
 
 
@@ -587,7 +582,7 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
                              "created_at": _now()}
         return _consultants[cid]
     row = await database.pool.fetchrow(
-        """INSERT INTO consultants (account_id, display_name, email, is_default)
+        """INSERT INTO dim.consultants (account_id, display_name, email, is_default)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (account_id) DO UPDATE SET is_default = EXCLUDED.is_default
            RETURNING *""",
@@ -616,7 +611,7 @@ async def list_clients(consultant_id: str) -> list[dict]:
         return sorted((a for a in _accounts.values() if a.get("consultant_id") == consultant_id),
                       key=lambda a: (a.get("company_name") or a["first_name"]).lower())
     rows = await database.pool.fetch(
-        """SELECT * FROM accounts WHERE consultant_id = $1
+        """SELECT * FROM dim.accounts WHERE consultant_id = $1
            ORDER BY lower(coalesce(company_name, first_name))""",
         uuid.UUID(consultant_id),
     )
@@ -644,13 +639,13 @@ async def assign_waiting_clients(consultant_id: str) -> int:
             a["consultant_id"] = consultant_id
         return len(waiting)
     result = await database.pool.execute(
-        "UPDATE accounts SET consultant_id = $1 WHERE wants_consultant AND consultant_id IS NULL",
+        "UPDATE dim.accounts SET consultant_id = $1 WHERE wants_consultant AND consultant_id IS NULL",
         uuid.UUID(consultant_id),
     )
     return int(result.split()[-1]) if result else 0
 
 
-# ── Payments: plans, subscriptions, consulting hours (see api/services/billing.py) ──
+# ── Payments: subscriptions (see api/services/billing.py) ───────────────────
 
 LIVE_STATUSES = ("active", "trialing", "past_due")   # these keep a plan switched on
 
@@ -675,7 +670,7 @@ async def set_stripe_customer(account_id: str, customer_id: str) -> None:
         if account_id in _accounts:
             _accounts[account_id]["stripe_customer_id"] = customer_id
         return
-    await database.pool.execute("UPDATE accounts SET stripe_customer_id = $2 WHERE id = $1",
+    await database.pool.execute("UPDATE dim.accounts SET stripe_customer_id = $2 WHERE id = $1",
                                 uuid.UUID(account_id), customer_id)
 
 
@@ -695,7 +690,7 @@ async def get_account_by_stripe_customer(customer_id: str) -> dict | None:
     """
     if database.pool is None:
         return next((a for a in _accounts.values() if a.get("stripe_customer_id") == customer_id), None)
-    row = await database.pool.fetchrow("SELECT * FROM accounts WHERE stripe_customer_id = $1", customer_id)
+    row = await database.pool.fetchrow("SELECT * FROM dim.accounts WHERE stripe_customer_id = $1", customer_id)
     return dict(row) if row else None
 
 
@@ -704,14 +699,13 @@ async def upsert_subscription(*, account_id: str, billing_interval: str, status:
                               cancel_at_period_end: bool = False, current_period_end: datetime | None = None,
                               subscription_id: str | None = None) -> dict:
     """
-    Create or update one subscription and REPLACE its items
-    (items = [{"plan_id": ..., "stripe_subscription_item_id": ...}]). Matched by
-    our id (test mode) or Stripe's id.
+    Create or update one subscription and REPLACE its tools
+    (items = [{"plan_id": ..., "stripe_subscription_item_id": ...}], stored as
+    one JSON list in dim.subscriptions.items). Matched by our id (test mode) or
+    Stripe's id.
 
     On the database path, `subscription_id` given -> UPDATE that row; otherwise
     INSERT, or update the existing row with the same `stripe_subscription_id`.
-    The row and its items change in ONE transaction (old items are deleted, the
-    new ones inserted).
 
     Args:
         account_id: str, the plan holder's account id.
@@ -750,30 +744,26 @@ async def upsert_subscription(*, account_id: str, billing_interval: str, status:
         sid = str(uuid.uuid4())
         _subscriptions[sid] = {"id": sid, "created_at": _now(), **row, "items": items}
         return _subscriptions[sid]
-    async with database.pool.acquire() as conn:
-        async with conn.transaction():      # the row and its items change together
-            if subscription_id:
-                rec = await conn.fetchrow(
-                    """UPDATE subscriptions SET billing_interval = $2, status = $3, cancel_at_period_end = $4,
-                              current_period_end = $5, updated_at = now() WHERE id = $1 RETURNING *""",
-                    uuid.UUID(subscription_id), billing_interval, status, cancel_at_period_end, current_period_end)
-            else:
-                rec = await conn.fetchrow(
-                    """INSERT INTO subscriptions (account_id, billing_interval, status, stripe_subscription_id,
-                                                  stripe_customer_id, cancel_at_period_end, current_period_end)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7)
-                       ON CONFLICT (stripe_subscription_id) DO UPDATE SET
-                           billing_interval = EXCLUDED.billing_interval, status = EXCLUDED.status,
-                           cancel_at_period_end = EXCLUDED.cancel_at_period_end,
-                           current_period_end = EXCLUDED.current_period_end, updated_at = now()
-                       RETURNING *""",
-                    uuid.UUID(account_id), billing_interval, status, stripe_subscription_id,
-                    stripe_customer_id, cancel_at_period_end, current_period_end)
-            await conn.execute("DELETE FROM subscription_items WHERE subscription_id = $1", rec["id"])
-            for item in items:
-                await conn.execute(
-                    """INSERT INTO subscription_items (subscription_id, plan_id, stripe_subscription_item_id)
-                       VALUES ($1, $2, $3)""", rec["id"], item["plan_id"], item["stripe_subscription_item_id"])
+    # The tools are one JSON list in the row, so the row and its tools always change together.
+    items_json = json.dumps(items)
+    if subscription_id:
+        rec = await database.pool.fetchrow(
+            """UPDATE dim.subscriptions SET billing_interval = $2, status = $3, cancel_at_period_end = $4,
+                      current_period_end = $5, items = $6::jsonb, updated_at = now() WHERE id = $1 RETURNING *""",
+            uuid.UUID(subscription_id), billing_interval, status, cancel_at_period_end, current_period_end,
+            items_json)
+    else:
+        rec = await database.pool.fetchrow(
+            """INSERT INTO dim.subscriptions (account_id, billing_interval, status, items, stripe_subscription_id,
+                                              stripe_customer_id, cancel_at_period_end, current_period_end)
+               VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+               ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+                   billing_interval = EXCLUDED.billing_interval, status = EXCLUDED.status, items = EXCLUDED.items,
+                   cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                   current_period_end = EXCLUDED.current_period_end, updated_at = now()
+               RETURNING *""",
+            uuid.UUID(account_id), billing_interval, status, items_json, stripe_subscription_id,
+            stripe_customer_id, cancel_at_period_end, current_period_end)
     return {**dict(rec), "items": items}
 
 
@@ -799,17 +789,28 @@ async def list_subscriptions(account_id: str, live_only: bool = True) -> list[di
         rows = [s for s in _subscriptions.values() if s["account_id"] == account_id
                 and (not live_only or s["status"] in LIVE_STATUSES)]
         return sorted(rows, key=lambda s: s["created_at"], reverse=True)
-    sql = "SELECT * FROM subscriptions WHERE account_id = $1"
+    sql = "SELECT * FROM dim.subscriptions WHERE account_id = $1"
     if live_only:
         sql += " AND status = ANY($2::text[])"
     sql += " ORDER BY created_at DESC"
     args = [uuid.UUID(account_id)] + ([list(LIVE_STATUSES)] if live_only else [])
     subs = [dict(r) for r in await database.pool.fetch(sql, *args)]
-    for s in subs:
-        rows = await database.pool.fetch(
-            "SELECT plan_id, stripe_subscription_item_id FROM subscription_items WHERE subscription_id = $1", s["id"])
-        s["items"] = [dict(r) for r in rows]
+    for sub in subs:
+        sub["items"] = _json_list(sub.get("items"))
     return subs
+
+
+def _json_list(value) -> list:
+    """
+    A JSONB list from asyncpg (it arrives as text) as a Python list.
+
+    Example:
+        >>> _json_list('[{"plan_id": "ai"}]')
+        [{'plan_id': 'ai'}]
+    """
+    if value is None:
+        return []
+    return json.loads(value) if isinstance(value, str) else list(value)
 
 
 async def set_subscription_status(subscription_id: str, status: str, cancel_at_period_end: bool = False) -> None:
@@ -833,153 +834,12 @@ async def set_subscription_status(subscription_id: str, status: str, cancel_at_p
                                                    updated_at=_now())
         return
     await database.pool.execute(
-        "UPDATE subscriptions SET status = $2, cancel_at_period_end = $3, updated_at = now() WHERE id = $1",
+        "UPDATE dim.subscriptions SET status = $2, cancel_at_period_end = $3, updated_at = now() WHERE id = $1",
         uuid.UUID(subscription_id), status, cancel_at_period_end,
     )
 
 
-async def record_consulting_purchase(*, account_id: str, hours: float, rate_per_hour_usd: float,
-                                     amount_usd: float, service_id: str | None = None,
-                                     stripe_checkout_session_id: str | None = None) -> None:
-    """
-    Save prepaid consulting hours (once per Stripe Checkout — the webhook may repeat).
-
-    A repeat with the same `stripe_checkout_session_id` is ignored, so Stripe
-    re-sending a webhook never doubles the hours. Rows are saved as "paid".
-
-    Args:
-        account_id: str, the client account that bought the hours.
-        hours: float, number of hours bought.
-        rate_per_hour_usd: float, hourly rate at purchase time.
-        amount_usd: float, total paid in US dollars.
-        service_id: str | None, the service the hours are for, if any.
-        stripe_checkout_session_id: str | None, Stripe Checkout id (None in test mode).
-
-    Returns:
-        None. Inserts a consulting_purchases row (unless it is a repeat).
-
-    Example:
-        >>> await record_consulting_purchase(account_id=aid, hours=2, rate_per_hour_usd=80.0,
-        ...                                  amount_usd=160.0)
-    """
-    row = {"account_id": account_id, "service_id": service_id, "hours": hours, "rate_per_hour_usd": rate_per_hour_usd,
-           "amount_usd": amount_usd, "stripe_checkout_session_id": stripe_checkout_session_id,
-           "status": "paid", "created_at": _now()}
-    if database.pool is None:
-        if stripe_checkout_session_id and any(c["stripe_checkout_session_id"] == stripe_checkout_session_id
-                                              for c in _consulting):
-            return
-        _consulting.append(row)
-        return
-    await database.pool.execute(
-        """INSERT INTO consulting_purchases (account_id, service_id, hours, rate_per_hour_usd, amount_usd,
-                                             stripe_checkout_session_id)
-           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (stripe_checkout_session_id) DO NOTHING""",
-        uuid.UUID(account_id), service_id, hours, rate_per_hour_usd, amount_usd, stripe_checkout_session_id,
-    )
-
-
-async def consulting_hours(account_id: str) -> float:
-    """
-    Return the total prepaid consulting hours bought by this account.
-
-    Only purchases with status "paid" count.
-
-    Args:
-        account_id: str, the client account id.
-
-    Returns:
-        float: total hours (0.0 if none).
-
-    Example:
-        >>> await consulting_hours(aid)
-        2.0
-    """
-    if database.pool is None:
-        return float(sum(c["hours"] for c in _consulting if c["account_id"] == account_id and c["status"] == "paid"))
-    value = await database.pool.fetchval(
-        "SELECT coalesce(sum(hours), 0) FROM consulting_purchases WHERE account_id = $1 AND status = 'paid'",
-        uuid.UUID(account_id),
-    )
-    return float(value)
-
-
-async def save_plan(plan: dict) -> None:
-    """
-    Upsert one subscription_plans row (scripts/sync_stripe.py).
-
-    Unlike insert_missing_plans, this overwrites an existing row, including its
-    Stripe product and price ids, and marks it active.
-
-    Args:
-        plan: dict, with "id", "name", "description", "service_ids",
-            "monthly_price_usd", "annual_price_usd" and optionally
-            "stripe_product_id", "stripe_monthly_price_id", "stripe_annual_price_id",
-            "sort_order" (default 0), "kind" (default "tool"), "is_base", "requires".
-
-    Returns:
-        None.
-
-    Example:
-        >>> await save_plan({"id": "ai", "name": "AI", "description": "...", "service_ids": ["ai"],
-        ...                  "monthly_price_usd": 29.0, "annual_price_usd": 290.0,
-        ...                  "stripe_product_id": "prod_..."})
-    """
-    if database.pool is None:
-        _plans[plan["id"]] = dict(plan)
-        return
-    await database.pool.execute(
-        """INSERT INTO subscription_plans (id, name, description, service_ids, monthly_price_usd, annual_price_usd,
-                                           stripe_product_id, stripe_monthly_price_id, stripe_annual_price_id,
-                                           active, sort_order, kind, is_base, requires, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12, $13, now())
-           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
-               kind = EXCLUDED.kind, is_base = EXCLUDED.is_base, requires = EXCLUDED.requires,
-               service_ids = EXCLUDED.service_ids, monthly_price_usd = EXCLUDED.monthly_price_usd,
-               annual_price_usd = EXCLUDED.annual_price_usd, stripe_product_id = EXCLUDED.stripe_product_id,
-               stripe_monthly_price_id = EXCLUDED.stripe_monthly_price_id,
-               stripe_annual_price_id = EXCLUDED.stripe_annual_price_id, active = true,
-               sort_order = EXCLUDED.sort_order, updated_at = now()""",
-        plan["id"], plan["name"], plan["description"], list(plan["service_ids"]), plan["monthly_price_usd"],
-        plan["annual_price_usd"], plan.get("stripe_product_id"), plan.get("stripe_monthly_price_id"),
-        plan.get("stripe_annual_price_id"), plan.get("sort_order", 0), plan.get("kind", "tool"),
-        bool(plan.get("is_base")), list(plan.get("requires", [])),
-    )
-
-
-async def insert_missing_plans(plans: list[dict]) -> None:
-    """
-    Add plan rows that don't exist yet; existing rows (and their Stripe ids) are left alone.
-
-    Args:
-        plans: list[dict], one dict per plan with "id", "name", "description",
-            "service_ids", "monthly_price_usd", "annual_price_usd", "sort_order",
-            and optionally "kind", "is_base", "requires" (see billing.ensure_plans).
-
-    Returns:
-        None.
-
-    Example:
-        >>> await insert_missing_plans([{"id": "ai", "name": "AI", "description": "...",
-        ...                              "service_ids": ["ai"], "monthly_price_usd": 29.0,
-        ...                              "annual_price_usd": 290.0, "sort_order": 6}])
-    """
-    if database.pool is None:
-        for plan in plans:
-            _plans.setdefault(plan["id"], dict(plan))
-        return
-    for plan in plans:
-        await database.pool.execute(
-            """INSERT INTO subscription_plans (id, name, description, service_ids, monthly_price_usd,
-                                               annual_price_usd, sort_order, kind, is_base, requires)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING""",
-            plan["id"], plan["name"], plan["description"], plan["service_ids"], plan["monthly_price_usd"],
-            plan["annual_price_usd"], plan["sort_order"], plan.get("kind", "tool"), bool(plan.get("is_base")),
-            list(plan.get("requires", [])),
-        )
-
-
-# ── Consultations (table consultations; see api/services/consultations.py) ──
+# ── Consultations (table dim.consultations; see api/services/consultations.py) ──
 
 _CONSULTATION_FIELDS = ("account_id", "attendee_email", "attendee_name", "kind", "status", "source",
                         "calcom_booking_uid", "starts_at", "ends_at", "confirmed_by", "confirmed_at", "note")
@@ -1032,14 +892,14 @@ async def save_consultation(row: dict) -> dict:
     if row.get("id"):
         sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
         rec = await database.pool.fetchrow(
-            f"UPDATE consultations SET {sets}, updated_at = now() WHERE id = $1 RETURNING *",
+            f"UPDATE dim.consultations SET {sets}, updated_at = now() WHERE id = $1 RETURNING *",
             uuid.UUID(str(row["id"])), *(_db_value(k, v) for k, v in fields.items()),
         )
     else:
         cols = ", ".join(fields)
         marks = ", ".join(f"${i + 1}" for i in range(len(fields)))
         rec = await database.pool.fetchrow(
-            f"INSERT INTO consultations ({cols}) VALUES ({marks}) RETURNING *",
+            f"INSERT INTO dim.consultations ({cols}) VALUES ({marks}) RETURNING *",
             *(_db_value(k, v) for k, v in fields.items()),
         )
     return dict(rec)
@@ -1065,7 +925,7 @@ async def get_consultation(consultation_id: str) -> dict | None:
         key = uuid.UUID(consultation_id)
     except ValueError:
         return None
-    row = await database.pool.fetchrow("SELECT * FROM consultations WHERE id = $1", key)
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultations WHERE id = $1", key)
     return dict(row) if row else None
 
 
@@ -1085,7 +945,7 @@ async def get_consultation_by_booking(uid: str) -> dict | None:
     """
     if database.pool is None:
         return next((c for c in _consultations.values() if c["calcom_booking_uid"] == uid), None)
-    row = await database.pool.fetchrow("SELECT * FROM consultations WHERE calcom_booking_uid = $1", uid)
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultations WHERE calcom_booking_uid = $1", uid)
     return dict(row) if row else None
 
 
@@ -1114,7 +974,7 @@ async def list_consultations(account_id: str, email: str | None = None) -> list[
                 or (email and not c.get("account_id") and c.get("attendee_email") == email)]
         return sorted(rows, key=lambda c: c["created_at"], reverse=True)
     rows = await database.pool.fetch(
-        """SELECT * FROM consultations
+        """SELECT * FROM dim.consultations
            WHERE account_id = $1 OR (account_id IS NULL AND attendee_email = $2)
            ORDER BY created_at DESC""",
         uuid.UUID(account_id), email,
@@ -1142,7 +1002,7 @@ async def active_storage_consent(account_id: str) -> dict | None:
         live = [c for c in _consents if c["account_id"] == account_id and c["withdrawn_at"] is None]
         return live[-1] if live else None
     row = await database.pool.fetchrow(
-        """SELECT * FROM storage_consents WHERE account_id = $1 AND withdrawn_at IS NULL
+        """SELECT * FROM dim.storage_consents WHERE account_id = $1 AND withdrawn_at IS NULL
            ORDER BY consented_at DESC LIMIT 1""",
         uuid.UUID(account_id),
     )
@@ -1171,7 +1031,7 @@ async def add_storage_consent(account_id: str, terms_version: str, consented_by:
         _consents.append(row)
         return row
     rec = await database.pool.fetchrow(
-        """INSERT INTO storage_consents (account_id, terms_version, consented_by)
+        """INSERT INTO dim.storage_consents (account_id, terms_version, consented_by)
            VALUES ($1, $2, $3) RETURNING *""",
         uuid.UUID(account_id), terms_version, uuid.UUID(consented_by),
     )
@@ -1201,7 +1061,7 @@ async def withdraw_storage_consent(account_id: str) -> int:
             c["withdrawn_at"] = _now()
         return len(live)
     result = await database.pool.execute(
-        "UPDATE storage_consents SET withdrawn_at = now() WHERE account_id = $1 AND withdrawn_at IS NULL",
+        "UPDATE dim.storage_consents SET withdrawn_at = now() WHERE account_id = $1 AND withdrawn_at IS NULL",
         uuid.UUID(account_id),
     )
     return int(result.split()[-1]) if result else 0
@@ -1223,8 +1083,8 @@ async def save_load_run(row: dict) -> dict:
         >>> (await save_load_run({"id": run["id"], "status": "succeeded"}))["status"]
         'succeeded'
     """
-    allowed = ("account_id", "source", "source_name", "event_type", "rows_in", "rows_loaded", "rows_skipped",
-               "plan_fingerprint", "status", "error", "started_by", "finished_at")
+    allowed = ("account_id", "source", "source_name", "event_type", "rows_in", "rows_loaded", "rows_updated",
+               "rows_skipped", "column_plan", "plan_fingerprint", "status", "error", "started_by", "finished_at")
     fields = {k: v for k, v in row.items() if k in allowed}
     uuid_fields = {"account_id", "started_by"}
     if database.pool is None:
@@ -1232,21 +1092,32 @@ async def save_load_run(row: dict) -> dict:
             existing = next(r for r in _load_runs if r["id"] == row["id"])
             existing.update(fields)
             return existing
-        new = {"source": "file_upload", "rows_in": 0, "rows_loaded": 0, "rows_skipped": 0, "error": None,
-               "plan_fingerprint": None, "started_by": None, "finished_at": None,
-               **fields, "id": len(_load_runs) + 1, "started_at": _now()}
+        new = {"source": "file_upload", "rows_in": 0, "rows_loaded": 0, "rows_updated": 0, "rows_skipped": 0,
+               "column_plan": None, "error": None, "plan_fingerprint": None, "started_by": None,
+               "finished_at": None, **fields, "id": len(_load_runs) + 1, "started_at": _now()}
         _load_runs.append(new)
         return new
-    values = [uuid.UUID(str(v)) if k in uuid_fields and v else v for k, v in fields.items()]
+    values = [uuid.UUID(str(v)) if k in uuid_fields and v
+              else json.dumps(v, default=str) if k == "column_plan" and v is not None else v
+              for k, v in fields.items()]
+    cast = lambda k, i: f"${i}::jsonb" if k == "column_plan" else f"${i}"   # noqa: E731 — JSON goes in as text
     if row.get("id"):
-        sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
-        rec = await database.pool.fetchrow(f"UPDATE load_runs SET {sets} WHERE id = $1 RETURNING *",
+        sets = ", ".join(f"{k} = {cast(k, i + 2)}" for i, k in enumerate(fields))
+        rec = await database.pool.fetchrow(f"UPDATE dim.load_runs SET {sets} WHERE id = $1 RETURNING *",
                                            int(row["id"]), *values)
     else:
         cols = ", ".join(fields)
-        marks = ", ".join(f"${i + 1}" for i in range(len(fields)))
-        rec = await database.pool.fetchrow(f"INSERT INTO load_runs ({cols}) VALUES ({marks}) RETURNING *", *values)
-    return dict(rec)
+        marks = ", ".join(cast(k, i + 1) for i, k in enumerate(fields))
+        rec = await database.pool.fetchrow(f"INSERT INTO dim.load_runs ({cols}) VALUES ({marks}) RETURNING *", *values)
+    return _load_run_out(rec)
+
+
+def _load_run_out(rec) -> dict:
+    """A dim.load_runs row as a dict, with column_plan as a Python list (asyncpg gives JSON as text)."""
+    out = dict(rec)
+    if isinstance(out.get("column_plan"), str):
+        out["column_plan"] = json.loads(out["column_plan"])
+    return out
 
 
 async def list_load_runs(account_id: str, limit: int = 20) -> list[dict]:
@@ -1268,12 +1139,45 @@ async def list_load_runs(account_id: str, limit: int = 20) -> list[dict]:
         rows = [r for r in _load_runs if r["account_id"] == account_id]
         return sorted(rows, key=lambda r: r["started_at"], reverse=True)[:limit]
     rows = await database.pool.fetch(
-        "SELECT * FROM load_runs WHERE account_id = $1 ORDER BY started_at DESC LIMIT $2",
+        "SELECT * FROM dim.load_runs WHERE account_id = $1 ORDER BY started_at DESC LIMIT $2",
         uuid.UUID(account_id), limit,
     )
-    return [dict(r) for r in rows]
+    return [_load_run_out(r) for r in rows]
 
-# ── Data connections (table data_connections) ───────────────────────────────
+
+async def latest_column_plan(account_id: str, source: str, source_name: str) -> list[dict] | None:
+    """
+    How a source's columns were stored in its most recent successful load.
+
+    "Use my stored data" needs it to give the rebuilt table the client's own
+    column names and order (api/services/warehouse_store.py export).
+
+    Args:
+        account_id: str, the plan holder's account id.
+        source: str, the source system, e.g. "file_upload".
+        source_name: str, e.g. "sales.csv".
+
+    Returns:
+        list[dict] | None: the column plan (unified.plan_columns), or None when
+        no successful load recorded one.
+
+    Example:
+        >>> [c["column"] for c in await latest_column_plan(aid, "file_upload", "sales.csv")][:2]
+        ['order_id', 'order_date']
+    """
+    if database.pool is None:
+        runs = [r for r in _load_runs if r["account_id"] == account_id and r.get("source", "file_upload") == source
+                and r["source_name"] == source_name and r["status"] == "succeeded" and r.get("column_plan")]
+        return runs[-1]["column_plan"] if runs else None
+    value = await database.pool.fetchval(
+        """SELECT column_plan FROM dim.load_runs
+           WHERE account_id = $1 AND source = $2 AND source_name = $3 AND status = 'succeeded'
+             AND column_plan IS NOT NULL
+           ORDER BY started_at DESC LIMIT 1""",
+        uuid.UUID(account_id), source, source_name)
+    return json.loads(value) if isinstance(value, str) else value
+
+# ── Data connections (table dim.data_connections) ───────────────────────────
 
 async def list_connections(account_id: str) -> list[dict]:
     """
@@ -1294,7 +1198,7 @@ async def list_connections(account_id: str) -> list[dict]:
         return sorted((dict(c) for (aid, _), c in _connections.items() if aid == account_id),
                       key=lambda c: c["connector"])
     rows = await database.pool.fetch(
-        "SELECT * FROM data_connections WHERE account_id = $1 ORDER BY connector", uuid.UUID(account_id))
+        "SELECT * FROM dim.data_connections WHERE account_id = $1 ORDER BY connector", uuid.UUID(account_id))
     return [dict(r) for r in rows]
 
 
@@ -1330,7 +1234,7 @@ async def set_connection_frequency(*, account_id: str, connector: str, refresh_f
         row.update(refresh_frequency=refresh_frequency, next_sync_at=next_sync_at, updated_at=_now())
         return dict(row)
     row = await database.pool.fetchrow(
-        """INSERT INTO data_connections (account_id, consultant_id, connector, refresh_frequency, next_sync_at)
+        """INSERT INTO dim.data_connections (account_id, consultant_id, connector, refresh_frequency, next_sync_at)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (account_id, connector) DO UPDATE
                SET refresh_frequency = EXCLUDED.refresh_frequency,

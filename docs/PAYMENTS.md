@@ -3,15 +3,15 @@
 Code: [`api/services/billing.py`](../api/services/billing.py) (logic),
 [`api/routers/billing.py`](../api/routers/billing.py) (endpoints),
 [`scripts/sync_stripe.py`](../scripts/sync_stripe.py) (products and prices).
-Tables: `subscription_plans`, `subscriptions`, `consulting_purchases`
-([DATABASE.md](DATABASE.md)). Prices: [PRICING.md](PRICING.md).
+Table: `dim.subscriptions` (its tools in `items`; [DATABASE.md](DATABASE.md)). The tools
+and prices live in `pricing.py` and Stripe (no plans table). Prices: [PRICING.md](PRICING.md).
 
 ## What clients can buy
 
 | What | Stripe setup | Billed |
 |---|---|---|
-| A package of tools ("build your own") — Data Cleaning (base), Data Exploration & Analysis, Dashboards, Data Engineering, Data Science & ML, AI (needs Data Engineering) — or the All tools bundle | One **product** per tool (and the bundle), two **prices** each: monthly and annual (lookup keys `dcp_<tool>_month`, `dcp_<tool>_year`). One subscription holds **one item per tool**, all on the same interval | Recurring; the total is the sum of the tools; change tools anytime (prorated); cancel anytime in the billing portal |
-| Consulting sessions (after the free 30-minute consultation) | **Not in this app's Stripe.** Booked and paid on Cal.com (`PAID_BOOKING_URL`; Cal.com's own Stripe app takes the $80), usually one hour at a time | Per session, on Cal.com. (The older in-app prepaid-hours endpoint, `POST /api/billing/consulting-hours` with price `dcp_consulting_hour`, still exists but the website no longer uses it.) |
+| A package of tools ("build your own") — Data Cleaning (base), Data Exploration & Analysis, Dashboards, Data Engineering, Data Science & ML, AI (needs Data Engineering **and stored data**: `billing.ai_ready`) — or the All tools bundle | One **product** per tool (and the bundle), two **prices** each: monthly and annual (lookup keys `dcp_<tool>_month`, `dcp_<tool>_year`). One subscription holds **one item per tool**, all on the same interval | Recurring; the total is the sum of the tools; change tools anytime (prorated); cancel anytime in the billing portal |
+| Consulting sessions (after the free 30-minute consultation) | **Not in this app's Stripe.** Booked and paid on Cal.com (`PAID_BOOKING_URL`; Cal.com's own Stripe app takes the $80), usually one hour at a time | Per session, on Cal.com. Nothing about payment is stored here; `dim.consultations` only tracks whether the free call happened. |
 | Cleaning downloads without a plan | Not in Stripe yet: recorded in `usage_events` (per started minute) | Future: Stripe usage-based billing or a monthly invoice |
 
 Card details are typed on **Stripe's own page** (Checkout), so they never touch
@@ -20,8 +20,8 @@ our server. The webhook is the only thing that turns a plan on or off.
 ## Test mode (today)
 
 With no `STRIPE_SECRET_KEY`, the site runs in **test mode**: choosing a plan
-switches it on at once, "Cancel anytime" switches it off, buying hours records
-them, and nothing is charged. A banner in Plan & billing says so.
+switches it on at once, "Cancel anytime" switches it off, and nothing is
+charged. A banner in Plan & billing says so.
 
 ## Setting up Stripe (about 20 minutes)
 
@@ -34,7 +34,7 @@ them, and nothing is charged. A banner in Plan & billing says so.
    STRIPE_SECRET_KEY=sk_test_... python scripts/sync_stripe.py --dry-run   # look first
    STRIPE_SECRET_KEY=sk_test_... python scripts/sync_stripe.py
    ```
-   Add `DATABASE_URL=...` to also save the Stripe ids in `subscription_plans`.
+   Nothing is saved in the database: the app finds each price by its lookup key.
    Re-run it whenever you change a price: it creates the new price, moves the
    lookup key to it and archives the old one (existing subscribers keep their
    old price until you move them in Stripe).
@@ -59,7 +59,7 @@ them, and nothing is charged. A banner in Plan & billing says so.
 Plan & billing ──► POST /api/billing/checkout {plan_ids, interval} ──► Stripe Checkout page
                     (already subscribed? the subscription's items change in place, prorated)
                                                       │ client pays
-Stripe ──► POST /api/billing/webhook (signed) ──► subscriptions + subscription_items rows
+Stripe ──► POST /api/billing/webhook (signed) ──► dim.subscriptions row (items = the tools)
 Workspace ──► GET /api/accounts/services ──► plan's services unlocked
 "Manage billing" ──► POST /api/billing/portal ──► Stripe portal ──► cancel
 Stripe ──► webhook (cancel_at_period_end, then deleted) ──► plan off at period end

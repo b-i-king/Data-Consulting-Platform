@@ -286,9 +286,10 @@ SUBSCRIPTIONS: tuple[Subscription, ...] = (
     ),
     Subscription(
         id="ai", name="AI", requires=("data_engineering",),
-        description="Ask questions about your stored data in plain English. Needs Data Engineering.",
+        # Also needs data already STORED (fact.account_data): billing.ai_ready checks it at checkout.
+        description="Ask questions about your stored data in plain English. Needs Data Engineering and stored data.",
         service_ids=("ai",), monthly_usd=29.0, annual_usd=290.0,
-        includes=("Plain-English questions", "Answers with the math shown", "Requires Data Engineering"),
+        includes=("Plain-English questions", "Answers with the math shown", "Requires stored data (Data Engineering)"),
     ),
 )
 SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
@@ -439,9 +440,6 @@ def selection_price(plan_ids: list[str], interval: str) -> dict:
     bundle = price(SUBSCRIPTIONS_BY_ID[BUNDLE])
     return {"interval": interval, "plan_ids": picked, "lines": lines, "total_usd": total,
             "bundle_usd": bundle, "bundle_cheaper": picked != [BUNDLE] and total > bundle}
-
-
-CONSULTING_LOOKUP_KEY = "dcp_consulting_hour"   # Stripe price for one consulting hour
 
 
 def lookup_key(plan_id: str, interval: str) -> str:

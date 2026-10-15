@@ -8,16 +8,16 @@ For every TOOL (and the All tools bundle) in SUBSCRIPTIONS it makes sure Stripe 
     two PRICES   monthly and annual, found later by their "lookup key":
                  dcp_data_visualization_month, dcp_data_visualization_year
 A client's subscription holds one item per tool they pick ("build your own
-package"); the bundle is a single item.
-plus one price for prepaid consulting:  dcp_consulting_hour  (CONSULTING_RATE_PER_HOUR_USD)
+package"); the bundle is a single item. (Consulting time is paid on Cal.com,
+not through Stripe, so there is no consulting price here.)
 
 Stripe prices can't be edited once created. When you change a price in
 pricing.py, this script creates a NEW price, moves the lookup key to it
 (`transfer_lookup_key`), and archives the old one — existing subscribers keep
 their old price until you migrate them in the Stripe dashboard.
 
-With DATABASE_URL set, it also writes the Stripe ids into the
-`subscription_plans` table (db/schema.sql).
+Nothing is written to the database: the app finds each price in Stripe by
+its lookup key, so the tool list in pricing.py and Stripe are the only copies.
 
 RUN IT
 ------
@@ -29,16 +29,14 @@ Safe to run again: it only changes what differs.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from api.core import database  # noqa: E402
 from api.core.config import get_settings  # noqa: E402
-from api.services import account_store, pricing  # noqa: E402
+from api.services import pricing  # noqa: E402
 
 
 def _cents(usd: float) -> int:
@@ -75,7 +73,7 @@ def ensure_product(stripe, key: str, name: str, description: str, dry: bool, log
 
     Args:
         stripe: The configured `stripe` module (or a test double with the same API).
-        key: Our stable product key, e.g. a plan id or "consulting_hour".
+        key: Our stable product key: a plan id such as "data_visualization".
         name: Product name shown in Stripe and on invoices, e.g. "Dashboards".
         description: Product description ("" for none).
         dry: If True, only log; make no changes in Stripe.
@@ -86,8 +84,8 @@ def ensure_product(stripe, key: str, name: str, description: str, dry: bool, log
         product would have been created.
 
     Example:
-        >>> ensure_product(stripe, "consulting_hour", "Consulting (1 hour)", "", dry=False, log=print)
-        create product consulting_hour (Consulting (1 hour))
+        >>> ensure_product(stripe, "ai", "AI", "", dry=False, log=print)
+        create product ai (AI)
         'prod_...'
     """
     found = stripe.Product.search(query=f"metadata['dcp_key']:'{key}'", limit=1).data
@@ -158,13 +156,10 @@ def ensure_price(stripe, product_id: str | None, lookup_key: str, cents: int, in
 
 def sync(stripe, dry: bool = False, log=print) -> list[dict]:
     """
-    Sync every plan + the consulting hour. Returns the subscription_plans rows.
+    Sync every plan. Returns one summary row per plan (printed, not stored).
 
     For each plan in pricing.SUBSCRIPTIONS (in order) it ensures one product and two
-    prices (monthly and annual, via pricing.lookup_key). Then it ensures the
-    "Consulting (1 hour)" product and its one-time price under
-    pricing.CONSULTING_LOOKUP_KEY at pricing.consulting_rate(). The consulting hour is
-    not returned as a row (it is not a subscription plan).
+    prices (monthly and annual, via pricing.lookup_key).
 
     Args:
         stripe: The configured `stripe` module (or a test double with the same API).
@@ -172,7 +167,7 @@ def sync(stripe, dry: bool = False, log=print) -> list[dict]:
         log: Callable that receives one message string per change (default: print).
 
     Returns:
-        list[dict]: One row per plan for the `subscription_plans` table, with keys id, name,
+        list[dict]: One row per plan, with keys id, name,
         description, service_ids, monthly_price_usd, annual_price_usd, sort_order,
         stripe_product_id, kind, is_base, requires, stripe_monthly_price_id and
         stripe_annual_price_id (Stripe ids may be None in a dry run).
@@ -195,34 +190,7 @@ def sync(stripe, dry: bool = False, log=print) -> list[dict]:
             "stripe_annual_price_id": ensure_price(stripe, product, pricing.lookup_key(plan.id, "year"),
                                                    _cents(plan.annual_usd), "year", dry, log),
         })
-    consulting = ensure_product(stripe, "consulting_hour", "Consulting (1 hour)",
-                                "Prepaid consulting after your free 30-minute consultation.", dry, log)
-    ensure_price(stripe, consulting, pricing.CONSULTING_LOOKUP_KEY, _cents(pricing.consulting_rate()), None, dry, log)
     return rows
-
-
-async def _save(rows: list[dict]) -> None:
-    """
-    Write the plan rows (with their Stripe ids) into the subscription_plans table.
-
-    Opens the database connection pool, saves each row with account_store.save_plan,
-    and always closes the pool afterwards, even if a save fails.
-
-    Args:
-        rows: Plan rows as returned by sync().
-
-    Returns:
-        None. Side effect: inserts or updates rows in subscription_plans.
-
-    Example:
-        asyncio.run(_save(sync(stripe)))   # needs DATABASE_URL set
-    """
-    await database.init_pool()
-    try:
-        for row in rows:
-            await account_store.save_plan(row)
-    finally:
-        await database.close_pool()
 
 
 if __name__ == "__main__":
@@ -238,7 +206,6 @@ if __name__ == "__main__":
     mode = "LIVE" if settings.stripe_secret_key.startswith("sk_live") else "test"
     print(f"Syncing plans to Stripe ({mode} mode){' — dry run' if args.dry_run else ''}…")
     plan_rows = sync(stripe, dry=args.dry_run)
-    if settings.database_url and not args.dry_run:
-        asyncio.run(_save(plan_rows))
-        print(f"Saved {len(plan_rows)} plans to subscription_plans.")
+    for row in plan_rows:
+        print(f"  {row['id']}: {row['stripe_monthly_price_id']} (month), {row['stripe_annual_price_id']} (year)")
     print("Done.")

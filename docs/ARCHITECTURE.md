@@ -50,9 +50,10 @@ api/                      FastAPI backend (Python)
   services/validation.py    signup input rules: names, business names, emails
   services/locations.py     city search for the signup location picker
   services/intake.py        questionnaire answer choices
-  services/account_store.py accounts/teams/usage (Postgres or in-memory)
-db/schema.sql             platform tables: accounts, teams, usage (run once in Supabase)
-db/warehouse.sql          client-data star schema for Data Engineering (opt-in)
+  services/account_store.py the dim tables: accounts, teams, usage... (Postgres or in-memory)
+  services/warehouse_loader.py / warehouse_store.py  preview, then store in fact.account_data
+db/schema.sql             the whole database (run once in Supabase): two schemas,
+                          dim = platform tables, fact = client data (opt-in)
 api/data/                 reference data (NAICS sectors/subsectors)
 scripts/                  one-off scripts (rebuild the NAICS list)
 data/reference/           source files for reference data (SBA size standards)
@@ -112,16 +113,18 @@ storage component — see [PRICING.md](PRICING.md).
 
 **Managed storage (opt-in exception): Data Engineering.** ✅ Built. Clients with
 Data Engineering (or their consultant, working for them) can have their cleaned
-data stored in the warehouse schema (`db/warehouse.sql`, explained in
-[DATA_MODEL.md](DATA_MODEL.md)): one shared star schema for all clients,
-`client_id` on every row, Row Level Security for isolation. The free cleaning
+data stored in `fact.account_data` (`db/schema.sql`, explained in
+[DATA_MODEL.md](DATA_MODEL.md)): one shared table for all clients — IDs, dates
+and categories kept as they are, every number one described metric row —
+`account_id` on every row, Row Level Security for isolation. The free cleaning
 flow never writes to it. The design change, and its safeguards:
 
-1. **Preview first.** A spreadsheet doesn't fit the warehouse as-is (one sales
-   file becomes customers, products and events). `POST /api/warehouse/preview`
-   (`api/services/warehouse_loader.py`) shows every transformation step with
-   *why* it's needed, the first rows of each table as they will be stored, and
-   which rows are skipped and why. **Nothing is stored by a preview.**
+1. **Preview first.** `POST /api/warehouse/preview`
+   (`api/services/warehouse_loader.py`) shows how each column will be stored
+   (its role, its shared name, what each number measures — all changeable),
+   every step with *why*, the first rows as they will be stored, and the
+   round-trip check: rebuilding the table from those rows gives back every
+   cell (if not, loading is refused). **Nothing is stored by a preview.**
 2. **Explicit acceptance.** Only "Accept and load" (`POST /api/warehouse/load`)
    writes, and only if the plan rebuilt from the upload has the same
    *fingerprint* as the preview the person accepted — a changed file or choice
@@ -129,28 +132,25 @@ flow never writes to it. The design change, and its safeguards:
 3. **Consent on record.** The first load needs the "store my data" box ticked,
    saved in `storage_consents` (with the terms version and who clicked).
    **Delete my stored data** (`POST /api/warehouse/delete`, a button on the
-   "Stored for ..." card) deletes every warehouse row for the client right away
+   "Stored for ..." card) deletes every stored row for the client right away
    and withdraws the consent. Terms: `/storage-terms`; how to delete: `/data-deletion`.
-4. **Audit trail.** Each load writes a `load_runs` row (rows in / loaded /
-   skipped, status, error, who started it) — metadata only.
-5. **No duplicates.** Every event row has a stable ID (the client's row ID, or a
-   fingerprint of the row), so reloading the same file stores nothing new.
+4. **Audit trail.** Each load writes a `dim.load_runs` row (rows new /
+   updated / unchanged, status, error, who started it, how each column was
+   stored) — metadata only.
+5. **No duplicates.** Every row has a stable key (the record's ID, or a
+   fingerprint of the row, plus the metric), and a content fingerprint: a
+   reload stores nothing new and a changed value updates just that row.
 6. **Isolation.** Each load runs in one transaction that first sets
-   `app.client_id`; the RLS policies then only let it touch that client's rows.
-7. **Same data for client and consultant.** "Use my stored data" downloads the
-   stored table as a CSV (`GET /api/warehouse/export`) and opens it like an
-   upload, so the client (with their own login) and their consultant see the
-   same dashboards and analysis — no separate code path per service.
-
-**Next in the warehouse: the unified data table.** `warehouse.unified_data`
-(one row per metric, IDs / dates / categories kept in `attributes`; see
-"Unified data" in [DATA_MODEL.md](DATA_MODEL.md)) is designed, built in SQL
-and tested, and its reshape code is `api/services/unified.py`, but the app
-does not write to it yet: today a load writes `fact_event` and its
-dimensions. When its loader is added it runs inside the same accepted load,
-so every safeguard above applies to it unchanged (preview, consent,
-fingerprint, audit row, RLS, delete). The `unified-metrics` skill tests a
-file against it without storing anything.
+   `app.account_id` and names the account in every query; the RLS policy
+   then only lets a login that doesn't bypass it see that account's rows.
+7. **Same data for client and consultant.** "Use my stored data" rebuilds
+   the stored file as the original table (`GET /api/warehouse/export`, with
+   the client's own column names) and opens it like an upload, so the client
+   (with their own login) and their consultant see the same dashboards and
+   analysis — no separate code path per service.
+8. **AI needs stored data.** The AI tool answers questions about stored data,
+   so it can't be added to a package until the account has rows in
+   `fact.account_data` (`billing.ai_ready`).
 
 ### 2. Guest first, account only at download
 

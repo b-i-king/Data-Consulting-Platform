@@ -4,7 +4,7 @@ Billing endpoints (Stripe). The logic lives in api/services/billing.py.
     GET  /api/billing/plans              the tools and the bundle (monthly + annual prices)
     POST /api/billing/price              total for a "build your own" selection
     POST /api/billing/checkout           subscribe to (or change) a package -> Stripe Checkout URL
-    POST /api/billing/consulting-hours   prepay consulting hours -> Stripe Checkout URL
+                                         (AI only once the account has stored data)
     POST /api/billing/portal             Stripe's billing portal (card, invoices, CANCEL ANYTIME)
     POST /api/billing/cancel             test mode only: switch the subscription off
     POST /api/billing/webhook            Stripe -> us (signed); keeps the tables in sync
@@ -20,7 +20,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from api.core.security import get_acting_context
-from api.models.accounts import CheckoutIn, ConsultingHoursIn, PriceIn
+from api.models.accounts import CheckoutIn, PriceIn
 from api.services import billing, entitlements, pricing
 from api.services.pricing import subscription_catalog
 
@@ -134,35 +134,6 @@ async def checkout(body: CheckoutIn, ctx: Annotated[dict, Depends(get_acting_con
                 "updated": false, "test_mode": false}
     """
     return await billing.start_checkout(await _plan_holder(ctx), body.plan_ids, body.interval)
-
-
-@router.post("/consulting-hours")
-async def consulting_hours(body: ConsultingHoursIn, ctx: Annotated[dict, Depends(get_acting_context)]):
-    """
-    POST /api/billing/consulting-hours — prepay consulting hours (one-time Stripe Checkout).
-
-    Hours are charged at the hourly consulting rate, after the free 30-minute
-    first consultation. In test mode the hours are recorded at once.
-
-    Args:
-        body: ConsultingHoursIn, the number of hours (1–40) and an optional service id.
-        ctx: dict, the acting context (injected by `get_acting_context`).
-
-    Returns:
-        dict: {"url": str | None, "activated": bool, "test_mode": bool}.
-
-    Raises:
-        HTTPException: 403 "Only the team owner can change billing." when the
-            account is a team colleague; plus 401/403/404 from `get_acting_context`;
-            400 for an invalid number of hours or an unknown service.
-
-    Example:
-        POST /api/billing/consulting-hours
-        Authorization: Bearer eyJ...
-        {"hours": 2, "service_id": "data_engineering"}
-        -> 200 {"url": "https://checkout.stripe.com/...", "activated": false, "test_mode": false}
-    """
-    return await billing.buy_consulting_hours(await _plan_holder(ctx), body.hours, body.service_id)
 
 
 @router.post("/portal")

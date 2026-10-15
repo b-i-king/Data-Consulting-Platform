@@ -57,7 +57,7 @@ may then need sampling or a row cap).
 | `to_pandas_safely(sdf, max_rows)` | Brings at most `max_rows` rows into pandas; `attrs["truncated"]` says if it was cut. |
 | `from_pandas(pdf)` | pandas → Spark (NaN becomes null). |
 | `clean_with_spark(sdf)` | Cleaning Steps 0–3 from `cleaning.py`: same snake_case column names (reuses `clean_column_names`), trim text / blanks → null, drop all-empty rows, drop exact duplicates. |
-| `melt_to_unified(sdf, keep_cols)` | The unified reshape: kept columns (IDs, dates, categories) stay as they are, each number column becomes rows `field_name, source_field, metric_type, metric_subtype, metric_unit, metric_value` — the shape of `warehouse.unified_data` ([DATA_MODEL.md](DATA_MODEL.md)), described like pandas does (`unified.describe_metric_column`). Uses `DataFrame.unpivot` (Spark 3.4+). |
+| `melt_to_unified(sdf, keep_cols)` | The unified reshape: kept columns (IDs, dates, categories) stay as they are, each number column becomes rows `field_name, source_field, metric_type, metric_subtype, metric_unit, metric_value` — the shape of `fact.account_data` ([DATA_MODEL.md](DATA_MODEL.md)), described like pandas does (`unified.describe_metric_column`). Uses `DataFrame.unpivot` (Spark 3.4+). |
 
 None of these are wired into an HTTP endpoint yet; they are building blocks
 for the connector work below.
@@ -156,7 +156,7 @@ Security rules:
    (missing counts, duplicates, types) in Spark; bring a capped sample back
    with `to_pandas_safely` for the on-screen preview and the existing skills.
 4. **Load into the warehouse:** `clean_with_spark` → `melt_to_unified` →
-   pack the kept columns into `attributes` → write to `warehouse.unified_data`
+   pack the kept columns into `attributes` → write to `fact.account_data`
    (opt-in clients only).
 5. **Port more steps** of `cleaning.py` as clients need them (type inference,
    missing-value fills), each with a test comparing the pandas and Spark

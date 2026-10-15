@@ -330,7 +330,7 @@ def test_dashboard_offers_up_to_nine_filters():
 
 
 def test_unified_metrics_round_trip_and_review_loop(sales):
-    """Unified metrics: the warehouse.unified_data shape — metrics described, ids/dates/categories kept, nothing lost.
+    """Unified metrics: the fact.account_data shape — metrics described, ids/dates/categories kept, nothing lost.
 
     Args:
         sales: pd.DataFrame, the cleaned sales sample (fixture).

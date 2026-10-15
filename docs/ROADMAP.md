@@ -76,8 +76,8 @@ tools automatically when possible, and by a consultant when they want a person.
 
 ### 5. Data engineering — managed storage *(priority 3)*
 For clients who want their data stored and managed for them. The schema is
-ready (`db/warehouse.sql`, [DATA_MODEL.md](DATA_MODEL.md)): one shared star
-schema, `client_id` + Row Level Security.
+ready (`fact.account_data` in `db/schema.sql`, [DATA_MODEL.md](DATA_MODEL.md)):
+one shared table in the unified shape, `account_id` + Row Level Security.
 1. ✅ `storage_consents` (explicit opt-in, terms version) — [DATABASE.md](DATABASE.md).
 2. ✅ Design change recorded in ARCHITECTURE.md ("Managed storage"), plus
    `/privacy`, `/terms`, `/storage-terms` and `/data-deletion` pages.

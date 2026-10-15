@@ -162,7 +162,7 @@ export interface ConsultationTerms {
   text: string; // "Free 30-minute consultation, then $80/hour"
 }
 
-/** POST /api/billing/checkout and /consulting-hours. url = Stripe's page; null in test mode. */
+/** POST /api/billing/checkout. url = Stripe's page; null in test mode. */
 export interface CheckoutResult {
   url: string | null;
   activated: boolean;
@@ -737,7 +737,10 @@ export interface MyServices {
   billing: { stripe: boolean };
   /** A live plan includes Data Cleaning: downloads cost nothing extra. */
   downloads_included: boolean;
-  consulting: { rate_per_hour_usd: number; free_minutes: number; hours_bought: number } & ConsultationSummary;
+  /** False until the account has stored data: the AI tool can't be added before that. */
+  ai_ready: boolean;
+  /** Hourly rate and free first call; consulting is booked and paid on Cal.com. */
+  consulting: { rate_per_hour_usd: number; free_minutes: number } & ConsultationSummary;
 }
 
 // ── Consultations (api/services/consultations.py) ─────────────────────────────
@@ -773,7 +776,9 @@ export interface ConsultationSummary {
   history: Consultation[];
 }
 
-// ── Warehouse loads (Data Engineering; api/routers/warehouse.py) ──────────────
+// ── Stored data (Data Engineering; api/routers/warehouse.py) ──────────────────
+// Stored in fact.account_data (db/schema.sql): IDs, dates and categories kept
+// as they are, every number one "metric" row (type, subtype, unit, value).
 
 export interface PreviewTable {
   columns: string[];
@@ -781,19 +786,65 @@ export interface PreviewTable {
   total: number;
 }
 
-/** POST /api/warehouse/preview — how the data will be transformed, and why. */
+export type ColumnRole = "metric" | "id" | "date" | "category";
+
+/** How one column of the file is stored (api/services/unified.py plan_columns). */
+export interface ColumnPlanEntry {
+  column: string;
+  role: ColumnRole;
+  /** The shared (unified) name it is stored under, e.g. "line_amount". */
+  field_name: string;
+  /** True when the name / description came from the shared field map or from you. */
+  mapped: boolean;
+  value_type: "text" | "number" | "date" | "timestamp" | "boolean";
+  metric_type: string | null;
+  metric_subtype: string | null;
+  metric_unit: string | null;
+  /** How sure the description is: mapped, set by you, high, medium, low (null for non-metrics). */
+  confidence: string | null;
+  why: string;
+}
+
+/** What the client changed in the preview (all optional; the server guesses the rest). */
+export interface LoadChoicesBody {
+  metric_columns?: string[] | null;
+  id_columns?: string[] | null;
+  metric_map?: Record<string, { type?: string; subtype?: string | null; unit?: string }> | null;
+}
+
+export interface RoundTrip {
+  ok: boolean;
+  cells_checked: number;
+  mismatches: number;
+  examples: { row: number; column: string; original: Cell; rebuilt: Cell }[];
+}
+
+/** POST /api/warehouse/preview — how the data will be stored, and why. */
 export interface LoadPlan {
   source_name: string;
+  source_system: string;
   event_type: string;
   event_types: { id: string; label: string; measure: string }[];
-  /** Warehouse field (role) -> the client's column, or null. */
-  mapping: Record<string, string | null>;
+  roles: { id: ColumnRole; label: string }[];
   columns: string[];
-  roles: { id: string; label: string }[];
+  column_plan: ColumnPlanEntry[];
+  choices: LoadChoicesBody;
   steps: { title: string; why: string }[];
+  /** "columns" (how each column is stored) and "account_data" (the first rows as stored). */
   tables: Record<string, PreviewTable>;
-  counts: { rows_in: number; rows_to_load: number; rows_skipped: number; customers: number; products: number };
-  skipped: Record<string, number>;
+  counts: {
+    rows_in: number;
+    records: number;
+    rows_to_load: number;
+    metrics: number;
+    kept: number;
+    needs_review: number;
+    duplicates: number;
+    blanks: number;
+    metric_rows: number;
+  };
+  /** Rebuilding the table from the rows gives back every cell (nothing is lost). */
+  round_trip: RoundTrip;
   /** Send back to /load to accept exactly this preview. */
   fingerprint: string;
   ready: boolean;
@@ -814,6 +865,7 @@ export interface LoadRun {
   event_type: string;
   rows_in: number;
   rows_loaded: number;
+  rows_updated: number;
   rows_skipped: number;
   status: "running" | "succeeded" | "failed";
   error: string | null;
@@ -821,14 +873,25 @@ export interface LoadRun {
   finished_at: string | null;
 }
 
+/** One stored source (a file, or later a connection such as QuickBooks). */
+export interface StoredSource {
+  source_system: string;
+  source_name: string;
+  event_type: string;
+  /** Plain English, e.g. "Sales / income (money in)". */
+  label: string;
+  rows: number;
+  /** Rows of the original table (record lines). */
+  records: number;
+  first_date: string | null;
+  last_date: string | null;
+}
+
 export interface WarehouseCounts {
   set_up: boolean;
-  sources: number;
-  customers: number;
-  products: number;
-  events: number;
-  /** label = plain English, e.g. "Sales / income (money in)". */
-  by_type: { event_type: string; label: string; events: number; amount: number }[];
+  rows: number;
+  records: number;
+  sources: StoredSource[];
   first_date: string | null;
   last_date: string | null;
 }
@@ -842,7 +905,7 @@ export interface WarehouseSummary {
 
 /** POST /api/warehouse/delete — "delete my stored data". */
 export interface DeleteStoredResult {
-  deleted: { events: number; customers: number; products: number };
+  deleted: { rows: number; sources: number };
   consents_withdrawn: number;
   summary: WarehouseCounts;
 }
@@ -850,7 +913,7 @@ export interface DeleteStoredResult {
 /** POST /api/warehouse/load */
 export interface LoadResult {
   load_run: LoadRun;
-  result: { rows_loaded: number; rows_already_stored: number; customers: number; products: number };
+  result: { rows_loaded: number; rows_updated: number; rows_already_stored: number };
   summary: WarehouseCounts;
 }
 

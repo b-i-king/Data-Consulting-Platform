@@ -458,13 +458,6 @@ class PriceIn(BaseModel):
     interval: Literal["month", "year"] = "month"
 
 
-class ConsultingHoursIn(BaseModel):
-    """Prepay consulting hours (after the free 30-minute consultation)."""
-
-    hours: int = Field(ge=1, le=40)
-    service_id: str | None = Field(default=None, max_length=60)
-
-
 class ConsultationUpdateIn(BaseModel):
     """A consultant marks a client's consultation (api/routers/consultations.py).
 

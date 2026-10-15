@@ -93,15 +93,15 @@ services the client chose are offered; the rest are badges from
 | `api/services/consultations.py` + `api/routers/consultations.py` | Free consultation → paid link; Cal.com webhook; consultant confirmation | Booking / consultation rules |
 | `api/services/warehouse_loader.py` | Plans a load: mapping, steps with "why", previews, fingerprint (pandas only) | Changing how files fit the warehouse |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
-| `scripts/setup_database.py` | Runs schema.sql + warehouse.sql, lists every table and row count | After pulling schema changes |
-| `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (`warehouse.unified_data`) | Changing the unified table or adding a source |
+| `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |
+| `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (the `fact.account_data` shape) | Changing how data is stored, or adding a source |
 | `web/components/explore/EdaReport.tsx` + `web/components/charts/ChartView.tsx` | The EDA report view (sections, charts, tables); ChartView draws any chart a skill returns | Changing the EDA report screen or adding a chart type |
 | `web/components/explore/WarehouseLoad.tsx` | Data Engineering "Load into database": preview, why, accept | Changing the load screen |
 | `web/components/workspace/ConsultationPanel.tsx` | Consultant's Consultations card (confirm the free call) | Changing consultation tracking |
 | `web/app/{privacy,terms,storage-terms,data-deletion}/page.tsx` + `web/components/legal/LegalPage.tsx` | Legal pages (from the template) | Changing what you collect or store; storage terms also bump `TERMS_VERSION` in `api/routers/warehouse.py` |
 | `web/lib/seo.ts` + `web/app/{sitemap,robots}.ts` + `web/app/opengraph-image.tsx` | SEO: title, description, keywords, link previews, JSON-LD, sitemap, robots (from the template) | Changing how the business is described to search engines |
 | `web/components/SocialLinks.tsx` | Social media icons in the footer (also Google's `sameAs` list) | Adding or changing a social account |
-| `data_skills/unified-metrics/` | Test bench for the unified data table: runs `api/services/unified.py` on a file, shows every decision, round-trip check | Trying a client file before loading it into `warehouse.unified_data` (DATA_MODEL.md) |
+| `data_skills/unified-metrics/` | Test bench for the unified data table: runs `api/services/unified.py` on a file, shows every decision, round-trip check | Trying a client file before loading it into `fact.account_data` (DATA_MODEL.md) |
 | `.github/workflows/vercel_checks.yml` + `web/eslint.config.mjs` | Lint + type check on every PR touching `web/`, reported to Vercel | Adding checks |
 | `api/models/accounts.py` | Validates signup/quote JSON | Adding signup fields |
 | `api/routers/*.py` | HTTP endpoints (thin) | Adding an endpoint |
@@ -109,7 +109,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/categorizer.py` | Relate multiple files | Improving entity detection |
 | `api/services/entity_matching.py` | Fuzzy-link records without a shared ID | Tuning match thresholds / name rules |
 | `api/data/naics_sectors.json` | NAICS sectors & subsectors for the funnel | Regenerate with `scripts/build_naics_reference.py` |
-| `db/warehouse.sql` | Client-data star schema (opt-in) | Adding event types or dimensions (see DATA_MODEL.md) |
+| `db/schema.sql` | The whole database: `dim` (platform) and `fact` (client data, opt-in) | Any table change (DATABASE.md, DATA_MODEL.md) |
 | `api/services/cleaning.py` | Cleaning pipeline | Adding a cleaning step |
 | `api/services/spark_engine.py` | Optional PySpark engine: pandas-vs-Spark choice, JDBC reads, Spark cleaning + the unified "one row per metric" reshape ([SPARK.md](SPARK.md)) | Big data / cloud-warehouse connectors |
 | `api/services/sample_size.py` | Adequacy snapshot | Adding rules of thumb |
@@ -117,7 +117,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/intake.py` | Questionnaire choices | Launching a connector |
 | `api/services/account_store.py` | Account, consultant, subscription and usage storage | Changing tables |
 | `db/schema.sql` | Database tables ([DATABASE.md](DATABASE.md)) | Any table change (also update `account_store.py` and DATABASE.md) |
-| `api/services/billing.py` + `api/routers/billing.py` | Stripe: plans, Checkout, webhook, portal, consulting hours | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
+| `api/services/billing.py` + `api/routers/billing.py` | Stripe: packages of tools, Checkout, webhook, portal; the AI rule (needs stored data) | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
 | `api/services/fair_use.py` | Download limit per 24 h and free repeats (one-way data fingerprint) | Changing fair-use rules ([PRICING.md](PRICING.md)) |
 | `api/services/connections.py` + `api/routers/connections.py` | Connectors and how often they refresh (schedule rules, "Refresh now" gap) | Adding a connector or refresh choice |
 | `api/services/consultants.py` + `api/routers/consultants.py` | Consultants, their clients, the "acting as" access rule | Consultant features |

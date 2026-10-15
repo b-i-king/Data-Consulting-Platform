@@ -1,13 +1,13 @@
 ---
 name: unified-metrics
-description: Test a cleaned table against the unified data design (warehouse.unified_data) — IDs, dates and categories kept as they are, every metric column turned into rows described by metric_type, metric_subtype, metric_unit and metric_value — and prove by round trip that no information was lost. Runs the same code that fills the warehouse; it stores nothing.
+description: Test a cleaned table against the unified data design (fact.account_data, the stored data table) — IDs, dates and categories kept as they are, every metric column turned into rows described by metric_type, metric_subtype, metric_unit and metric_value — and prove by round trip that no information was lost. Runs the same code that stores client data; it stores nothing.
 ---
 
 # Unified metrics (long format) test bench
 
 Every client's spreadsheet names its numbers differently (`amount`, `unit_price`,
 `shipping_cost`, `csat`, `hours_worked`). The unified table
-(`warehouse.unified_data`) stores all of them the same way, so one dashboard,
+(`fact.account_data`) stores all of them the same way, so one dashboard,
 query or model works for every client:
 
 | Kept as it is (in `attributes`) | Added for every metric value |
@@ -20,7 +20,7 @@ query or model works for every client:
 | | `source_field` — the original column name, so every value traces back |
 
 One wide row with three metrics becomes three rows. This skill runs the
-**same code that fills the warehouse** (`api/services/unified.py`) and stores
+**same code that stores client data** (`api/services/unified.py`) and stores
 nothing — it is the place to test real client files before loading them.
 The design is explained in docs/DATA_MODEL.md ("Unified data").
 
@@ -36,7 +36,7 @@ The design is explained in docs/DATA_MODEL.md ("Unified data").
 
 ### Step 1 — Give every column a role and a unified name
 
-The shared field map comes first (`warehouse.field_map`, the same pairs as
+The shared field map comes first (`fact.field_map`, the same pairs as
 `FILE_UPLOAD_FIELD_MAP` in `unified.py`): `order_date` → `transaction_date`,
 `store` → `location_name`, `amount` → `line_amount` (a metric: amount / line / usd).
 For columns the map doesn't know:
@@ -104,7 +104,7 @@ usually means a "number" column holds text.
 The result includes `json_metric_map` — the descriptions it used. Edit any
 type / subtype / unit, then run again with `metric_map` set to your edited
 JSON. Repeat until nothing needs review. Then `sql_field_map` holds ready-made
-`warehouse.field_map` rows for this file's new columns: add them (and the same
+`fact.field_map` rows for this file's new columns: add them (and the same
 pairs to `FILE_UPLOAD_FIELD_MAP`) and the next file with these headers is
 named and described automatically.
 
@@ -112,10 +112,10 @@ named and described automatically.
 
 - Money is assumed to be US dollars. A file in another currency, or weights
   in kilograms, needs `metric_map`. (QuickBooks records carry their currency,
-  so the warehouse loader sets the unit from it.)
+  so the loader sets the unit from it.)
 - A table with no number columns (a customer list) has nothing to unify — that's expected.
 - Pairs with `data-dictionary-creator` (describe the columns) and `er-diagram`
-  (how tables relate) when designing the warehouse.
+  (how tables relate) when designing what to store.
 
 ## Run it (platform implementation)
 
@@ -133,6 +133,6 @@ Input: one table.
 | `metric_columns` | columns | auto | Columns to treat as metrics (default: every number column that isn't an ID) |
 | `id_columns` | columns | auto | Columns to keep as IDs (default: guessed from the names) |
 | `metric_map` | json | auto | Fix the guesses, e.g. {"unit_price": {"type": "price", "subtype": "unit", "unit": "usd"}} |
-| `event` | choice (auto, transaction/income, transaction/expense, transaction/refund, invoice/sent, invoice/received, invoice/paid, feedback/csat, feedback/rating, feedback/nps, inventory/adjustment) | auto | What each row is (default: guessed from the columns) |
+| `event` | choice (auto, transaction/income, transaction/expense, transaction/refund, invoice/sent, invoice/received, invoice/paid, feedback/csat, feedback/rating, feedback/nps, inventory/adjustment, payroll/gross_pay, list/records) | auto | What each row is (default: guessed from the columns) |
 | `preview_rows` | int | 200 | How many unified rows to show |
 | `full_table` | bool | no | Also save the whole unified table as CSV (command line only) |

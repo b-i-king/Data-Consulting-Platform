@@ -35,7 +35,7 @@ def consultant_settings(monkeypatch):
     monkeypatch.setenv("CONSULTANT_EMAILS", "brandon@example.com, second@example.com")
     monkeypatch.setenv("CONSULTANT_ACCESS_CODE", CODE)
     get_settings.cache_clear()
-    for store in (account_store._accounts, account_store._teams, account_store._consultants, account_store._services):
+    for store in (account_store._accounts, account_store._teams, account_store._consultants):
         store.clear()
     yield
     get_settings.cache_clear()
