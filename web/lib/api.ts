@@ -22,6 +22,7 @@ import type {
   ConsultationStatus,
   ConsultationSummary,
   DeleteStoredResult,
+  LoadChoicesBody,
   LoadPlan,
   LoadResult,
   Location,
@@ -215,25 +216,25 @@ export const markConsultation = (
   body: { status: ConsultationStatus; consultation_id?: string; kind?: "free" | "paid"; note?: string },
 ) => postJson<ConsultationSummary>("/api/consultations", body, token);
 
-// ── Warehouse loads (Data Engineering; api/routers/warehouse.py) ──────────────
+// ── Stored data (Data Engineering; api/routers/warehouse.py) ──────────────────
 // Same files and cleaning choices as the cleaning report, so the load uses the
 // data the client already checked. Nothing is stored until loadToWarehouse.
 
-/** Warehouse field changes and event type picked in the preview. */
+/** The event type and column changes picked in the preview. */
 export interface LoadChoices {
   groupId: number;
-  mapping: Record<string, string>; // role -> column ("" = not used)
   eventType: string; // "" = let the server guess
+  choices: LoadChoicesBody; // column roles / metric descriptions changed by the client
 }
 
 const loadFields = (input: CleaningInput, c: LoadChoices) => ({
   group_id: String(c.groupId),
-  mapping: JSON.stringify(c.mapping),
+  choices: JSON.stringify(c.choices),
   event_type: c.eventType,
   ...choiceFields(input),
 });
 
-/** How the data will be transformed to fit the warehouse, why, and a preview. Stores nothing. */
+/** How the data will be stored, why, the first rows and the round-trip check. Stores nothing. */
 export async function previewLoad(token: string, input: CleaningInput, c: LoadChoices): Promise<LoadPlan> {
   const res = await apiFetch(`${API_URL}/api/warehouse/preview`, {
     method: "POST",
@@ -267,8 +268,8 @@ export async function loadToWarehouse(
  * flow ("Use my stored data"), so every service works on stored data, and the
  * client and their consultant see the same thing. Also used to download it.
  */
-export async function getStoredDataFile(token: string, eventType?: string): Promise<File> {
-  const q = eventType ? `?event_type=${encodeURIComponent(eventType)}` : "";
+export async function getStoredDataFile(token: string, source?: string): Promise<File> {
+  const q = source ? `?source=${encodeURIComponent(source)}` : "";
   const res = await apiFetch(`${API_URL}/api/warehouse/export${q}`, { headers: authHeaders(token) });
   await raiseForStatus(res);
   const disposition = res.headers.get("Content-Disposition") ?? "";
@@ -276,11 +277,11 @@ export async function getStoredDataFile(token: string, eventType?: string): Prom
   return new File([await res.blob()], name, { type: "text/csv" });
 }
 
-/** "Delete my stored data": everything in the warehouse for this client; consent withdrawn. */
+/** "Delete my stored data": everything stored for this client; consent withdrawn. */
 export const deleteStoredData = (token: string) =>
   postJson<DeleteStoredResult>("/api/warehouse/delete", { confirm: "DELETE" }, token);
 
-/** What this client has stored in the warehouse, and recent loads. */
+/** What this client has stored (per source), and recent loads. */
 export async function getWarehouseSummary(token: string): Promise<WarehouseSummary> {
   const res = await apiFetch(`${API_URL}/api/warehouse/summary`, { headers: authHeaders(token) });
   await raiseForStatus(res);

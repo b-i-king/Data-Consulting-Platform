@@ -169,7 +169,7 @@ Code: `api/services/entitlements.py`.
 - **Every available service** for consultants and consultant-managed ("done
   for you") clients (`entitlements.gets_everything`).
 - **Nothing else.** "Projects with a consultant" picked on Your needs are
-  recorded as **interest** (table `account_services`) and shown to the
+  recorded as **interest** (`dim.accounts.interested_services`) and shown to the
   consultant ("Asked for help with: …"); they don't unlock tools. A locked
   tool's "Add to my package" opens Plan & billing with that tool ticked.
 - In a business, the team **owner** holds the package; team members share it

@@ -27,7 +27,7 @@ every metric row of that record:
            50001     | unit_price | price       | unit           | usd         | 7.00         | {order_id, order_date, store}
            50001     | line_amount| amount      | line           | usd         | 21.00        | {order_id, order_date, store}
 
-The matching database table is `warehouse.unified_data` (db/warehouse.sql);
+The matching database table is `fact.account_data` (db/schema.sql);
 the design is explained in docs/DATA_MODEL.md ("Unified data"). The
 `unified-metrics` skill is the test bench: it runs this module on a client's
 file, shows every decision, and proves by round trip that nothing is lost.
@@ -38,7 +38,7 @@ THE PIECES, IN ORDER
    `FILE_UPLOAD_FIELD_MAP` translate each source's field names into one shared
    vocabulary (TxnDate and order_date both become "transaction_date") and say
    which fields are metrics, with their type / subtype / unit. The same rows
-   are seeded into `warehouse.field_map`; a test keeps the two copies
+   are seeded into `fact.field_map`; a test keeps the two copies
    identical. A field that is in NO map is still kept, under the snake_case of
    its own name with `mapped = False`; if it is a number, `classify_metric()`
    guesses its type from the words in its name (with a confidence, so a person
@@ -54,13 +54,13 @@ THE PIECES, IN ORDER
    update / unchanged (plus "stale": stored metrics that disappeared).
    Re-loading the same data therefore inserts nothing and changes nothing.
 
-This module is pure pandas: it never writes to a database. The loader that
-writes `unified_data` (an asyncpg upsert like the example at the bottom of
-db/warehouse.sql) is the next step; today's warehouse load writes fact_event.
+This module is pure pandas: it never writes to a database. The "Load into
+database" flow uses it: api/services/warehouse_loader.py builds the rows and
+the preview, api/services/warehouse_store.py writes them to fact.account_data.
 
 COLUMNS SET LATER, AT LOAD TIME
 -------------------------------
-row_id, client_id, account_id, consultant_id, source_id, added_at and
+row_id, account_id, consultant_id, source_system, source_name, added_at and
 modified_at belong to the database row and are filled in by the loader (they
 depend on who is signed in and which source was connected), so they are not
 produced here. Everything else in `UNIFIED_COLUMNS` matches the SQL table.
@@ -79,7 +79,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-# ── Columns (same names as warehouse.unified_data) ──────────────────────────
+# ── Columns (same names as fact.account_data) ───────────────────────────────
 
 # The kinds of value a field can hold (field_map.value_type). Metrics are
 # always numbers; the other kinds are kept in `attributes`.
@@ -106,7 +106,8 @@ UNIFIED_COLUMNS = [
 ]
 
 # One metric of one line of one record: the unique key inside one client +
-# one source. In SQL the key is (client_id, source_id, record_id, line_number, field_name).
+# one source. In SQL the key is (account_id, source_system, source_name, record_id,
+# line_number, field_name).
 KEY_COLUMNS = ["record_id", "line_number", "field_name"]
 
 # field_name of the one row a line gets when it has NO metric at all (e.g. a
@@ -116,7 +117,7 @@ NO_METRIC = "_no_metric"
 
 # ── QuickBooks Online: which entity is which event ──────────────────────────
 # entity name in the API -> (event_type, event_subtype, field holding the date).
-# The type/subtype pairs already exist in warehouse.dim_event_type.
+# The type/subtype pairs are in warehouse_loader.EVENT_TYPES (a test checks it).
 QUICKBOOKS_ENTITIES: dict[str, tuple[str, str, str]] = {
     "Invoice":       ("invoice", "sent", "TxnDate"),          # we bill a customer
     "Bill":          ("invoice", "received", "TxnDate"),      # a vendor bills us
@@ -137,7 +138,7 @@ QUICKBOOKS_SKIP_FIELDS = {"domain", "sparse"}
 # are kept in `attributes`.
 # Paths use dots for nesting and leave out list positions: "Line.Amount" is the
 # Amount of every item in the Line list. KEEP IN SYNC with the
-# warehouse.field_map seed in db/warehouse.sql (tests/test_unified.py checks).
+# fact.field_map seed in db/schema.sql (tests/test_unified.py checks).
 FieldSpec = tuple[str, str, "str | None", "str | None", "str | None"]
 
 QUICKBOOKS_FIELD_MAP: dict[str, FieldSpec] = {
@@ -246,7 +247,7 @@ FILE_UPLOAD_FIELD_MAP: dict[str, FieldSpec] = {
     "notes":           ("memo", "text", None, None, None),
 }
 
-# system name in warehouse.dim_source / field_map -> its map.
+# system name (fact.account_data.source_system, fact.field_map.system) -> its map.
 FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP}
 
 # ── Guessing metrics nobody mapped ──────────────────────────────────────────
@@ -1008,6 +1009,33 @@ def _as_dates(series: pd.Series) -> pd.Series | None:
     return parsed if parsed.notna().sum() == len(values) else None
 
 
+# A text column counts as THE date column when at least this share of its
+# values are dates (an export with a few "TBD" or typo cells).
+MOSTLY_DATES = 0.9
+
+
+def _mostly_dates(series: pd.Series) -> bool:
+    """
+    A text column with a date-like name where at least MOSTLY_DATES of the values are dates.
+
+    Such a column is the record's date (event_date is filled where the value
+    is a date), but its values are kept exactly as written, so the odd ones
+    ("not a date") are never lost.
+
+    Example:
+        >>> _mostly_dates(pd.Series(["2024-10-01"] * 9 + ["TBD"], name="order_date"))
+        True
+    """
+    if not DATE_NAME.search(str(series.name)) or not (
+            series.dtype == object or pd.api.types.is_string_dtype(series)):
+        return False
+    values = series.dropna()
+    if values.empty:
+        return False
+    parsed = pd.to_datetime(values.astype(str), errors="coerce", format="mixed")
+    return parsed.notna().mean() >= MOSTLY_DATES
+
+
 def plan_columns(
     df: pd.DataFrame,
     *,
@@ -1072,6 +1100,8 @@ def plan_columns(
         kind = _column_value_type(series)
         if kind == "text" and _as_dates(series) is not None:
             kind = "date"
+        # Mostly dates: still the date column, but stored as written (text) so nothing is lost.
+        text_dates = kind == "text" and _mostly_dates(series)
         # The map row, if any: a per-upload name first, then the shared file map.
         spec: FieldSpec | None = None
         if column in overrides:
@@ -1094,7 +1124,8 @@ def plan_columns(
         else:
             role = None
         if role is None:     # not a metric: which kind of attribute?
-            role = "date" if kind in ("date", "timestamp") else "id" if ID_NAME.search(str(column)) else "category"
+            role = ("date" if kind in ("date", "timestamp") or text_dates
+                    else "id" if ID_NAME.search(str(column)) else "category")
 
         entry = {"column": column, "role": role, "field_name": name, "mapped": spec is not None,
                  "value_type": kind, "metric_type": None, "metric_subtype": None, "metric_unit": None,
@@ -1117,6 +1148,35 @@ def plan_columns(
         raise ValueError(f"Several columns map to the same field: {clashes}; "
                          "pass source_field_map to rename one")
     return plan
+
+
+def pick_record_id_column(df: pd.DataFrame, plan: list[dict]) -> str | None:
+    """
+    The ID column that names each record, if there is one.
+
+    First choice: an id column with no blanks and no repeats (one row per
+    record). Second: a document number (order / invoice / receipt number,
+    unified name reference_number) with no blanks that repeats — one row per
+    LINE of an order; dataframe_to_unified then numbers the lines 1, 2, 3. A
+    repeating customer_id is never used (a customer is not a record). Without
+    either, each row's ID is a fingerprint of its content.
+
+    Args:
+        df: the cleaned table.
+        plan: its column plan (plan_columns).
+
+    Returns:
+        str | None: the column, or None for content fingerprints.
+
+    Example:
+        >>> d = pd.DataFrame({"customer_id": [1, 1], "order_id": [7, 7], "amount": [1.0, 2.0]})
+        >>> pick_record_id_column(d, plan_columns(d))
+        'order_id'
+    """
+    ids = [p for p in plan if p["role"] == "id" and df[p["column"]].notna().all()]
+    unique = next((p["column"] for p in ids if df[p["column"]].is_unique), None)
+    document = next((p["column"] for p in ids if p["field_name"] == "reference_number"), None)
+    return unique or document
 
 
 def _row_content_hash(df: pd.DataFrame, types: dict[str, str]) -> pd.Series:
@@ -1182,7 +1242,7 @@ def dataframe_to_unified(
 
     Args:
         df: the cleaned data (one row per record or line).
-        event_type: e.g. "transaction" (must exist in dim_event_type).
+        event_type: e.g. "transaction" (a warehouse_loader.EVENT_TYPES pair).
         event_subtype: e.g. "income".
         date_column: the column holding the date used in the clean data
             (copied to event_date), or None.
@@ -1404,7 +1464,7 @@ def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> d
     Decide what a load must do so the table never holds duplicate data.
 
     Both frames must be for ONE client and ONE source (the SQL key adds
-    client_id and source_id to KEY_COLUMNS). Steps:
+    account_id, source_system and source_name to KEY_COLUMNS). Steps:
 
     1. De-duplicate the new batch: identical rows count once; if one metric of
        one record line appears twice with different content, the copy with
@@ -1419,7 +1479,7 @@ def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> d
        key is no longer there (a value was cleared or a line was removed in
        QuickBooks). The loader decides whether to delete them.
 
-    This mirrors the SQL upsert in db/warehouse.sql
+    This mirrors the SQL upsert in api/services/warehouse_store.py
     (ON CONFLICT ... DO UPDATE ... WHERE row_hash IS DISTINCT FROM ...).
 
     Args:

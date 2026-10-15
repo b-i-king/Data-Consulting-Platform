@@ -30,7 +30,7 @@ def fresh(monkeypatch):
     monkeypatch.setenv("STRIPE_SECRET_KEY", "")
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._subscriptions, account_store._connections,
-                  account_store._consultants, account_store._plans):
+                  account_store._consultants):
         store.clear()
     yield
     get_settings.cache_clear()

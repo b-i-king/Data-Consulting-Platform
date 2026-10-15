@@ -16,7 +16,7 @@ What *is* ready, and what each connector will plug into:
 |---|---|
 | Common pipeline: DataFrame → categorize → clean → preview | ✅ built — a connector only has to return DataFrames |
 | Fuzzy matching for records with no shared ID (`entity_matching.py`) | ✅ built and tested |
-| Warehouse to store synced data (`db/warehouse.sql`, with `dim_source` lineage) | ✅ schema built and tested |
+| Table to store synced data (`fact.account_data`, `source_system` = the connector; QuickBooks fields mapped in `fact.field_map`) | ✅ built and tested |
 | Connector code, OAuth sign-in, credential storage, scheduled syncs | ❌ not built |
 
 ### A note on the "connectors" in your Claude account
@@ -79,7 +79,8 @@ Steps for an OAuth app (QuickBooks, Gusto, Shopify, Square, Stripe):
 3. Store tokens **encrypted** (e.g. Supabase Vault), never in plain columns.
 4. `fetch()` pages through the vendor API into DataFrames.
 5. Run the existing pipeline; for Data Engineering clients, load into the
-   warehouse with `dim_source` set and `source_record_id` = the vendor's ID.
+   `fact.account_data` with `source_system` = the vendor and `record_id` = the
+   vendor's ID (QuickBooks: `unified.flatten_quickbooks()`).
 6. Schedule re-syncs (daily is plenty for small businesses).
 
 For warehouses (Snowflake, BigQuery, Postgres), the client creates a

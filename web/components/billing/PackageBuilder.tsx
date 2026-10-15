@@ -59,6 +59,12 @@ export default function PackageBuilder(props: {
   actionLabel?: string;
   onAction?: () => void;
   actionDisabled?: boolean;
+  /**
+   * Tools that can't be picked yet, with the reason shown on the card, e.g.
+   * {ai: "Load your data first"} — AI needs stored data (the server checks it
+   * too: billing.ai_ready). A tool already in the package stays picked.
+   */
+  locked?: Record<string, string>;
 }) {
   const { plans, interval } = props;
   const bundle = plans.find((p) => p.kind === "bundle");
@@ -145,7 +151,8 @@ export default function PackageBuilder(props: {
       <div role="group" aria-label="Tools" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {tools.map((p) => {
           const on = isBundle || picked.includes(p.id);
-          const blocked = !isBundle && p.requires.some((r) => !picked.includes(r));
+          const lockedWhy = !on ? props.locked?.[p.id] : undefined;
+          const blocked = (!isBundle && p.requires.some((r) => !picked.includes(r))) || !!lockedWhy;
           const needs = p.requires.map((r) => plans.find((x) => x.id === r)?.name ?? r).join(", ");
           return (
             <button
@@ -179,13 +186,15 @@ export default function PackageBuilder(props: {
               <span className="text-xs text-ink-muted">
                 {p.base
                   ? "Always included in a package"
-                  : blocked
-                    ? `Needs ${needs}`
-                    : !p.billable
-                      ? "Coming soon — free until it launches"
-                      : isBundle
-                        ? "Included in All tools"
-                        : ""}
+                  : lockedWhy
+                    ? lockedWhy
+                    : blocked
+                      ? `Needs ${needs}`
+                      : !p.billable
+                        ? "Coming soon — free until it launches"
+                        : isBundle
+                          ? "Included in All tools"
+                          : ""}
               </span>
             </button>
           );

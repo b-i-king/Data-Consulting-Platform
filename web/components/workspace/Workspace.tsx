@@ -242,12 +242,12 @@ export default function Workspace() {
 
   // "Use my stored data": the stored table comes back as a CSV file and is
   // opened exactly like a picked file.
-  async function openStored(eventType: string) {
+  async function openStored(source: string) {
     if (!session) return;
     setBusy(true);
     setError(null);
     try {
-      const file = await getStoredDataFile(session.token, eventType);
+      const file = await getStoredDataFile(session.token, source);
       await clean([file]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't open the stored data.");
@@ -608,16 +608,18 @@ export default function Workspace() {
                 onChange={(e) => e.target.files?.length && clean(Array.from(e.target.files))}
               />
             </label>
-            {stored && stored.events > 0 && (
+            {stored && stored.rows > 0 && (
               <div className="mt-5 border-t border-line pt-4">
                 <h3 className="text-sm font-semibold">Or use the data stored for {whoName}</h3>
                 <p className="mt-1 text-xs text-ink-muted">
                   Kept in managed storage (Data Engineering). Your consultant sees the same data.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {stored.by_type.map((t) => (
-                    <Button key={t.event_type} variant="secondary" disabled={busy} onClick={() => openStored(t.event_type)}>
-                      {t.label} · {t.events.toLocaleString("en-US")} rows
+                  {/* One button per stored file: it opens as the original table again. */}
+                  {stored.sources.map((s) => (
+                    <Button key={`${s.source_system}/${s.source_name}`} variant="secondary" disabled={busy}
+                      onClick={() => openStored(s.source_name)}>
+                      {s.source_name} · {s.records.toLocaleString("en-US")} rows
                     </Button>
                   ))}
                 </div>

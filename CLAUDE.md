@@ -23,8 +23,9 @@ coding, so **understanding the code matters as much as the code itself**.
     plan or price changes also need `python scripts/sync_stripe.py` (Stripe products)
   - `api/services/billing.py` or `api/routers/billing.py` → update `docs/PAYMENTS.md`
   - any API response → update `web/lib/types.ts`
-  - any table → update `db/schema.sql`, `api/services/account_store.py` and `docs/DATABASE.md` (ER diagram too)
-  - `db/warehouse.sql` → update `docs/DATA_MODEL.md` (ER diagram too)
+  - any `dim` table → update `db/schema.sql`, `api/services/account_store.py` and `docs/DATABASE.md` (ER diagram too)
+  - any `fact` table (`account_data`, `field_map`) → update `db/schema.sql`, `api/services/warehouse_store.py`
+    (or `unified.py` for field maps) and `docs/DATA_MODEL.md` (ER diagram too)
   - `api/services/file_reader.py` (formats) → update `docs/DATA_CLEANING.md` and add a sample to `tests/test_file_formats.py`
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
   - `data_skills/<id>/skill.py` → keep its `README.md` procedure in step, and run

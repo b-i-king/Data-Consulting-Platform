@@ -106,7 +106,7 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 ```
 api/            FastAPI backend (core, models, routers, services)
 db/schema.sql   platform tables (accounts, teams, usage)
-db/warehouse.sql client-data star schema (Data Engineering, opt-in)
+db/schema.sql    the whole database: dim (platform) + fact (client data, opt-in)
 scripts/        reference-data builders (NAICS), sample-data generator
 samples/        fictional bakery data for trying everything (docs/TESTING.md)
 tests/          pytest suite

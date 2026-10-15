@@ -1,23 +1,30 @@
 """
-Payments with Stripe: subscriptions (monthly or annual) and prepaid consulting hours.
+Payments with Stripe: subscriptions to tools (monthly or annual).
+
+Consulting time is NOT sold here: clients book and pay for it on Cal.com
+(the free first call, then PAID_BOOKING_URL) — see api/services/consultations.py.
 
 WHAT THIS FILE DOES
 -------------------
   start_checkout(account, tools, interval) -> a Stripe Checkout page for a "build your
                                               own" package (or, if they already have a
                                               subscription, change its tools in place)
-  buy_consulting_hours(account, hours)     -> a Stripe Checkout page for hours
   billing_portal(account)                  -> Stripe's page to change card / CANCEL ANYTIME
   handle_webhook(payload, signature)       -> Stripe tells us what happened; we update
-                                              the `subscriptions` / `consulting_purchases`
-                                              tables (db/schema.sql)
+                                              dim.subscriptions (db/schema.sql)
   live_plan_services(account)              -> services unlocked by live subscriptions
+
+THE AI RULE
+-----------
+AI answers questions about the client's STORED data, so the AI tool can't be
+picked until the account has data in fact.account_data (Data Engineering ->
+"Load into database"). `ai_ready(account)` says whether it has.
 
 HOW THE PIECES FIT
 ------------------
 1. scripts/sync_stripe.py creates one Stripe PRODUCT per tool (and the All
    tools bundle) in api/services/pricing.py, each with two PRICES found by
-   "lookup key": dcp_<tool>_month and dcp_<tool>_year (plus dcp_consulting_hour).
+   "lookup key": dcp_<tool>_month and dcp_<tool>_year.
    A client's subscription has one ITEM per tool they picked; the total is the
    sum of those prices.
 2. The site asks for a Checkout page; the client pays on Stripe's own page
@@ -29,7 +36,7 @@ HOW THE PIECES FIT
 PLACEHOLDER MODE (no STRIPE_SECRET_KEY)
 ---------------------------------------
 For testing without Stripe: choosing a plan switches it on at once with no
-charge, "cancel" switches it off, and consulting hours are recorded as bought.
+charge, and "cancel" switches it off.
 The site says "test mode" so nobody thinks they paid.
 """
 
@@ -46,7 +53,8 @@ from api.services import account_store, pricing
 
 log = logging.getLogger(__name__)
 
-MAX_CONSULTING_HOURS = 40
+AI_NEEDS_DATA = ("AI answers questions about your stored data, so load your data first: "
+                 "Data Engineering -> Load into database. Then add AI.")
 
 
 def stripe_enabled() -> bool:
@@ -139,26 +147,23 @@ async def _customer_id(account: dict) -> str:
     return customer.id
 
 
-async def ensure_plans() -> None:
+async def ai_ready(account: dict) -> bool:
     """
-    Make sure every item in pricing.py has a subscription_plans row (subscription items point at it).
+    Tell whether this account may add the AI tool: it has data stored in fact.account_data.
 
-    Missing rows are added without Stripe ids; scripts/sync_stripe.py fills those
-    in. Existing rows are left unchanged. The position in pricing.SUBSCRIPTIONS
-    becomes each row's sort order.
+    Args:
+        account: dict, the plan holder's accounts row.
 
     Returns:
-        None. Writes to the subscription_plans table (or the in-memory fallback).
+        bool: True once at least one row is stored for the account.
 
     Example:
-        >>> await ensure_plans()   # safe to call any number of times
+        >>> await ai_ready(new_client)
+        False
     """
-    await account_store.insert_missing_plans([
-        {"id": plan.id, "name": plan.name, "description": plan.description, "service_ids": list(plan.service_ids),
-         "monthly_price_usd": plan.monthly_usd, "annual_price_usd": plan.annual_usd, "sort_order": order,
-         "kind": plan.kind, "is_base": plan.base, "requires": list(plan.requires)}
-        for order, plan in enumerate(pricing.SUBSCRIPTIONS)
-    ])
+    from api.services import warehouse_store    # imported here: warehouse_store is the bigger module
+
+    return await warehouse_store.has_data(account)
 
 
 def _selection(plan_ids: list[str], interval: str) -> list[str]:
@@ -229,7 +234,8 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
             mode), "updated" is True when an existing subscription was changed.
 
     Raises:
-        HTTPException: 400 for an invalid package or interval; 409 if the package
+        HTTPException: 400 for an invalid package or interval, or AI without
+            stored data (AI_NEEDS_DATA); 409 if the package
             and interval are already the current ones; 503 if a Stripe price is
             missing.
 
@@ -238,6 +244,8 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         {'url': None, 'activated': True, 'updated': False, 'test_mode': True}
     """
     picked = _selection(plan_ids, interval)
+    if "ai" in picked and not await ai_ready(account):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=AI_NEEDS_DATA)
     billable = [p for p in picked if pricing.billable(p)]   # AI is free until it launches
     live = await account_store.list_subscriptions(str(account["id"]))
     current = live[0] if live else None
@@ -246,7 +254,6 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         raise HTTPException(status.HTTP_409_CONFLICT, detail="That's already your package.")
 
     if not stripe_enabled():
-        await ensure_plans()
         await account_store.upsert_subscription(
             account_id=str(account["id"]), billing_interval=interval, status="active",
             items=[{"plan_id": p} for p in picked], subscription_id=str(current["id"]) if current else None)
@@ -280,55 +287,6 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         cancel_url=f"{site}/app?checkout=canceled",
     )
     return {"url": session.url, "activated": False, "updated": False, "test_mode": False}
-
-
-async def buy_consulting_hours(account: dict, hours: int, service_id: str | None = None) -> dict:
-    """
-    Prepay consulting hours at the hourly rate (one-time Stripe Checkout).
-
-    In test mode the purchase is recorded at once (hours x rate). With Stripe, a
-    Checkout page is created and the hours are recorded later by the webhook
-    (checkout.session.completed).
-
-    Args:
-        account: dict, the accounts row of the client paying.
-        hours: int, number of hours, 1 to MAX_CONSULTING_HOURS (40).
-        service_id: str | None, the service the hours are for (optional).
-
-    Returns:
-        dict: {"url", "activated", "test_mode"} — "url" is the Checkout page (None
-            in test mode), "activated" is True when the hours were recorded at once.
-
-    Raises:
-        HTTPException: 400 if hours are out of range or the service id is unknown;
-            503 if the consulting price is missing in Stripe.
-
-    Example:
-        >>> await buy_consulting_hours(account, 2, "data_visualization")   # test mode
-        {'url': None, 'activated': True, 'test_mode': True}
-    """
-    if not 1 <= hours <= MAX_CONSULTING_HOURS:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Choose 1 to {MAX_CONSULTING_HOURS} hours.")
-    if service_id is not None and service_id not in pricing.SERVICES_BY_ID:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown service.")
-    rate = pricing.consulting_rate()
-    if not stripe_enabled():
-        await account_store.record_consulting_purchase(account_id=str(account["id"]), hours=hours,
-                                                       rate_per_hour_usd=rate, amount_usd=round(hours * rate, 2),
-                                                       service_id=service_id)
-        return {"url": None, "activated": True, "test_mode": True}
-    site = get_settings().site_url.rstrip("/")
-    session = _stripe().checkout.Session.create(
-        mode="payment",
-        customer=await _customer_id(account),
-        line_items=[{"price": _price_id(pricing.CONSULTING_LOOKUP_KEY), "quantity": hours}],
-        client_reference_id=str(account["id"]),
-        metadata={"account_id": str(account["id"]), "kind": "consulting_hours", "hours": str(hours),
-                  "service_id": service_id or ""},
-        success_url=f"{site}/app?consulting=success",
-        cancel_url=f"{site}/app?consulting=canceled",
-    )
-    return {"url": session.url, "activated": False, "test_mode": False}
 
 
 async def billing_portal(account: dict) -> dict:
@@ -452,7 +410,7 @@ async def _save_subscription(sub) -> None:
             Subscription.modify).
 
     Returns:
-        None. Upserts the subscriptions / subscription_items rows.
+        None. Upserts the dim.subscriptions row (its tools in `items`).
 
     Example:
         >>> await _save_subscription(event["data"]["object"])
@@ -479,7 +437,6 @@ async def _save_subscription(sub) -> None:
     if not items or interval is None:
         log.warning("Stripe subscription %s has no known tools; ignored.", sub.get("id"))
         return
-    await ensure_plans()
     await account_store.upsert_subscription(
         account_id=account_id, billing_interval=interval, status=sub.get("status"), items=items,
         stripe_subscription_id=sub.get("id"), stripe_customer_id=sub.get("customer"),
@@ -493,9 +450,7 @@ async def handle_webhook(payload: bytes, signature: str | None) -> str:
 
     Handled events:
     - customer.subscription.created / updated / deleted -> save the subscription
-      (this is what switches a paid plan on or off);
-    - checkout.session.completed for consulting hours, when paid -> record the
-      hours (the amount comes from Stripe in cents, converted to dollars).
+      (this is what switches a paid plan on or off).
     Other event types are accepted and ignored.
 
     Args:
@@ -528,13 +483,4 @@ async def handle_webhook(payload: bytes, signature: str | None) -> str:
     kind = event["type"]
     if kind in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
         await _save_subscription(obj)
-    elif kind == "checkout.session.completed" and (obj.get("metadata") or {}).get("kind") == "consulting_hours":
-        if obj.get("payment_status") == "paid":
-            meta = obj["metadata"]
-            hours = float(meta.get("hours") or 0)
-            await account_store.record_consulting_purchase(
-                account_id=meta["account_id"], hours=hours, rate_per_hour_usd=pricing.consulting_rate(),
-                amount_usd=round((obj.get("amount_total") or 0) / 100, 2), service_id=meta.get("service_id") or None,
-                stripe_checkout_session_id=obj.get("id"),
-            )
     return kind

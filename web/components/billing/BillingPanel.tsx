@@ -1,7 +1,7 @@
 // "Plan & billing" in the workspace: subscriptions, cancel anytime, booking a consultant.
 //
-//   Your package      the live subscription and its tools (tables `subscriptions`
-//                     + `subscription_items`, kept in sync by Stripe's webhook),
+//   Your package      the live subscription and its tools (dim.subscriptions,
+//                     its tools in `items`, kept in sync by Stripe's webhook),
 //                     with "Manage billing" — Stripe's own portal to change the
 //                     card, see invoices or CANCEL ANYTIME.
 //   Build / change    PackageBuilder: pick tools (prices add up) or All tools,
@@ -138,6 +138,8 @@ export default function BillingPanel(props: {
             actionLabel={live ? "Update package" : "Subscribe"}
             actionDisabled={busy || unchanged}
             onAction={() => setAsking(true)}
+            // AI answers questions about STORED data, so it unlocks once data is loaded.
+            locked={plan.ai_ready ? undefined : { ai: "Load your data first (Data Engineering → Load into database)" }}
           />
         </div>
       ) : (

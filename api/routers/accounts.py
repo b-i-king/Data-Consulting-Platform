@@ -513,7 +513,8 @@ async def _services_out(ctx: dict) -> dict:
     client): active services, whether this person may change the plan (only
     individuals and team owners), the full service catalog flagged active or
     not, consulting interests, live subscriptions, plans on sale, whether
-    Stripe is on, included downloads and consulting hours/rate.
+    Stripe is on, included downloads, whether AI may be added (stored data
+    exists) and the consulting rate / free-call status.
 
     Args:
         ctx: dict, the acting context from `get_acting_context`
@@ -521,7 +522,7 @@ async def _services_out(ctx: dict) -> dict:
 
     Returns:
         dict: keys "active", "can_add", "services", "interests", "account",
-        "acting", "subscriptions", "plans", "billing", "downloads_included",
+        "acting", "subscriptions", "plans", "billing", "ai_ready", "downloads_included",
         "consulting" (mirrored in web/lib/types.ts).
 
     Example:
@@ -548,11 +549,12 @@ async def _services_out(ctx: dict) -> dict:
         "subscriptions": [_subscription_out(s) for s in subs],
         "plans": subscription_catalog(),
         "billing": {"stripe": billing.stripe_enabled()},   # False = test mode, nothing is charged
+        # AI can be added only once data is stored (fact.account_data) — billing.ai_ready.
+        "ai_ready": await billing.ai_ready(await entitlements.plan_holder(acc)),
         "downloads_included": await entitlements.downloads_included(acc),
         "consulting": {
             "rate_per_hour_usd": pricing.consulting_rate(),
             "free_minutes": pricing.FREE_CONSULTATION_MINUTES,
-            "hours_bought": await account_store.consulting_hours(holder_id),
             # Free call used up? Which booking link to show? (api/services/consultations.py)
             **(await consultations.summary(acc)),
         },

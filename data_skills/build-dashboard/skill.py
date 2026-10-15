@@ -8,8 +8,8 @@ HOW THE DASHBOARD IS BUILT
 --------------------------
 1. KPIs come from a "type" column, not from picking metrics.
    Transaction data almost always has a column saying what KIND of record
-   each row is: event_type / transaction_type in the platform's warehouse
-   (db/warehouse.sql), order_type in a point-of-sale export, and so on.
+   each row is: event_type / transaction_type in the platform's stored data
+   (db/schema.sql), order_type in a point-of-sale export, and so on.
    The 3–4 types with the MOST rows become the KPIs (e.g. In-store, Online
    pickup, Delivery, Catering). Each KPI gets its own card and line chart,
    showing the type's total of the money column (or its count, if there is

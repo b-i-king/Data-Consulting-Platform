@@ -36,7 +36,7 @@ WHAT UNLOCKS A TOOL (and what doesn't)
 Only these unlock tools: a live subscription (a package of tools, or All
 tools), being a consultant, or being a consultant-managed client. Data
 Cleaning is always open. Services picked as "Projects with a consultant" are
-INTERESTS only (table account_services): one-time work a consultant scopes
+INTERESTS only (column dim.accounts.interested_services): one-time work a consultant scopes
 after the free 30-minute consultation.
 """
 
@@ -139,7 +139,7 @@ async def active_services(account: dict, *, preview_all: bool = False) -> list[s
     - Consultants and consultant-managed clients get every available service.
     - Everyone else gets the services unlocked by the plan holder's live
       subscriptions, plus Data Cleaning.
-    Project interests (account_services) do NOT unlock anything here.
+    Project interests (dim.accounts.interested_services) do NOT unlock anything here.
 
     Args:
         account: dict, an accounts row.
@@ -168,7 +168,7 @@ async def interests(account: dict) -> list[str]:
     """
     List the projects the client said they would like help with (catalog order).
 
-    These are the "Projects with a consultant" picks stored in account_services
+    These are the "Projects with a consultant" picks stored in dim.accounts.interested_services
     for the plan holder. They are shown to the consultant and do not unlock any
     tools.
 
@@ -182,7 +182,7 @@ async def interests(account: dict) -> list[str]:
         >>> await interests(client)
         ['data_visualization', 'data_science_ml']
     """
-    stored = set(await account_store.list_services(await plan_holder_id(account)))
+    stored = set(await account_store.list_interests(await plan_holder_id(account)))
     return [s.id for s in SERVICES if s.id in stored]
 
 
@@ -217,8 +217,8 @@ async def add_services(account: dict, service_ids: list[str], source: str = "add
     Args:
         account: dict, the signed-in (or acted-for) accounts row.
         service_ids: list[str], service ids from pricing.SERVICES.
-        source: str, where the request came from, saved with each row
-            (default "added").
+        source: str, where the request came from ("signup" or "added"; kept
+            for the callers' readability, not stored).
 
     Returns:
         list[str]: the account's interests after the change, in catalog order.
@@ -239,5 +239,5 @@ async def add_services(account: dict, service_ids: list[str], source: str = "add
         raise NotPlanOwnerError("Only the team owner can add services to the plan.")
     new = [s for s in dict.fromkeys(service_ids) if s != ALWAYS_INCLUDED]
     if new:
-        await account_store.add_services(holder, new, source)
+        await account_store.add_interests(holder, new)
     return await interests(account)

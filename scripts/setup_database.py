@@ -4,23 +4,22 @@ Create (or update) the database tables, then check that everything is there.
 WHAT THIS SCRIPT DOES
 ---------------------
 1. Connects to DATABASE_URL (read from your .env file, like the API does).
-2. Runs db/schema.sql      -> the platform tables (accounts, consultants, ...).
-3. Runs db/warehouse.sql   -> the client-data warehouse (Data Engineering),
-                              unless you pass --no-warehouse.
-4. Prints every expected table with its row count, so you can see at a
-   glance that the database is set up and what's in it.
+2. Runs db/schema.sql, which creates the two schemas:
+     dim   the platform: accounts, consultants, teams, subscriptions, ...
+     fact  client data: account_data (stored data) and field_map (shared names)
+3. Prints every expected table with its row count, so you can see at a
+   glance that the database is set up and what's in it, and lists the
+   consultants (created by the app when a consultant first signs in).
 
-Both SQL files are safe to re-run (CREATE ... IF NOT EXISTS), so run this
-again after every pull that changes them.
+db/schema.sql is safe to re-run (CREATE ... IF NOT EXISTS), so run this
+again after every pull that changes it.
 
 HOW TO RUN
 ----------
     python scripts/setup_database.py              # create/update + check
     python scripts/setup_database.py --check      # only check (changes nothing)
-    python scripts/setup_database.py --no-warehouse
 
-You can do the same by hand: Supabase -> SQL Editor -> paste db/schema.sql ->
-Run, then db/warehouse.sql -> Run.
+You can do the same by hand: Supabase -> SQL Editor -> paste db/schema.sql -> Run.
 """
 
 from __future__ import annotations
@@ -37,20 +36,20 @@ sys.path.insert(0, str(ROOT))   # so "api" can be imported when run from anywher
 
 from api.core.config import get_settings  # noqa: E402
 
-PLATFORM_TABLES = ["accounts", "teams", "consultants", "account_services", "subscription_plans", "subscriptions",
-                   "subscription_items", "consulting_purchases", "consultations", "storage_consents", "load_runs",
-                   "usage_events", "intake_responses", "data_connections"]
-WAREHOUSE_TABLES = ["dim_client", "dim_date", "dim_source", "dim_event_type", "dim_customer", "dim_employee",
-                    "dim_product", "fact_event", "field_map", "unified_data"]
+# Every table db/schema.sql creates, by schema.
+TABLES = {
+    "dim": ["accounts", "consultants", "teams", "subscriptions", "consultations", "usage_events",
+            "storage_consents", "load_runs", "data_connections"],
+    "fact": ["account_data", "field_map"],
+}
 
 
-async def main(check_only: bool, warehouse: bool) -> int:
+async def main(check_only: bool) -> int:
     """
-    Apply the SQL files (unless check_only) and print each table's row count.
+    Apply db/schema.sql (unless check_only) and print each table's row count.
 
     Args:
         check_only: bool, True to only look, never change anything.
-        warehouse: bool, True to also apply / check db/warehouse.sql.
 
     Returns:
         int: 0 when every expected table exists, 1 otherwise (the exit code).
@@ -64,15 +63,13 @@ async def main(check_only: bool, warehouse: bool) -> int:
     conn = await asyncpg.connect(dsn, statement_cache_size=0, timeout=15)
     try:
         if not check_only:
-            files = [ROOT / "db" / "schema.sql"] + ([ROOT / "db" / "warehouse.sql"] if warehouse else [])
-            for path in files:
-                print(f"Running {path.relative_to(ROOT)} ...")
-                await conn.execute(path.read_text(encoding="utf-8"))   # a whole script, no parameters
+            path = ROOT / "db" / "schema.sql"
+            print(f"Running {path.relative_to(ROOT)} ...")
+            await conn.execute(path.read_text(encoding="utf-8"))   # a whole script, no parameters
             print("Done.\n")
 
         missing = 0
-        groups = [("public", PLATFORM_TABLES)] + ([("warehouse", WAREHOUSE_TABLES)] if warehouse else [])
-        for schema, tables in groups:
+        for schema, tables in TABLES.items():
             print(f"{schema} schema")
             for table in tables:
                 exists = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"{schema}.{table}")
@@ -80,12 +77,12 @@ async def main(check_only: bool, warehouse: bool) -> int:
                     missing += 1
                     print(f"  MISSING  {table}")
                     continue
-                # Counting through the API's own connection: warehouse rows hidden by
-                # Row Level Security show as 0 unless the role bypasses RLS.
+                # fact.account_data uses Row Level Security: unless this login
+                # bypasses it (Supabase's postgres role does), its count shows 0.
                 count = await conn.fetchval(f'SELECT count(*) FROM "{schema}"."{table}"')
-                print(f"  ok       {table:22} {count:>10,} rows")
-        consultants = await conn.fetch("SELECT email, is_default FROM consultants ORDER BY created_at") \
-            if await conn.fetchval("SELECT to_regclass('public.consultants') IS NOT NULL") else []
+                print(f"  ok       {table:18} {count:>10,} rows")
+        consultants = await conn.fetch("SELECT email, is_default FROM dim.consultants ORDER BY created_at") \
+            if await conn.fetchval("SELECT to_regclass('dim.consultants') IS NOT NULL") else []
         print("\nConsultants:", ", ".join(f"{c['email']}{' (default)' if c['is_default'] else ''}" for c in consultants)
               or "none yet - sign up in the app with an email from CONSULTANT_EMAILS + your access code.")
         if missing:
@@ -98,6 +95,5 @@ async def main(check_only: bool, warehouse: bool) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create the database tables and check them.")
     parser.add_argument("--check", action="store_true", help="only check; change nothing")
-    parser.add_argument("--no-warehouse", action="store_true", help="skip db/warehouse.sql")
     args = parser.parse_args()
-    sys.exit(asyncio.run(main(args.check, not args.no_warehouse)))
+    sys.exit(asyncio.run(main(args.check)))

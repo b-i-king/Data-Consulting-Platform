@@ -56,10 +56,10 @@ pip install -r requirements.txt
 python scripts/setup_database.py
 ```
 
-It runs `db/schema.sql` (platform tables) and `db/warehouse.sql` (the client
-data warehouse), then lists every table with its row count. You should see
-`ok` next to all 13 platform tables and 8 warehouse tables; `dim_date` already
-has 14,976 rows (the calendar) and `dim_event_type` 13. Safe to re-run anytime.
+It runs `db/schema.sql`, which creates two schemas — `dim` (the platform: 9
+tables) and `fact` (client data: `account_data` and `field_map`) — then lists
+every table with its row count. You should see `ok` next to all 11 tables;
+`field_map` already has 94 rows (the shared field names). Safe to re-run anytime.
 
 ## Step 4 — Start both servers
 
@@ -129,28 +129,31 @@ language model comes later.
 2. Read the card top to bottom:
    - **What are these rows?** — guessed (sales → "Sales / income"; expenses →
      "Expenses"; feedback → "CSAT scores"). Change it if wrong.
-   - **Which column is which?** — the date, amount, customer, product... columns
-     we guessed. Change any; the preview updates.
-   - **How your data will be transformed, and why** — e.g. "Move customers into
-     their own table... *Why:* customer details are stored ONCE...".
-   - **How it will look in the database** — the first rows of `fact_event`,
-     `dim_customer`, `dim_product`, and what's skipped and why.
+   - **How each column is stored** — each column's role (metric, ID, kept as
+     is), its shared name (`amount` → `line_amount`), and for numbers what they
+     measure (type, subtype, unit) with how sure the guess is. Change any; the
+     preview updates.
+   - **What happens to your data, and why** — e.g. "Turn 3 number columns into
+     metric rows... *Why:* a new kind of number is then just a new type".
+   - **How it will look in the database** — the first rows of
+     `fact.account_data`, and "Nothing is lost: rebuilding your table from these
+     rows gives back all N cells exactly".
 3. Tick **Store this data for Sunrise Bakery...** (consent, saved once) →
    **Accept and load**. Or **Don't load**: nothing is stored.
-4. The **Stored for ...** card shows the counts. Press Accept again: "0 new
-   rows — already stored" (reloads never duplicate).
-5. In Supabase: `load_runs` and `storage_consents` have rows. Warehouse tables
-   are protected by Row Level Security, so to look at them in the SQL Editor
-   set the client first (the client id = the account id from `accounts`):
+4. The **Stored for ...** card lists the file. Press Accept again: "0 new
+   rows — already stored unchanged" (reloads never duplicate).
+5. In Supabase: `dim.load_runs` and `dim.storage_consents` have rows, and the
+   data is in `fact.account_data` (the SQL Editor's login sees all of it):
 
    ```sql
-   select set_config('app.client_id', '<account id>', false);
-   select count(*) from warehouse.fact_event;
+   select field_name, metric_type, metric_unit, count(*), sum(metric_value)
+   from fact.account_data where account_id = '<account id from dim.accounts>'
+   group by 1, 2, 3;
    ```
 6. **The client sees the same thing.** Sign in as that client (private window;
    for a client you added, their first sign-in sets their password). On any
-   service's **Choose your data** card, press **Use the data stored for ...**:
-   the stored table opens exactly as a file would, so the dashboard, analysis
+   service's **Choose your data** card, press the file's button under **Use
+   the data stored for ...**: the stored table opens exactly as the file did, so the dashboard, analysis
    and AI show what you see. Pick it in your own window too — same data,
    side by side.
 7. **Download or delete.** The **Stored for ...** card has **Download as CSV**

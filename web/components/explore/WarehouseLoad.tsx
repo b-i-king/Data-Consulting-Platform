@@ -1,21 +1,26 @@
-// Data Engineering -> "Load into database": PREVIEW the transformation, then
-// ACCEPT (or not) before anything is stored.
+// Data Engineering -> "Load into database": PREVIEW how the data will be
+// stored, then ACCEPT (or not) before anything is stored.
 //
-// A spreadsheet doesn't fit the warehouse tables as-is (db/warehouse.sql):
-// one sales file becomes a customers table, a products table, and one
-// "event" row per sale. This screen shows, before anything is stored:
-//   1. what the rows are (sales, expenses, feedback...) and which column is
-//      which — guessed by the server, changeable here (each change re-previews),
-//   2. every transformation step with WHY it's needed,
-//   3. the first rows of each warehouse table exactly as they will look,
-//   4. how many rows will load, and which are skipped and why.
+// Every file is stored in ONE shared table, fact.account_data (db/schema.sql):
+// IDs, dates and categories are kept exactly as they are, and every number
+// that is measured becomes its own row described by metric_type, subtype,
+// unit and value (the "unified data" design, docs/DATA_MODEL.md). This screen
+// shows, before anything is stored:
+//   1. what the rows are (sales, expenses, feedback, a list...) — guessed,
+//      changeable,
+//   2. how each column will be stored: its role (metric / ID / kept as is),
+//      its shared name, and for metrics what they measure, with how sure the
+//      guess is — every part changeable (each change re-previews),
+//   3. every step with WHY it's needed,
+//   4. the first rows exactly as they will be stored, and the round-trip
+//      check: rebuilding the table from those rows gives back every cell.
 // Then the client (or their consultant) ticks the storage consent and presses
 // "Accept and load" — or "Don't load", which stores nothing. The server only
 // loads if the data and choices still match this preview (its fingerprint).
 //
-// The "Stored for ..." card underneath shows what's stored, with "Download as
-// CSV" and "Delete stored data" (the plan holder or their consultant; it also
-// withdraws the storage consent). Storage terms: /storage-terms.
+// The "Stored for ..." card underneath lists what's stored per file, with
+// "Download as CSV" and "Delete stored data" (the plan holder or their
+// consultant; it also withdraws the storage consent). Terms: /storage-terms.
 //
 // Server side: api/routers/warehouse.py, api/services/warehouse_loader.py.
 
@@ -31,23 +36,42 @@ import {
   previewLoad,
   type LoadChoices,
 } from "@/lib/api";
-import { fmtDate, fmtDateTime, fmtInt, fmtUsd } from "@/lib/format";
-import type { Cell, CleaningInput, LoadPlan, LoadResult, PreviewTable, WarehouseCounts, WarehouseSummary } from "@/lib/types";
+import { fmtDate, fmtDateTime, fmtInt } from "@/lib/format";
+import type {
+  Cell,
+  CleaningInput,
+  ColumnPlanEntry,
+  ColumnRole,
+  LoadPlan,
+  LoadResult,
+  PreviewTable,
+  WarehouseCounts,
+  WarehouseSummary,
+} from "@/lib/types";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
-const TABLE_NAMES: Record<string, string> = {
-  fact_event: "Events (fact_event)",
-  dim_customer: "Customers (dim_customer)",
-  dim_product: "Products (dim_product)",
-};
-
 const show = (v: Cell) => (v === null || v === undefined ? "" : String(v));
+const inputCls = "w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs";
 
-function Preview({ name, table }: { name: string; table: PreviewTable }) {
+/** The roles a person can pick for a column (a date column is found automatically). */
+const ROLE_CHOICES: { id: ColumnRole; label: string }[] = [
+  { id: "metric", label: "Metric (a number to measure)" },
+  { id: "id", label: "ID" },
+  { id: "category", label: "Keep as is" },
+];
+
+/** Badge color for how sure a metric description is. */
+function confidenceClass(c: string | null): string {
+  if (c === "low") return "bg-bad/15 text-bad";
+  if (c === "medium") return "bg-warn/15 text-warn";
+  return "bg-good/15 text-good"; // mapped, set by you, high
+}
+
+function Preview({ title, table }: { title: string; table: PreviewTable }) {
   return (
     <div className="space-y-1">
       <p className="text-sm font-medium">
-        {TABLE_NAMES[name] ?? name}{" "}
+        {title}{" "}
         <span className="font-normal text-ink-muted">
           — first {Math.min(table.rows.length, table.total)} of {fmtInt(table.total)} row(s)
         </span>
@@ -80,6 +104,104 @@ function Preview({ name, table }: { name: string; table: PreviewTable }) {
   );
 }
 
+/** One editable text field that only reports its value when you leave it (or press Enter). */
+function EditOnBlur(props: { value: string; disabled: boolean; label: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(props.value);
+  const commit = () => draft.trim() !== props.value && props.onCommit(draft.trim());
+  return (
+    <input
+      aria-label={props.label}
+      className={inputCls}
+      value={draft}
+      disabled={props.disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+    />
+  );
+}
+
+/** How each column will be stored, with every guess changeable. */
+function ColumnPlanTable(props: {
+  plan: ColumnPlanEntry[];
+  busy: boolean;
+  onRole: (column: string, role: ColumnRole) => void;
+  onMetric: (column: string, part: "type" | "subtype" | "unit", value: string) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-line">
+      <table className="min-w-full text-xs">
+        <thead className="bg-surface-2 text-left">
+          <tr>
+            <th className="px-2 py-1.5 font-semibold">Your column</th>
+            <th className="px-2 py-1.5 font-semibold">Stored as</th>
+            <th className="px-2 py-1.5 font-semibold">Role</th>
+            <th className="px-2 py-1.5 font-semibold">Measures (type)</th>
+            <th className="px-2 py-1.5 font-semibold">Which one (subtype)</th>
+            <th className="px-2 py-1.5 font-semibold">Unit</th>
+            <th className="px-2 py-1.5 font-semibold">How sure</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.plan.map((p) => (
+            // The key includes the description, so the inputs reset when the server's answer changes it.
+            <tr key={`${p.column}|${p.role}|${p.metric_type}|${p.metric_subtype}|${p.metric_unit}`} className="border-t border-line align-top">
+              <td className="whitespace-nowrap px-2 py-1.5 font-mono">{p.column}</td>
+              <td className="whitespace-nowrap px-2 py-1.5 font-mono text-ink-muted" title={p.why}>
+                {p.field_name}
+              </td>
+              <td className="px-2 py-1.5">
+                {p.role === "date" ? (
+                  <span>Date</span>
+                ) : (
+                  <select
+                    aria-label={`Role of ${p.column}`}
+                    className={inputCls}
+                    value={p.role}
+                    disabled={props.busy}
+                    onChange={(e) => props.onRole(p.column, e.target.value as ColumnRole)}
+                  >
+                    {ROLE_CHOICES.filter((r) => r.id !== "metric" || p.value_type === "number").map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </td>
+              {p.role === "metric" ? (
+                <>
+                  <td className="px-2 py-1.5">
+                    <EditOnBlur label={`Type of ${p.column}`} value={p.metric_type ?? ""} disabled={props.busy}
+                      onCommit={(v) => props.onMetric(p.column, "type", v)} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <EditOnBlur label={`Subtype of ${p.column}`} value={p.metric_subtype ?? ""} disabled={props.busy}
+                      onCommit={(v) => props.onMetric(p.column, "subtype", v)} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <EditOnBlur label={`Unit of ${p.column}`} value={p.metric_unit ?? ""} disabled={props.busy}
+                      onCommit={(v) => props.onMetric(p.column, "unit", v)} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 ${confidenceClass(p.confidence)}`} title={p.why}>
+                      {p.confidence}
+                    </span>
+                  </td>
+                </>
+              ) : (
+                <td colSpan={4} className="px-2 py-1.5 text-ink-muted">
+                  Kept exactly as it is, on every row of the record
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function WarehouseLoad(props: {
   token: string;
   input: CleaningInput;
@@ -93,7 +215,7 @@ export default function WarehouseLoad(props: {
   const [askDelete, setAskDelete] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [plan, setPlan] = useState<LoadPlan | null>(null);
-  const [choices, setChoices] = useState<LoadChoices>({ groupId: props.groupId, mapping: {}, eventType: "" });
+  const [choices, setChoices] = useState<LoadChoices>({ groupId: props.groupId, eventType: "", choices: {} });
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,9 +233,9 @@ export default function WarehouseLoad(props: {
       .catch(() => {});
   }, [props.token, onStoredChanged]);
 
-  async function downloadAll() {
+  async function download(source?: string) {
     try {
-      const file = await getStoredDataFile(props.token);
+      const file = await getStoredDataFile(props.token, source);
       const url = URL.createObjectURL(file);
       const a = document.createElement("a");
       a.href = url;
@@ -132,8 +254,8 @@ export default function WarehouseLoad(props: {
     try {
       const r = await deleteStoredData(props.token);
       setNote(
-        `Deleted ${fmtInt(r.deleted.events)} event(s), ${fmtInt(r.deleted.customers)} customer(s) and ` +
-          `${fmtInt(r.deleted.products)} product(s). Storage consent is withdrawn; loading again asks for it anew.`,
+        `Deleted ${fmtInt(r.deleted.rows)} stored row(s) from ${fmtInt(r.deleted.sources)} file(s). ` +
+          "Storage consent is withdrawn; loading again asks for it anew.",
       );
       setResult(null);
       setConsent(false);
@@ -163,6 +285,24 @@ export default function WarehouseLoad(props: {
 
   useEffect(refreshSummary, [refreshSummary]);
 
+  /** A column's role changed: send the full lists of metric and ID columns. */
+  function changeRole(column: string, role: ColumnRole) {
+    if (!plan) return;
+    const roles = Object.fromEntries(plan.column_plan.map((p) => [p.column, p.role])) as Record<string, ColumnRole>;
+    roles[column] = role;
+    const pick = (r: ColumnRole) => Object.entries(roles).filter(([, x]) => x === r).map(([c]) => c);
+    setChoices((c) => ({ ...c, choices: { ...c.choices, metric_columns: pick("metric"), id_columns: pick("id") } }));
+  }
+
+  /** A metric's type, subtype or unit changed: remember the whole description for that column. */
+  function changeMetric(column: string, part: "type" | "subtype" | "unit", value: string) {
+    const p = plan?.column_plan.find((x) => x.column === column);
+    if (!p) return;
+    const current = { type: p.metric_type ?? "", subtype: p.metric_subtype, unit: p.metric_unit ?? "" };
+    const next = { ...current, [part]: part === "subtype" ? value || null : value };
+    setChoices((c) => ({ ...c, choices: { ...c.choices, metric_map: { ...(c.choices.metric_map ?? {}), [column]: next } } }));
+  }
+
   async function accept() {
     if (!plan) return;
     setBusy(true);
@@ -183,10 +323,10 @@ export default function WarehouseLoad(props: {
   return (
     <div className="space-y-5">
       <Card className="space-y-2">
-        <h2 className="font-semibold">Load into the database — check it first</h2>
+        <h2 className="font-semibold">Store this data — check it first</h2>
         <p className="text-sm text-ink-muted">
-          Your data needs a few changes to fit the warehouse. Below is exactly how it will be transformed, why, and how
-          it will look. <strong>Nothing is stored until you press “Accept and load”.</strong>
+          Below is exactly how your data will be stored, why, and how it will look. <strong>Nothing is stored until you
+          press “Accept and load”.</strong>
         </p>
         {plan?.storage.mode === "memory" && (
           <p className="rounded-xl bg-warn/10 p-2 text-xs">
@@ -218,41 +358,27 @@ export default function WarehouseLoad(props: {
               </select>
             </label>
             <p className="self-end text-xs text-ink-muted">
-              Table: <strong>{plan.source_name}</strong> · {fmtInt(plan.counts.rows_in)} cleaned row(s)
+              File: <strong>{plan.source_name}</strong> · {fmtInt(plan.counts.rows_in)} cleaned row(s)
             </p>
           </div>
-          <details>
-            <summary className="cursor-pointer text-sm font-medium">Which column is which? (we guessed — change any)</summary>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {plan.roles.map((r) => (
-                <label key={r.id} className="space-y-1 text-xs">
-                  <span>{r.label}</span>
-                  <select
-                    className="w-full rounded-xl border border-line bg-surface px-2 py-1.5 text-sm"
-                    value={plan.mapping[r.id] ?? ""}
-                    disabled={busy}
-                    onChange={(e) => setChoices((c) => ({ ...c, mapping: { ...c.mapping, [r.id]: e.target.value } }))}
-                  >
-                    <option value="">(not used)</option>
-                    {plan.columns.map((col) => (
-                      <option key={col} value={col}>
-                        {col}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
-          </details>
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold">How each column is stored (we guessed — change anything)</h3>
+            <ColumnPlanTable plan={plan.column_plan} busy={busy} onRole={changeRole} onMetric={changeMetric} />
+            {plan.counts.needs_review > 0 && (
+              <p className="text-xs text-warn">
+                {fmtInt(plan.counts.needs_review)} metric(s) are a guess (medium / low): please check what they measure.
+              </p>
+            )}
+          </div>
         </Card>
       )}
 
-      {busy && !plan && <p className="text-sm text-ink-muted">Working out the transformation…</p>}
+      {busy && !plan && <p className="text-sm text-ink-muted">Working out how to store it…</p>}
       <ErrorBox message={error} />
 
       {plan && (
         <Card className="space-y-3">
-          <h3 className="font-semibold">How your data will be transformed, and why</h3>
+          <h3 className="font-semibold">What happens to your data, and why</h3>
           <ol className="space-y-3">
             {plan.steps.map((s, i) => (
               <li key={i} className="flex gap-3 text-sm">
@@ -274,23 +400,20 @@ export default function WarehouseLoad(props: {
         <Card className="space-y-4">
           <h3 className="font-semibold">How it will look in the database</h3>
           <p className="text-sm">
-            <strong>{fmtInt(plan.counts.rows_to_load)}</strong> event row(s) to load
-            {plan.counts.customers > 0 && <>, {fmtInt(plan.counts.customers)} customer(s)</>}
-            {plan.counts.products > 0 && <>, {fmtInt(plan.counts.products)} product(s)</>}
-            {plan.counts.rows_skipped > 0 && (
-              <span className="text-ink-muted">
-                {" "}
-                · {fmtInt(plan.counts.rows_skipped)} skipped (
-                {Object.entries(plan.skipped)
-                  .map(([why, n]) => `${fmtInt(n)} ${why}`)
-                  .join(", ")}
-                )
-              </span>
+            <strong>{fmtInt(plan.counts.rows_to_load)}</strong> row(s) to store from {fmtInt(plan.counts.records)} row(s)
+            of your table
+            {plan.counts.metrics > 0 && <> ({fmtInt(plan.counts.metrics)} number column(s) → one row per number)</>}
+            {plan.counts.duplicates > 0 && (
+              <span className="text-ink-muted"> · {fmtInt(plan.counts.duplicates)} exact duplicate(s) stored once</span>
             )}
+            .
           </p>
-          {Object.entries(plan.tables).map(([name, t]) => (
-            <Preview key={name} name={name} table={t} />
-          ))}
+          {plan.tables.account_data && <Preview title="fact.account_data" table={plan.tables.account_data} />}
+          <p className={`rounded-xl p-2 text-xs ${plan.round_trip.ok ? "bg-good/10" : "bg-bad/10"}`}>
+            {plan.round_trip.ok
+              ? `Nothing is lost: rebuilding your table from these rows gives back all ${fmtInt(plan.round_trip.cells_checked)} cells exactly.`
+              : `Rebuilding the table gave ${fmtInt(plan.round_trip.mismatches)} different cell(s), so loading is off.`}
+          </p>
 
           {!result && !declined && (
             <div className="space-y-3 border-t border-line pt-4">
@@ -298,7 +421,7 @@ export default function WarehouseLoad(props: {
                 <label className="flex items-start gap-3 text-sm">
                   <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
                   <span>
-                    Store this data for <strong>{props.clientName}</strong> in the managed warehouse. It&apos;s kept
+                    Store this data for <strong>{props.clientName}</strong> in the managed database. It&apos;s kept
                     private to this account and can be deleted anytime.{" "}
                     <Link href="/storage-terms" target="_blank" className="text-brand underline">
                       Storage terms
@@ -331,9 +454,10 @@ export default function WarehouseLoad(props: {
           )}
           {result && (
             <p role="status" className="rounded-xl border border-good/40 bg-good/10 p-3 text-sm">
-              Loaded <strong>{fmtInt(result.result.rows_loaded)}</strong> new row(s)
+              Stored <strong>{fmtInt(result.result.rows_loaded)}</strong> new row(s)
+              {result.result.rows_updated > 0 && <>, updated {fmtInt(result.result.rows_updated)} changed row(s)</>}
               {result.result.rows_already_stored > 0 && (
-                <> — {fmtInt(result.result.rows_already_stored)} were already stored and skipped (no duplicates)</>
+                <> — {fmtInt(result.result.rows_already_stored)} were already stored unchanged (no duplicates)</>
               )}
               .
             </p>
@@ -345,34 +469,31 @@ export default function WarehouseLoad(props: {
         <Card className="space-y-2">
           <h3 className="font-semibold">Stored for {props.clientName}</h3>
           {!stored.warehouse.set_up ? (
-            <p className="text-sm text-bad">The warehouse tables aren&apos;t in the database yet: run db/warehouse.sql.</p>
-          ) : stored.warehouse.events === 0 ? (
+            <p className="text-sm text-bad">
+              The data table isn&apos;t in the database yet: run <code>python scripts/setup_database.py</code>.
+            </p>
+          ) : stored.warehouse.rows === 0 ? (
             <p className="text-sm text-ink-muted">Nothing stored yet.</p>
           ) : (
-            <>
-              <p className="text-sm">
-                {fmtInt(stored.warehouse.events)} event(s), {fmtInt(stored.warehouse.customers)} customer(s),{" "}
-                {fmtInt(stored.warehouse.products)} product(s) from {fmtInt(stored.warehouse.sources)} source(s)
-                {stored.warehouse.first_date && stored.warehouse.last_date && (
-                  <>
-                    , {fmtDate(stored.warehouse.first_date)} – {fmtDate(stored.warehouse.last_date)}
-                  </>
-                )}
-                .
-              </p>
-              <ul className="text-xs text-ink-muted">
-                {stored.warehouse.by_type.map((t) => (
-                  <li key={t.event_type}>
-                    {t.event_type}: {fmtInt(t.events)} event(s){t.amount ? `, ${fmtUsd(t.amount)}` : ""}
-                  </li>
-                ))}
-              </ul>
-            </>
+            <ul className="space-y-1 text-sm">
+              {stored.warehouse.sources.map((s) => (
+                <li key={`${s.source_system}/${s.source_name}`} className="flex flex-wrap items-center gap-x-2">
+                  <strong>{s.source_name}</strong>
+                  <span className="text-ink-muted">
+                    {s.label} · {fmtInt(s.records)} row(s) of the table, {fmtInt(s.rows)} stored row(s)
+                    {s.first_date && s.last_date && <> · {fmtDate(s.first_date)} – {fmtDate(s.last_date)}</>}
+                  </span>
+                  <button type="button" className="text-xs text-brand underline" onClick={() => download(s.source_name)}>
+                    Download CSV
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
-          {stored.warehouse.events > 0 && (
+          {stored.warehouse.rows > 0 && (
             <div className="flex flex-wrap gap-2 pt-1">
-              <Button variant="secondary" disabled={busy} onClick={downloadAll}>
-                Download as CSV
+              <Button variant="secondary" disabled={busy} onClick={() => download()}>
+                Download everything as CSV
               </Button>
               {props.canDelete && (
                 <Button variant="secondary" disabled={busy} onClick={() => setAskDelete(true)} className="text-bad">
@@ -394,10 +515,10 @@ export default function WarehouseLoad(props: {
               onConfirm={removeAll}
             >
               <p>
-                This permanently deletes {fmtInt(stored.warehouse.events)} event(s), {fmtInt(stored.warehouse.customers)}{" "}
-                customer(s) and {fmtInt(stored.warehouse.products)} product(s) from the database, and withdraws the
-                storage consent. It can&apos;t be undone — download a CSV first if you want a copy. The account itself
-                stays (see <Link href="/data-deletion" className="text-brand underline">Data deletion</Link> to close it).
+                This permanently deletes {fmtInt(stored.warehouse.rows)} stored row(s) from{" "}
+                {fmtInt(stored.warehouse.sources.length)} file(s), and withdraws the storage consent. It can&apos;t be
+                undone — download a CSV first if you want a copy. The account itself stays (see{" "}
+                <Link href="/data-deletion" className="text-brand underline">Data deletion</Link> to close it).
               </p>
             </ConfirmDialog>
           )}
@@ -407,8 +528,9 @@ export default function WarehouseLoad(props: {
               <ul className="mt-1 space-y-0.5">
                 {stored.loads.map((l) => (
                   <li key={l.id}>
-                    {fmtDateTime(l.started_at)} · {l.source_name} · {l.status} · {fmtInt(l.rows_loaded)} loaded
-                    {l.rows_skipped > 0 && `, ${fmtInt(l.rows_skipped)} skipped`}
+                    {fmtDateTime(l.started_at)} · {l.source_name} · {l.status} · {fmtInt(l.rows_loaded)} new
+                    {l.rows_updated > 0 && `, ${fmtInt(l.rows_updated)} updated`}
+                    {l.rows_skipped > 0 && `, ${fmtInt(l.rows_skipped)} unchanged`}
                     {l.error && ` · ${l.error}`}
                   </li>
                 ))}

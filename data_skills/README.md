@@ -115,7 +115,7 @@ with a price and an **Add** button.
 | [`er-diagram`](er-diagram/README.md) | project | Verified ER diagrams (Mermaid) with key checks |
 | [`data-dictionary-creator`](data-dictionary-creator/README.md) | Rosehill | Column-by-column documentation |
 | [`sql-queries`](sql-queries/README.md) | Anthropic | Correct, performant SQL across warehouse dialects |
-| [`unified-metrics`](unified-metrics/README.md) | Project | Test bench for the unified data table (`warehouse.unified_data`): metric columns → rows (type, subtype, unit, value), IDs/dates/categories kept, round-trip check that nothing is lost |
+| [`unified-metrics`](unified-metrics/README.md) | Project | Test bench for the stored-data table (`fact.account_data`): metric columns → rows (type, subtype, unit, value), IDs/dates/categories kept, round-trip check that nothing is lost |
 
 ### 6. Data Science & Machine Learning — *predict*
 | Skill | Source | Use it to… |

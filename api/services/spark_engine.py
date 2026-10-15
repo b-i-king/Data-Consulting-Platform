@@ -20,7 +20,7 @@ It gives the rest of the backend six small building blocks:
                            with a row cap so a huge table never blows memory
   * clean_with_spark()   — the first pandas cleaning steps, written for Spark
   * melt_to_unified()    — keep IDs/dates/categories, one row per metric
-                           (the warehouse.unified_data shape)
+                           (the fact.account_data shape)
 
 WHY PYSPARK IS OPTIONAL
 -----------------------
@@ -542,7 +542,7 @@ def melt_to_unified(
     drop_nulls: bool = True,
 ) -> "SparkDataFrame":
     """
-    Reshape a wide table to the unified shape (warehouse.unified_data): the
+    Reshape a wide table to the unified shape (fact.account_data): the
     kept columns stay as they are, and each METRIC becomes its own row.
 
     The Spark twin of api/services/unified.py `dataframe_to_unified`, for

@@ -42,7 +42,7 @@ cd web && npm run build              # frontend: production build
 1. Create a project at https://supabase.com.
 2. **Connect** → **Transaction pooler** (port 6543). Put it in `.env` as `DATABASE_URL=...`.
 3. Create the tables: `python scripts/setup_database.py` (runs `db/schema.sql` and
-   `db/warehouse.sql`, then lists every table) — or paste both files into the SQL Editor.
+   both schemas, `dim` and `fact`, then lists every table) — or paste the file into the SQL Editor.
 4. Optional, for Supabase passwords: `SUPABASE_URL` and `SUPABASE_KEY` (anon /
    publishable key). Without them, passwords are hashed by the API itself.
 5. Restart the API; `/health` should now say `"database": "connected"` (and

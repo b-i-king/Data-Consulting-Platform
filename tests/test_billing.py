@@ -1,7 +1,7 @@
 """
 Payments: plans with monthly + annual prices, Stripe Checkout, the signed
-webhook, the billing portal, prepaid consulting hours, and test (placeholder)
-mode. Stripe itself is never called: a small fake stands in for its library,
+webhook, the billing portal, consulting (booked on Cal.com, not sold here),
+and test (placeholder) mode. Stripe itself is never called: a small fake stands in for its library,
 and webhook signatures are made the same way Stripe makes them.
 """
 
@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from api.core.config import get_settings
 from api.main import app
-from api.services import account_store, billing, pricing
+from api.services import account_store, billing, pricing, warehouse_store
 
 client = TestClient(app)
 WHSEC = "whsec_test_secret"
@@ -30,8 +30,8 @@ def fresh(monkeypatch):
 
     Turns Stripe off (empty STRIPE_SECRET_KEY, so billing runs in test/placeholder mode),
     sets a known webhook signing secret, clears the cached settings, and empties the
-    in-memory account store (accounts, teams, subscriptions, services, plans, consultants,
-    consulting hours). Settings are cleared again after the test.
+    in-memory account store (accounts, teams, subscriptions, consultants). Settings are
+    cleared again after the test.
 
     Args:
         monkeypatch: pytest fixture for setting environment variables for one test.
@@ -43,9 +43,8 @@ def fresh(monkeypatch):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", WHSEC)
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._teams, account_store._subscriptions,
-                  account_store._services, account_store._plans, account_store._consultants):
+                  account_store._consultants):
         store.clear()
-    account_store._consulting.clear()
     yield
     get_settings.cache_clear()
 
@@ -188,21 +187,18 @@ def test_a_package_unlocks_only_its_tools_and_can_change():
     assert len(plan["subscriptions"]) == 1 and "data_science_ml" in plan["active"]
 
 
-def test_consulting_hours_in_test_mode_and_limits():
+def test_consulting_is_booked_on_calcom_not_bought_here():
     """
-    Check that buying consulting hours in test mode records them, that 0 hours is rejected (422),
-    and that the billing portal is unavailable (400) without Stripe.
+    Check that consulting hours are not sold through the API (they're paid on Cal.com),
+    the free first call is reported, and the billing portal is unavailable (400) without Stripe.
     """
     token, _ = _signup()
-    res = client.post("/api/billing/consulting-hours", headers=_h(token), json={"hours": 2, "service_id": "data_engineering"})
-    assert res.json()["activated"]
+    assert client.post("/api/billing/consulting-hours", headers=_h(token), json={"hours": 2}).status_code == 404
     consulting = client.get("/api/accounts/services", headers=_h(token)).json()["consulting"]
-    assert {k: consulting[k] for k in ("rate_per_hour_usd", "free_minutes", "hours_bought")} == \
-        {"rate_per_hour_usd": 80.0, "free_minutes": 30, "hours_bought": 2.0}
-    assert consulting["free_used"] is False   # buying hours doesn't use up the free consultation
-    assert client.post("/api/billing/consulting-hours", headers=_h(token), json={"hours": 0}).status_code == 422
+    assert {k: consulting[k] for k in ("rate_per_hour_usd", "free_minutes")} == \
+        {"rate_per_hour_usd": 80.0, "free_minutes": 30}
+    assert "hours_bought" not in consulting and consulting["free_used"] is False
     assert client.post("/api/billing/portal", headers=_h(token)).status_code == 400   # no portal in test mode
-
 
 def test_team_members_cant_change_billing():
     """
@@ -351,14 +347,20 @@ def stripe_on(monkeypatch):
     return fake
 
 
-def test_checkout_sends_the_client_to_stripe(stripe_on):
+def test_checkout_sends_the_client_to_stripe(stripe_on, monkeypatch):
     """
     Check that checkout with Stripe on returns a Stripe Checkout URL with one line per billable tool
     (AI is free, so not charged), unlocks nothing until the webhook, and that the portal works.
 
     Args:
         stripe_on: Fixture that installs FakeStripe and returns it.
+        monkeypatch: pytest fixture; marks the account as having stored data (AI needs it,
+            tests/test_warehouse.py checks that rule).
     """
+    async def has_data(_holder):
+        return True
+
+    monkeypatch.setattr(warehouse_store, "has_data", has_data)
     token, account_id = _signup()
     res = client.post("/api/billing/checkout", headers=_h(token),
                       json={"plan_ids": ["data_visualization", "data_engineering", "ai"], "interval": "year"})
@@ -487,24 +489,6 @@ def test_a_fake_webhook_is_rejected(stripe_on):
     assert account_store._subscriptions == {}
 
 
-def test_paid_consulting_hours_are_recorded_once(stripe_on):
-    """
-    Check that a paid consulting-hours Checkout webhook records the hours exactly once, even when
-    Stripe sends the same event twice.
-
-    Args:
-        stripe_on: Fixture that installs FakeStripe and returns it.
-    """
-    token, account_id = _signup()
-    event = {"id": "evt_2", "object": "event", "type": "checkout.session.completed", "data": {"object": {
-        "id": "cs_test_9", "object": "checkout.session", "payment_status": "paid", "amount_total": 24000,
-        "metadata": {"account_id": account_id, "kind": "consulting_hours", "hours": "3", "service_id": ""}}}}
-    for _ in range(2):                                  # Stripe may send an event twice
-        payload, headers = _signed(event)
-        client.post("/api/billing/webhook", content=payload, headers=headers)
-    assert client.get("/api/accounts/services", headers=_h(token)).json()["consulting"]["hours_bought"] == 3.0
-
-
 # ── scripts/sync_stripe.py ───────────────────────────────────────────────────
 
 def test_sync_creates_products_and_both_prices_once():
@@ -619,8 +603,8 @@ def test_sync_creates_products_and_both_prices_once():
 
     fake = NS(Product=Product, Price=Price)
     rows = mod.sync(fake, log=lambda *_: None)
-    assert len(products) == len(pricing.SUBSCRIPTIONS) + 1          # + the consulting hour
-    assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS) + 1
+    assert len(products) == len(pricing.SUBSCRIPTIONS)              # consulting is paid on Cal.com, not Stripe
+    assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS)
     assert all(r["stripe_monthly_price_id"] and r["stripe_annual_price_id"] for r in rows)
     mod.sync(fake, log=lambda *_: None)                              # running again changes nothing
-    assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS) + 1
+    assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS)

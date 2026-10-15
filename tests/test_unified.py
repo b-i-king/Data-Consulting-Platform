@@ -11,8 +11,8 @@ They cover the owner's promises:
    the name with a confidence; expenses make "amount" a cost.
 3. No duplicate data: loading the same data again inserts nothing and changes
    nothing; a changed value is an update; identical rows count once.
-It also checks that the Python field maps and the warehouse.field_map seed in
-db/warehouse.sql stay identical.
+It also checks that the Python field maps and the fact.field_map seed in
+db/schema.sql stay identical.
 """
 
 import json
@@ -173,12 +173,12 @@ def test_quickbooks_wide_has_one_row_per_line():
     assert str(header["transaction_date"].date()) == "2026-09-14"
 
 
-def test_every_entity_uses_an_existing_event_type():
-    """Each QuickBooks entity points at a (type, subtype) pair seeded in dim_event_type."""
-    sql = (ROOT / "db" / "warehouse.sql").read_text(encoding="utf-8")
-    seeded = set(re.findall(r"\('(\w+)',\s*'(\w+)',\s*'(?:amount|quantity|score|count)'", sql))
+def test_every_entity_uses_a_known_event_type():
+    """Each QuickBooks entity is stored as a (type, subtype) pair the load flow knows (warehouse_loader.EVENT_TYPES)."""
+    from api.services.warehouse_loader import EVENT_TYPES
+
     for event_type, event_subtype, _ in QUICKBOOKS_ENTITIES.values():
-        assert (event_type, event_subtype) in seeded
+        assert f"{event_type}/{event_subtype}" in EVENT_TYPES
 
 
 # ── Uploaded files ──────────────────────────────────────────────────────────
@@ -218,6 +218,19 @@ def test_text_dates_from_cleaning_are_dates():
                                 date_column="order_date", id_column="order_id")
     assert str(long["event_date"].iloc[0]) == "2026-09-01"
     assert round_trip(text, long)["ok"]
+
+
+def test_mostly_dates_is_the_date_column_and_keeps_odd_values():
+    """A date column with one typo is still the date column; the typo is stored as written (nothing lost)."""
+    df = pd.DataFrame({"order_date": [f"2026-09-{d:02d}" for d in range(1, 11)] + ["TBD"],
+                       "amount": [1.0] * 11})
+    plan = {p["column"]: p for p in plan_columns(df)}
+    assert plan["order_date"]["role"] == "date" and plan["order_date"]["value_type"] == "text"
+    long = dataframe_to_unified(df, event_type="transaction", event_subtype="income", date_column="order_date",
+                                keep_identical_rows=True)
+    assert long["event_date"].notna().sum() == 10                    # the TBD row has no date
+    assert long.iloc[-1]["attributes"]["transaction_date"] == "TBD"
+    assert round_trip(df, long)["ok"]
 
 
 def test_classify_metric_guesses_from_the_name():
@@ -419,8 +432,8 @@ def test_newest_copy_wins_inside_a_batch():
 
 def test_field_map_matches_sql_seed():
     """Every (system, source_field) -> (name, value_type, metric type/subtype/unit) is the same in Python and SQL."""
-    sql = (ROOT / "db" / "warehouse.sql").read_text(encoding="utf-8")
-    block = sql[sql.index("INSERT INTO field_map"):]
+    sql = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+    block = sql[sql.index("INSERT INTO fact.field_map"):]
     block = block[:block.index("ON CONFLICT")]
     value = r"\s*(NULL|'[^']*')"
     rows = re.findall(r"\('(\w+)',\s*'([^']+)',\s*'(\w+)',\s*'(\w+)'," + value + "," + value + "," + value, block)
