@@ -28,8 +28,8 @@ includes your `BOOKING_URL`.
 | | Price | How it's paid |
 |---|---|---|
 | First consultation (any service except Data Strategy & Discovery) | **Free, 30 minutes** | Booked through `BOOKING_URL` |
-| Consulting after that | **$80 / hour** (`CONSULTING_RATE_PER_HOUR_USD`) | Prepaid hours in Plan & billing (Stripe Checkout, price `dcp_consulting_hour`) |
-| Data Strategy & Discovery | **$80 / hour from the first hour** | Same prepaid hours (it *is* the consulting) |
+| Consulting after that | **$80 / hour** (`CONSULTING_RATE_PER_HOUR_USD`) | Booked and paid on Cal.com (`PAID_BOOKING_URL`), shown once the consultant confirms the free call happened |
+| Data Strategy & Discovery | **$80 / hour from the first hour** | Same paid Cal.com link (it *is* the consulting) |
 | "Done for you" (a consultant does the work) | Free 30-minute call, then hourly or a package | Hours, or a package price agreed on the call |
 
 Code: `consultation_terms()` and `consulting_rate()` in `pricing.py`; every
@@ -140,7 +140,7 @@ Code: `api/services/entitlements.py`.
 
 Each download writes a row to `usage_events` (account, dataset name, row count,
 runtime, billable minutes, amount; $0 with a plan that includes cleaning).
-Subscriptions and consulting hours are paid through Stripe ([PAYMENTS.md](PAYMENTS.md));
+Subscriptions are paid through Stripe ([PAYMENTS.md](PAYMENTS.md)); consulting sessions on Cal.com;
 pay-per-minute downloads without a plan are recorded but not yet charged.
 
 ## What a download costs YOU (hosting)

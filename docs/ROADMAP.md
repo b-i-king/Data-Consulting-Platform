@@ -47,7 +47,7 @@ Still to do:
 ### 2. Payments — ✅ built, in test mode
 Stripe subscriptions (each plan has a monthly and an annual price), Checkout,
 a signed webhook that keeps `subscriptions` in sync, the billing portal for
-"cancel anytime", and prepaid consulting hours. To go live, follow
+"cancel anytime". (Consulting sessions are paid on Cal.com instead.) To go live, follow
 [PAYMENTS.md](PAYMENTS.md) (set real prices in `api/services/pricing.py`, run
 `scripts/sync_stripe.py`, add the webhook and keys). Still open: charging
 pay-per-minute cleaning without a plan through Stripe (today it's recorded in
@@ -79,17 +79,18 @@ For clients who want their data stored and managed for them. The schema is
 ready (`db/warehouse.sql`, [DATA_MODEL.md](DATA_MODEL.md)): one shared star
 schema, `client_id` + Row Level Security.
 1. ✅ `storage_consents` (explicit opt-in, terms version) — [DATABASE.md](DATABASE.md).
-2. ✅ Design change recorded in ARCHITECTURE.md ("Managed storage").
-   Still needed: a privacy policy / terms page the consent box links to.
+2. ✅ Design change recorded in ARCHITECTURE.md ("Managed storage"), plus
+   `/privacy`, `/terms`, `/storage-terms` and `/data-deletion` pages.
 3. ✅ Loader with a **preview → accept** screen: every transformation step with
    its "why", the first rows of each table, consent, `load_runs` audit, no
    duplicates on reload. Next: fuzzy-match review (customers named slightly
    differently across sources), employees (`dim_employee`), and loading
    several tables of one upload in one go.
-4. Delete-on-request (withdrawn consent → rows deleted within 30 days) — a
-   "Withdraw and delete" button plus a scheduled job.
-5. Dashboards and skills that read from the warehouse (today they read the
-   uploaded files).
+4. ✅ "Delete stored data" button (immediate; consent withdrawn) and "Download as
+   CSV". Full account deletion is by email for now (`/data-deletion`).
+5. ✅ "Use my stored data": the client (own login) and consultant open the same
+   stored table in every service. Next: saved dashboards that refresh on their
+   own, and scheduled reloads.
 6. Storage pricing in the Data Engineering plan.
 
 ### 6. QuickBooks *(priority 4)*
@@ -114,14 +115,13 @@ budget. When the AI can't answer, offer the consultant (free 30 minutes). Flip
 ### 8. Consultant workflow
 - ✅ Consultants table, "do it for me" signup, "Working on" client picker
   (searchable), "Add a client", every tool unlocked, downloads billed to the client.
-- ✅ Free 30-minute first consultation, then $80/hour prepaid through Stripe
-  (Data Strategy & Discovery is paid from the first hour).
+- ✅ Free 30-minute first consultation, then $80/hour sessions booked and paid on
+  Cal.com (Data Strategy & Discovery is paid from the first hour).
 - ✅ Consultation tracking: Cal.com webhook (booked / rescheduled / canceled /
   ended) + the consultant's "Confirm it happened"; then the paid Cal.com link
   (`PAID_BOOKING_URL`). Booking links carry the client's name, email and id.
 - ✅ Consultants see all seven services, AI as a preview.
-- Track consulting hours used vs. bought (deduct confirmed paid sessions);
-  reassign a client to another consultant; "invite this client" email; notes
+- Reassign a client to another consultant; "invite this client" email; notes
   per client; a list of bookings from people without an account yet.
 - Pass questionnaire answers to the booking link (Cal.com `metadata[...]`).
 - Admin page: new signups, plans, usage, hours.

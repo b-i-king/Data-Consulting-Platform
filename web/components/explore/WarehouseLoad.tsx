@@ -13,15 +13,27 @@
 // "Accept and load" — or "Don't load", which stores nothing. The server only
 // loads if the data and choices still match this preview (its fingerprint).
 //
+// The "Stored for ..." card underneath shows what's stored, with "Download as
+// CSV" and "Delete stored data" (the plan holder or their consultant; it also
+// withdraws the storage consent). Storage terms: /storage-terms.
+//
 // Server side: api/routers/warehouse.py, api/services/warehouse_loader.py.
 
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { getWarehouseSummary, loadToWarehouse, previewLoad, type LoadChoices } from "@/lib/api";
+import {
+  deleteStoredData,
+  getStoredDataFile,
+  getWarehouseSummary,
+  loadToWarehouse,
+  previewLoad,
+  type LoadChoices,
+} from "@/lib/api";
 import { fmtDate, fmtDateTime, fmtInt, fmtUsd } from "@/lib/format";
-import type { Cell, CleaningInput, LoadPlan, LoadResult, PreviewTable, WarehouseSummary } from "@/lib/types";
-import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import type { Cell, CleaningInput, LoadPlan, LoadResult, PreviewTable, WarehouseCounts, WarehouseSummary } from "@/lib/types";
+import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 const TABLE_NAMES: Record<string, string> = {
   fact_event: "Events (fact_event)",
@@ -68,7 +80,18 @@ function Preview({ name, table }: { name: string; table: PreviewTable }) {
   );
 }
 
-export default function WarehouseLoad(props: { token: string; input: CleaningInput; groupId: number; clientName: string }) {
+export default function WarehouseLoad(props: {
+  token: string;
+  input: CleaningInput;
+  groupId: number;
+  clientName: string;
+  /** The plan holder (or their consultant) may delete; team members may not. */
+  canDelete: boolean;
+  /** Tell the workspace what's stored now (for its "Use my stored data" buttons). */
+  onStoredChanged?: (counts: WarehouseCounts) => void;
+}) {
+  const [askDelete, setAskDelete] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const [plan, setPlan] = useState<LoadPlan | null>(null);
   const [choices, setChoices] = useState<LoadChoices>({ groupId: props.groupId, mapping: {}, eventType: "" });
   const [consent, setConsent] = useState(false);
@@ -78,11 +101,49 @@ export default function WarehouseLoad(props: { token: string; input: CleaningInp
   const [result, setResult] = useState<LoadResult | null>(null);
   const [stored, setStored] = useState<WarehouseSummary | null>(null);
 
+  const { onStoredChanged } = props;
   const refreshSummary = useCallback(() => {
     getWarehouseSummary(props.token)
-      .then(setStored)
+      .then((s) => {
+        setStored(s);
+        onStoredChanged?.(s.warehouse);
+      })
       .catch(() => {});
-  }, [props.token]);
+  }, [props.token, onStoredChanged]);
+
+  async function downloadAll() {
+    try {
+      const file = await getStoredDataFile(props.token);
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Download failed.");
+    }
+  }
+
+  async function removeAll() {
+    setAskDelete(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await deleteStoredData(props.token);
+      setNote(
+        `Deleted ${fmtInt(r.deleted.events)} event(s), ${fmtInt(r.deleted.customers)} customer(s) and ` +
+          `${fmtInt(r.deleted.products)} product(s). Storage consent is withdrawn; loading again asks for it anew.`,
+      );
+      setResult(null);
+      setConsent(false);
+      refreshSummary();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Preview again whenever a choice changes (nothing is stored by a preview).
   useEffect(() => {
@@ -238,8 +299,11 @@ export default function WarehouseLoad(props: { token: string; input: CleaningInp
                   <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
                   <span>
                     Store this data for <strong>{props.clientName}</strong> in the managed warehouse. It&apos;s kept
-                    private to this account and can be deleted on request.{" "}
-                    <span className="text-ink-muted">(Storage terms {plan.storage.terms_version}.)</span>
+                    private to this account and can be deleted anytime.{" "}
+                    <Link href="/storage-terms" target="_blank" className="text-brand underline">
+                      Storage terms
+                    </Link>{" "}
+                    <span className="text-ink-muted">({plan.storage.terms_version})</span>
                   </span>
                 </label>
               )}
@@ -304,6 +368,38 @@ export default function WarehouseLoad(props: { token: string; input: CleaningInp
                 ))}
               </ul>
             </>
+          )}
+          {stored.warehouse.events > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button variant="secondary" disabled={busy} onClick={downloadAll}>
+                Download as CSV
+              </Button>
+              {props.canDelete && (
+                <Button variant="secondary" disabled={busy} onClick={() => setAskDelete(true)} className="text-bad">
+                  Delete stored data
+                </Button>
+              )}
+            </div>
+          )}
+          {note && (
+            <p role="status" className="text-sm">
+              {note}
+            </p>
+          )}
+          {askDelete && (
+            <ConfirmDialog
+              title={`Delete everything stored for ${props.clientName}?`}
+              confirmLabel="Delete stored data"
+              onCancel={() => setAskDelete(false)}
+              onConfirm={removeAll}
+            >
+              <p>
+                This permanently deletes {fmtInt(stored.warehouse.events)} event(s), {fmtInt(stored.warehouse.customers)}{" "}
+                customer(s) and {fmtInt(stored.warehouse.products)} product(s) from the database, and withdraws the
+                storage consent. It can&apos;t be undone — download a CSV first if you want a copy. The account itself
+                stays (see <Link href="/data-deletion" className="text-brand underline">Data deletion</Link> to close it).
+              </p>
+            </ConfirmDialog>
           )}
           {stored.loads.length > 0 && (
             <details className="text-xs">

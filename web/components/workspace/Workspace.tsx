@@ -12,9 +12,12 @@
 //   * On phones the pane becomes a row you can swipe sideways.
 //
 // RIGHT SIDE
-//   Client data is never stored (docs/ARCHITECTURE.md), so each visit starts
-//   by picking files; they stay in this browser tab's memory and are re-sent
-//   when needed. Each service's page has a SKILL MENU at the top and opens on
+//   Each visit starts by picking files; they stay in this browser tab's memory
+//   and are re-sent when needed. Clients with MANAGED STORAGE (data loaded
+//   through Data Engineering) can instead press "Use my stored data": the
+//   stored table comes back as a CSV file (GET /api/warehouse/export) and goes
+//   through exactly the same flow — so the client, signed in with their own
+//   account, sees the same dashboards and analysis as their consultant. Each service's page has a SKILL MENU at the top and opens on
 //   its primary view:
 //       Data Cleaning       the cleaning report + download
 //       Data Visualization  the dashboard
@@ -61,6 +64,8 @@ import {
   getMyClients,
   getMyServices,
   getSkills,
+  getStoredDataFile,
+  getWarehouseSummary,
   setActingAs,
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
@@ -71,7 +76,7 @@ import ClientPicker, { AddClientForm } from "./ClientPicker";
 import ConsultationPanel from "./ConsultationPanel";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
+import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult, WarehouseCounts } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
@@ -104,7 +109,7 @@ function howToGet(s: Service): string {
     const soon = s.available ? "" : " Free until it launches.";
     return `Add it to your package: ${fmtUsd(s.tool_monthly_usd)}/month or ${fmtUsd(s.tool_annual_usd ?? 0)}/year, cancel anytime.${needs}${soon} Rather have it done for you? ${s.consultation.text}.`;
   }
-  if (s.pricing_model === "hourly") return `${s.consultation.text} — buy hours in Plan & billing, then book a time.`;
+  if (s.pricing_model === "hourly") return `${s.consultation.text} — book and pay for a session on the booking page.`;
   return `${s.consultation.text}.`;
 }
 
@@ -143,6 +148,8 @@ export default function Workspace() {
   const [transforms, setTransforms] = useState<Transforms>({});
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
+  // What this client has in managed storage (offered as "Use my stored data").
+  const [stored, setStored] = useState<WarehouseCounts | null>(null);
 
   // Consultant mode: my clients, the one I'm working on (null = my own workspace).
   const [options, setOptions] = useState<IntakeOptions | null>(null);
@@ -221,6 +228,31 @@ export default function Workspace() {
 
   async function reloadPlan() {
     if (session) setPlan(await getMyServices(session.token));
+  }
+
+  // Whenever the workspace's account changes (sign-in, or a consultant switching
+  // client), check what's in managed storage for it.
+  const planAccountId = plan?.account.id;
+  useEffect(() => {
+    if (!session || !planAccountId) return;
+    getWarehouseSummary(session.token)
+      .then((s) => setStored(s.warehouse))
+      .catch(() => setStored(null));
+  }, [session, planAccountId]);
+
+  // "Use my stored data": the stored table comes back as a CSV file and is
+  // opened exactly like a picked file.
+  async function openStored(eventType: string) {
+    if (!session) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const file = await getStoredDataFile(session.token, eventType);
+      await clean([file]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't open the stored data.");
+      setBusy(false);
+    }
   }
 
 
@@ -543,9 +575,7 @@ export default function Workspace() {
                 <p className="text-sm text-ink-muted">Ask your team&apos;s owner to add this tool.</p>
               ) : currentService.tool_monthly_usd != null ? (
                 <Button onClick={() => add(currentService.id)}>Add {navName(currentService)} to my package</Button>
-              ) : (
-                <Button onClick={() => setSection(BILLING)}>Buy consulting hours</Button>
-              )}
+              ) : null}
               {!isConsultant && (
                 <a
                   href={bookFor(currentService)}
@@ -578,6 +608,21 @@ export default function Workspace() {
                 onChange={(e) => e.target.files?.length && clean(Array.from(e.target.files))}
               />
             </label>
+            {stored && stored.events > 0 && (
+              <div className="mt-5 border-t border-line pt-4">
+                <h3 className="text-sm font-semibold">Or use the data stored for {whoName}</h3>
+                <p className="mt-1 text-xs text-ink-muted">
+                  Kept in managed storage (Data Engineering). Your consultant sees the same data.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {stored.by_type.map((t) => (
+                    <Button key={t.event_type} variant="secondary" disabled={busy} onClick={() => openStored(t.event_type)}>
+                      {t.label} · {t.events.toLocaleString("en-US")} rows
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </Card>
         ) : currentService && analysis && group ? (
           <div className="space-y-6">
@@ -683,6 +728,8 @@ export default function Workspace() {
                 input={input}
                 groupId={group.group_id}
                 clientName={whoName}
+                canDelete={!!plan?.can_add}
+                onStoredChanged={setStored}
               />
             )}
 

@@ -1,4 +1,4 @@
-// "Plan & billing" in the workspace: subscriptions, cancel anytime, consulting hours.
+// "Plan & billing" in the workspace: subscriptions, cancel anytime, booking a consultant.
 //
 //   Your package      the live subscription and its tools (tables `subscriptions`
 //                     + `subscription_items`, kept in sync by Stripe's webhook),
@@ -8,8 +8,11 @@
 //                     monthly or yearly -> Stripe Checkout, or — if they already
 //                     subscribe — the subscription's tools change in place
 //                     (Stripe prorates the difference).
-//   Consulting        the free 30-minute first consultation (booking link), and
-//                     prepaid hours at the hourly rate -> Stripe Checkout.
+//   Consulting        ONE booking button: the free 30-minute first consultation
+//                     until a consultant confirms it happened, then the paid
+//                     Cal.com link. Paid sessions are booked AND paid on Cal.com
+//                     (usually one hour at a time), so nothing about them is
+//                     bought or stored here (api/services/consultations.py).
 //
 // Everything that costs money asks for confirmation first, with the total.
 // TEST MODE (no Stripe key on the server): choices take effect at once with no
@@ -19,7 +22,7 @@
 "use client";
 
 import { useState } from "react";
-import { buyConsultingHours, cancelPlanTestMode, openBillingPortal, startCheckout } from "@/lib/api";
+import { cancelPlanTestMode, openBillingPortal, startCheckout } from "@/lib/api";
 import { fmtUsd } from "@/lib/format";
 import type { BillingInterval, MyServices } from "@/lib/types";
 import { Card, ConfirmDialog, ErrorBox, TotalRow } from "@/components/wizard/ui";
@@ -44,8 +47,6 @@ export default function BillingPanel(props: {
   );
   const [asking, setAsking] = useState(false);
   const [canceling, setCanceling] = useState(false);
-  const [hours, setHours] = useState("1");
-  const [askHours, setAskHours] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +55,6 @@ export default function BillingPanel(props: {
   const nextTotal = packageTotal(plan.plans, next, interval);
   const unchanged = !!live && live.interval === interval && [...live.plan_ids].sort().join() === [...next].sort().join();
   const nextNames = next.map((id) => plan.plans.find((p) => p.id === id)?.name).join(" + ");
-  const n = Math.max(1, Math.min(40, Number(hours) || 1));
 
   /** Run a billing action: go to Stripe's page, or (test mode) refresh. */
   async function act(run: () => Promise<{ url: string | null }>, done: string) {
@@ -80,7 +80,7 @@ export default function BillingPanel(props: {
     <div className="space-y-6">
       {!stripe && (
         <p role="status" className="rounded-2xl border border-warn/40 bg-warn/10 p-3 text-sm">
-          <strong>Test mode:</strong> payments aren&apos;t switched on yet, so packages and hours take effect right away
+          <strong>Test mode:</strong> payments aren&apos;t switched on yet, so packages take effect right away
           and nothing is charged.
         </p>
       )}
@@ -145,7 +145,7 @@ export default function BillingPanel(props: {
         <h2 className="font-semibold">Talk to a consultant</h2>
         <p className="mt-1 text-sm text-ink-muted">
           Your first {plan.consulting.free_minutes}-minute consultation is free (Data Strategy &amp; Discovery is paid
-          from the start). After that, consulting is {fmtUsd(rate)}/hour, prepaid here.
+          from the start). After that, sessions are {fmtUsd(rate)}/hour — you book and pay on the booking page.
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <a
@@ -158,31 +158,7 @@ export default function BillingPanel(props: {
               ? `Book a consulting session (${fmtUsd(rate)}/hour)`
               : `Book the free ${plan.consulting.free_minutes}-minute call`}
           </a>
-          {plan.can_add && (
-            <>
-              <label className="text-sm">
-                <span className="block text-xs text-ink-muted">Hours</span>
-                <input
-                  inputMode="numeric"
-                  value={hours}
-                  onChange={(e) => setHours(e.target.value.replace(/\D/g, "").slice(0, 2))}
-                  className="w-20 rounded-xl border border-line bg-surface px-2 py-1.5 text-sm"
-                />
-              </label>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setAskHours(true)}
-                className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong disabled:opacity-50"
-              >
-                Buy {n} hour{n === 1 ? "" : "s"} · {fmtUsd(n * rate)}
-              </button>
-            </>
-          )}
         </div>
-        {plan.consulting.hours_bought > 0 && (
-          <p className="mt-2 text-xs text-ink-muted">Hours bought so far: {plan.consulting.hours_bought}</p>
-        )}
       </Card>
 
       {note && (
@@ -220,23 +196,6 @@ export default function BillingPanel(props: {
             {live && stripe && " Changes are prorated: you're charged (or credited) the difference on your next invoice."}
             {!live && stripe && " You'll pay on Stripe's secure page; your card details never reach our server."}
           </p>
-        </ConfirmDialog>
-      )}
-
-      {askHours && (
-        <ConfirmDialog
-          title="Buy consulting hours?"
-          confirmLabel={stripe ? "Continue to secure payment" : "Buy (test mode)"}
-          onCancel={() => setAskHours(false)}
-          onConfirm={() => {
-            setAskHours(false);
-            act(() => buyConsultingHours(props.token, n), `${n} consulting hour${n === 1 ? "" : "s"} added.`);
-          }}
-        >
-          <div className="space-y-1 rounded-xl bg-surface-2 p-3">
-            <TotalRow label={`${n} hour${n === 1 ? "" : "s"} × ${fmtUsd(rate)}`} value={fmtUsd(n * rate)} />
-            <TotalRow strong label="Total you'll pay" value={fmtUsd(n * rate)} />
-          </div>
         </ConfirmDialog>
       )}
 

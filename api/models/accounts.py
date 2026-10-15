@@ -477,3 +477,10 @@ class ConsultationUpdateIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+
+
+class DeleteStoredIn(BaseModel):
+    """The "delete my stored data" request (POST /api/warehouse/delete). The word DELETE must be sent
+    on purpose, so a stray click or request can't wipe a client's data."""
+
+    confirm: str = Field(max_length=20)

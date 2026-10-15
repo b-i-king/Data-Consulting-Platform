@@ -53,6 +53,7 @@ coding, so **understanding the code matters as much as the code itself**.
 pytest -q                          # backend tests
 uvicorn api.main:app --reload      # backend dev server (:8000)
 cd web && npm run dev              # frontend dev server (:3000)
+cd web && npm run lint             # ESLint (also runs on every PR: .github/workflows/vercel_checks.yml)
 cd web && npm run typecheck        # TypeScript
 cd web && npm run build            # production build
 python -m data_skills list         # skills by category

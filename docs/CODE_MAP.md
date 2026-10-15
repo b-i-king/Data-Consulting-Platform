@@ -95,6 +95,8 @@ services the client chose are offered; the rest are badges from
 | `scripts/setup_database.py` | Runs schema.sql + warehouse.sql, lists every table and row count | After pulling schema changes |
 | `web/components/explore/WarehouseLoad.tsx` | Data Engineering "Load into database": preview, why, accept | Changing the load screen |
 | `web/components/workspace/ConsultationPanel.tsx` | Consultant's Consultations card (confirm the free call) | Changing consultation tracking |
+| `web/app/{privacy,terms,storage-terms,data-deletion}/page.tsx` + `web/components/legal/LegalPage.tsx` | Legal pages (from the template) | Changing what you collect or store; storage terms also bump `TERMS_VERSION` in `api/routers/warehouse.py` |
+| `.github/workflows/vercel_checks.yml` + `web/eslint.config.mjs` | Lint + type check on every PR touching `web/`, reported to Vercel | Adding checks |
 | `api/models/accounts.py` | Validates signup/quote JSON | Adding signup fields |
 | `api/routers/*.py` | HTTP endpoints (thin) | Adding an endpoint |
 | `api/services/file_reader.py` | Read uploads (format registry) | Supporting a new file type: add one `FileFormat` + a test sample |

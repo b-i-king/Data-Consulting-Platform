@@ -181,11 +181,11 @@ erDiagram
 | `subscription_plans` | thing you sell = Stripe product: each **tool**, and the All tools **bundle** | `scripts/sync_stripe.py` | Prices are defined in `api/services/pricing.py`; the script copies them here with the Stripe ids. `is_base` = Data Cleaning (in every package); `requires` = AI needs Data Engineering; `service_ids = '{}'` means every service (the bundle). |
 | `subscriptions` | client subscription | **Stripe webhook only** (`api/services/billing.py`) | One billing interval for all its tools. `active`, `trialing`, `past_due` keep it on. Cancel = `cancel_at_period_end` until the period ends, then `canceled`. |
 | `subscription_items` | tool in a subscription ("build your own package") | Stripe webhook (replaced as a whole on every change) | The total price is the sum of the items' prices. |
-| `consulting_purchases` | paid Checkout for consulting hours | Stripe webhook | The free 30-minute first call isn't a purchase; it's booked through `BOOKING_URL`. |
+| `consulting_purchases` | paid Checkout for consulting hours | Stripe webhook | **Not used by the website any more**: paid sessions are booked and paid on Cal.com (`PAID_BOOKING_URL`) and tracked in `consultations`. Kept so old rows stay readable. |
 | `usage_events` | cleaned-file download | download endpoint | Metadata only (name, row count, runtime, amount) — never the data. `consultant_id` set when a consultant downloaded for the client. Amount is $0 when a plan includes Data Cleaning. |
 | `intake_responses` | guest questionnaire | (not used yet) | Analytics: which sources and services people ask for. |
 | `consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to `PAID_BOOKING_URL`. `ended` = Cal.com says the slot passed, waiting for the consultant. Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |
-| `storage_consents` | client's "store my data" | first warehouse load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. `consented_by` = the client, or the consultant acting for them. |
+| `storage_consents` | client's "store my data" | first warehouse load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. `consented_by` = the client, or the consultant acting for them. "Delete stored data" sets `withdrawn_at`. |
 | `load_runs` | load into the warehouse | warehouse load | Metadata only: rows in / loaded / skipped, the accepted preview's fingerprint, status and error. |
 
 **Accounts and passwords:** `auth_user_id` links an account to its Supabase

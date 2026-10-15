@@ -8,9 +8,17 @@ Data Engineering: load cleaned data into the client's warehouse — preview firs
                                   consent -> load it. Refused unless the data and
                                   choices still match what was previewed.
     GET  /api/warehouse/summary   what this client has stored, recent loads, consent
+    GET  /api/warehouse/export    the stored data as a CSV — the workspace opens it
+                                  like an upload ("Use my stored data"), so the client
+                                  and their consultant see the same data in every
+                                  service; also "download my stored data"
+    POST /api/warehouse/delete    "delete my stored data": everything in the
+                                  warehouse for this client, and consent withdrawn
 
 Signed in, through `get_acting_context`, so a consultant can do this for an
-assigned client. Needs the Data Engineering service (consultants always have it).
+assigned client. PREVIEW and LOAD need the Data Engineering service (consultants
+always have it). SUMMARY, EXPORT and DELETE don't: stored data belongs to the
+client, so anyone on the account can see it, and the plan holder can delete it.
 
 WHY "PREVIEW, THEN ACCEPT"?
 ---------------------------
@@ -23,14 +31,18 @@ docs/ARCHITECTURE.md -> "Managed storage (opt-in exception)".
 
 from __future__ import annotations
 
+import io
 import json
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from api.core import database
 from api.core.security import get_acting_context
+from api.models.accounts import DeleteStoredIn
 from api.services import account_store, entitlements, warehouse_store
 from api.services.entitlements import plan_holder
 
@@ -40,7 +52,9 @@ from api.services.warehouse_loader import LoadPlan, build_plan
 router = APIRouter(prefix="/warehouse")
 
 SERVICE = "data_engineering"
-# Bump when the storage terms shown in the consent box change (stored with each consent).
+# The storage terms version saved with each consent (table storage_consents).
+# The terms themselves are the web page web/app/storage-terms/page.tsx — when
+# that page changes, bump this AND the VERSION on the page, together.
 TERMS_VERSION = "2026-10-15"
 
 
@@ -257,15 +271,84 @@ async def warehouse_summary(ctx: Annotated[dict, Depends(get_acting_context)]):
         dict: {"warehouse": counts (warehouse_store.summary), "loads": [load run, ...],
         "storage": {"database", "consented", "terms_version"}}.
 
-    Raises:
-        HTTPException: 403 without Data Engineering.
-
     Example:
         GET /api/warehouse/summary
         -> 200 {"warehouse": {"events": 18210, "customers": 400, ...}, "loads": [...], ...}
     """
-    await _require_service(ctx)
     holder = await plan_holder(ctx["account"])
     return {"warehouse": await warehouse_store.summary(holder),
             "loads": [_run_out(r) for r in await account_store.list_load_runs(str(holder["id"]))],
             "storage": await _storage_status(holder)}
+
+
+@router.get("/export")
+async def export_stored(ctx: Annotated[dict, Depends(get_acting_context)], event_type: str | None = None):
+    """
+    GET /api/warehouse/export — the client's stored data as a CSV file.
+
+    The workspace turns this file into the same kind of "picked file" as an
+    upload, so dashboards, analysis, ML and AI all work on stored data with no
+    extra code — for the client AND for their consultant, side by side.
+
+    Args:
+        ctx: dict, the acting context.
+        event_type: str | None, only this type (e.g. "transaction/income"); all when omitted.
+
+    Returns:
+        StreamingResponse: text/csv (UTF-8 with BOM, so Excel shows accents),
+        named "<client>_<type>_stored.csv".
+
+    Raises:
+        HTTPException: 404 when nothing (of that type) is stored.
+
+    Example:
+        GET /api/warehouse/export?event_type=transaction/income
+        -> 200 text/csv  date,event_type,amount,quantity,...
+    """
+    holder = await plan_holder(ctx["account"])
+    df = await warehouse_store.export(holder, event_type or None)
+    if df.empty:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Nothing is stored for this account yet.")
+    name = holder.get("company_name") or f"{holder['first_name']}_{holder['last_name']}"
+    kind = (event_type or "all").replace("/", "_")
+    filename = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{name}_{kind}_stored").strip("_").lower() + ".csv"
+    body = df.to_csv(index=False).encode("utf-8-sig")
+    return StreamingResponse(io.BytesIO(body), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.post("/delete")
+async def delete_stored(body: DeleteStoredIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/warehouse/delete — "delete my stored data".
+
+    Deletes everything stored in the warehouse for this client right away and
+    withdraws their storage consent (loading again needs a new consent). Only
+    the plan holder (an individual, or a business's team owner) — or their
+    consultant acting for them — may do it, and the request must say
+    {"confirm": "DELETE"} so it can't happen by accident.
+
+    Args:
+        body: DeleteStoredIn, {"confirm": "DELETE"}.
+        ctx: dict, the acting context.
+
+    Returns:
+        dict: {"deleted": {"events", "customers", "products"}, "consents_withdrawn": n,
+        "summary": the (now empty) warehouse summary}.
+
+    Raises:
+        HTTPException: 400 without the confirmation word; 403 for a team member
+            who isn't the owner.
+
+    Example:
+        POST /api/warehouse/delete  {"confirm": "DELETE"}
+        -> 200 {"deleted": {"events": 18210, "customers": 400, "products": 9}, ...}
+    """
+    if body.confirm != "DELETE":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='Type DELETE to confirm.')
+    holder = await plan_holder(ctx["account"])
+    if str(holder["id"]) != str(ctx["account"]["id"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only your team's owner can delete the stored data.")
+    deleted = await warehouse_store.delete(holder)
+    withdrawn = await account_store.withdraw_storage_consent(str(holder["id"]))
+    return {"deleted": deleted, "consents_withdrawn": withdrawn, "summary": await warehouse_store.summary(holder)}

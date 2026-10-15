@@ -11,7 +11,7 @@ Tables: `subscription_plans`, `subscriptions`, `consulting_purchases`
 | What | Stripe setup | Billed |
 |---|---|---|
 | A package of tools ("build your own") — Data Cleaning (base), Data Exploration & Analysis, Dashboards, Data Engineering, Data Science & ML, AI (needs Data Engineering) — or the All tools bundle | One **product** per tool (and the bundle), two **prices** each: monthly and annual (lookup keys `dcp_<tool>_month`, `dcp_<tool>_year`). One subscription holds **one item per tool**, all on the same interval | Recurring; the total is the sum of the tools; change tools anytime (prorated); cancel anytime in the billing portal |
-| Consulting hours (after the free 30-minute consultation) | Product "Consulting (1 hour)", price `dcp_consulting_hour` ($80) | One-time, any number of hours (1–40) |
+| Consulting sessions (after the free 30-minute consultation) | **Not in this app's Stripe.** Booked and paid on Cal.com (`PAID_BOOKING_URL`; Cal.com's own Stripe app takes the $80), usually one hour at a time | Per session, on Cal.com. (The older in-app prepaid-hours endpoint, `POST /api/billing/consulting-hours` with price `dcp_consulting_hour`, still exists but the website no longer uses it.) |
 | Cleaning downloads without a plan | Not in Stripe yet: recorded in `usage_events` (per started minute) | Future: Stripe usage-based billing or a monthly invoice |
 
 Card details are typed on **Stripe's own page** (Checkout), so they never touch

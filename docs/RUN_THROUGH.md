@@ -147,6 +147,16 @@ language model comes later.
    select set_config('app.client_id', '<account id>', false);
    select count(*) from warehouse.fact_event;
    ```
+6. **The client sees the same thing.** Sign in as that client (private window;
+   for a client you added, their first sign-in sets their password). On any
+   service's **Choose your data** card, press **Use the data stored for ...**:
+   the stored table opens exactly as a file would, so the dashboard, analysis
+   and AI show what you see. Pick it in your own window too — same data,
+   side by side.
+7. **Download or delete.** The **Stored for ...** card has **Download as CSV**
+   and **Delete stored data** (the client's owner or you; it deletes right away
+   and withdraws the consent). The public pages `/privacy`, `/terms`,
+   `/storage-terms` and `/data-deletion` are linked in the footer.
 
 ## Step 8 — Consultations: free first, then paid (Cal.com)
 
@@ -167,8 +177,8 @@ own. Two ways in, one rule:
 2. Create a second event type, e.g. "Consulting session" (60 minutes) →
    `PAID_BOOKING_URL`. To collect the $80 at booking with no Stripe work in
    this app, install Cal.com's **Stripe** app and set the event's price there.
-   (Later, when this app's Stripe is on, clients can also prepay hours in Plan
-   & billing.)
+   Paid sessions live entirely on Cal.com — nothing about them is bought or
+   stored in this app.
 3. Webhook: Cal.com → **Settings → Developer → Webhooks → New**:
    - Subscriber URL: `https://<your Render API>/api/consultations/calcom-webhook`
    - Triggers: Booking Created, Booking Rescheduled, Booking Cancelled, Booking
@@ -210,21 +220,24 @@ until "Forgot password" is built.
 
 **Before real clients use it**
 - **Forgot password** page, and Supabase **Confirm email** back on (with your own SMTP).
+  *Waiting on your Supabase setup* — Supabase sends the reset email.
 - **Invite emails** for colleagues and consultant-added clients (today the first
   sign-in with their email sets the password — sign them in promptly).
-- **Privacy policy and storage terms** page (the consent box should link to it),
-  and **Withdraw consent → delete stored data**.
+  *Also waiting on Supabase* (it needs the server-side service key).
+- ✅ `/privacy`, `/terms`, `/storage-terms`, `/data-deletion` pages, and "Delete
+  stored data". Have a lawyer review the wording before launch.
 - On Render: set `JWT_SECRET_KEY`, all the settings above, and move off the free
   plan (it sleeps after 15 minutes). Supabase backups: daily backups come with
   the Pro plan.
 - Stripe, when you're ready to charge (`python scripts/sync_stripe.py`, PAYMENTS.md).
 
 **Consultant workflow**
-- **Sharing your work with the client.** Results (reports, dashboards,
-  forecasts) aren't saved for the client to open later — today you'd download
-  and send them. Next: saved reports/dashboards (definitions, or warehouse data).
-- Hours used vs. bought (deduct confirmed paid sessions), notes per client,
-  reassigning clients, a list of Cal.com bookings from people without an account.
+- ✅ **Sharing your work:** load the client's data into managed storage; the
+  client signs in with their own account and presses **Use my stored data** to
+  see the same dashboards and analysis you do. Next: saved dashboards that
+  refresh automatically with their subscription.
+- Notes per client, reassigning clients, a list of Cal.com bookings from people
+  without an account.
 - Notifications (email when a booking arrives, when a load finishes).
 
 **Product**

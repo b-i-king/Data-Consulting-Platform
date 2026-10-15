@@ -1,4 +1,5 @@
-// Root layout: wraps every page with the header (logo, theme switch, sign-in links) and footer.
+// Root layout: wraps every page with the header (logo, theme switch, sign-in links)
+// and footer (privacy note + links to the legal pages).
 //
 // Theme: THEME_INIT_SCRIPT runs before the page paints and applies a saved
 // Light/Dark choice; with no saved choice the CSS follows the computer's
@@ -60,8 +61,23 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </header>
         <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
-        <footer className="mx-auto max-w-5xl px-4 pb-8 text-xs text-ink-muted">
-          Your files are processed in memory and are not stored on our servers.
+        <footer className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 pb-8 text-xs text-ink-muted">
+          <span>Your files are processed in memory and not stored, unless you choose managed storage.</span>
+          {/* Legal pages (app/privacy, terms, storage-terms, data-deletion). */}
+          <nav aria-label="Legal" className="flex flex-wrap gap-4">
+            <Link href="/privacy" className="hover:text-ink">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-ink">
+              Terms
+            </Link>
+            <Link href="/storage-terms" className="hover:text-ink">
+              Storage terms
+            </Link>
+            <Link href="/data-deletion" className="hover:text-ink">
+              Data deletion
+            </Link>
+          </nav>
         </footer>
       </body>
     </html>

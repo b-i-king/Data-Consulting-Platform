@@ -156,7 +156,58 @@ def test_preview_then_accept_then_reload_is_safe():
 
 
 def test_needs_data_engineering():
-    """A do-it-yourself client without Data Engineering can't preview or load (403)."""
+    """A do-it-yourself client without Data Engineering can't preview or load (403), but can see their summary."""
     diy = _signup("sam@example.com", "Sam")["access_token"]
     assert client.post("/api/warehouse/preview", headers=_h(diy), files=_files()).status_code == 403
-    assert client.get("/api/warehouse/summary", headers=_h(diy)).status_code == 403
+    assert client.get("/api/warehouse/summary", headers=_h(diy)).json()["warehouse"]["events"] == 0
+    assert client.get("/api/warehouse/export", headers=_h(diy)).status_code == 404   # nothing stored yet
+
+
+def _load_for_client():
+    """Consultant loads the sales file for a done-for-you client; returns (consultant headers, client token)."""
+    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    ana = _signup("ana@example.com", wants_consultant=True)
+    h = _h(coach, ana["account"]["id"])
+    fp = client.post("/api/warehouse/preview", headers=h, files=_files()).json()["fingerprint"]
+    assert client.post("/api/warehouse/load", headers=h, files=_files(),
+                       data={"fingerprint": fp, "consent": "true"}).status_code == 200
+    return h, ana["access_token"]
+
+
+def test_client_and_consultant_see_the_same_stored_data():
+    """The export is the stored table, flattened back (customers, products, extras), identical for both."""
+    h, client_token = _load_for_client()
+    mine = client.get("/api/warehouse/export", headers=_h(client_token))
+    theirs = client.get("/api/warehouse/export", headers=h)
+    assert mine.status_code == 200 and mine.text == theirs.text
+    assert 'filename="ana_lee_all_stored.csv"' in mine.headers["content-disposition"]
+    df = pd.read_csv(pd.io.common.StringIO(mine.content.decode("utf-8-sig")))
+    assert len(df) == 40 and df["date"].iloc[0] == "2024-10-01"
+    assert {"amount", "customer_id", "product", "product_category", "payment_method"} <= set(df.columns)
+    assert "score" not in df.columns                                   # empty for every row -> left out
+    refunds = client.get("/api/warehouse/export?event_type=transaction/refund", headers=h)
+    assert set(pd.read_csv(pd.io.common.StringIO(refunds.content.decode("utf-8-sig")))["event_type"]) == {"transaction/refund"}
+
+
+def test_delete_my_stored_data():
+    """Delete needs the word DELETE, wipes the warehouse rows, and withdraws consent (a new load needs it again)."""
+    h, client_token = _load_for_client()
+    assert client.post("/api/warehouse/delete", headers=_h(client_token), json={"confirm": "yes"}).status_code == 400
+    res = client.post("/api/warehouse/delete", headers=_h(client_token), json={"confirm": "DELETE"}).json()
+    assert res["deleted"] == {"events": 40, "customers": 7, "products": 3} and res["consents_withdrawn"] == 1
+    assert res["summary"]["events"] == 0 and warehouse_store._facts == {}
+    summary = client.get("/api/warehouse/summary", headers=h).json()
+    assert summary["storage"]["consented"] is False
+    fp = client.post("/api/warehouse/preview", headers=h, files=_files()).json()["fingerprint"]
+    assert client.post("/api/warehouse/load", headers=h, files=_files(), data={"fingerprint": fp}).status_code == 400
+
+
+def test_team_member_cannot_delete():
+    """Only the team owner (plan holder) may delete a business's stored data."""
+    res = client.post("/api/accounts/signup", json={
+        "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
+        "company_name": "Ko Bakery", "password": PW,
+        "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}]})
+    assert res.status_code == 201
+    bo = client.post("/api/accounts/signin", json={"email": "bo@example.com", "password": PW}).json()["access_token"]
+    assert client.post("/api/warehouse/delete", headers=_h(bo), json={"confirm": "DELETE"}).status_code == 403

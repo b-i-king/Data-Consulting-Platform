@@ -1138,6 +1138,35 @@ async def add_storage_consent(account_id: str, terms_version: str, consented_by:
     return dict(rec)
 
 
+async def withdraw_storage_consent(account_id: str) -> int:
+    """
+    Mark every active storage consent of a client as withdrawn (now).
+
+    Called when the client deletes their stored data: loading again then needs
+    a fresh consent.
+
+    Args:
+        account_id: str, the plan holder's account id.
+
+    Returns:
+        int: how many consents were withdrawn.
+
+    Example:
+        >>> await withdraw_storage_consent(aid)
+        1
+    """
+    if database.pool is None:
+        live = [c for c in _consents if c["account_id"] == account_id and c["withdrawn_at"] is None]
+        for c in live:
+            c["withdrawn_at"] = _now()
+        return len(live)
+    result = await database.pool.execute(
+        "UPDATE storage_consents SET withdrawn_at = now() WHERE account_id = $1 AND withdrawn_at IS NULL",
+        uuid.UUID(account_id),
+    )
+    return int(result.split()[-1]) if result else 0
+
+
 async def save_load_run(row: dict) -> dict:
     """
     Insert a load run, or update it when `row` has an "id".

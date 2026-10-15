@@ -143,6 +143,7 @@ after each restart (accounts live in memory).
 - [ ] Payments: set real prices, run `scripts/sync_stripe.py`, add the Stripe webhook and keys ([PAYMENTS.md](PAYMENTS.md)).
 - [ ] Set real prices in `api/services/pricing.py` (plans, packages) and env vars.
 - [ ] Set `BOOKING_URL`.
-- [ ] Add Terms of Service and Privacy Policy pages (the template repo has examples).
+- [ ] Review `/terms`, `/privacy`, `/storage-terms`, `/data-deletion` (built from the template) with a lawyer.
+- [ ] Vercel → Project → Settings → Deployment Checks: require the "lint" and "typecheck" checks (`.github/workflows/vercel_checks.yml`).
 - [ ] Move Vercel to a commercial plan once you charge clients.
 - [ ] Turn on Supabase backups.

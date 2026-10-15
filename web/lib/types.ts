@@ -747,7 +747,8 @@ export interface WarehouseCounts {
   customers: number;
   products: number;
   events: number;
-  by_type: { event_type: string; events: number; amount: number }[];
+  /** label = plain English, e.g. "Sales / income (money in)". */
+  by_type: { event_type: string; label: string; events: number; amount: number }[];
   first_date: string | null;
   last_date: string | null;
 }
@@ -757,6 +758,13 @@ export interface WarehouseSummary {
   warehouse: WarehouseCounts;
   loads: LoadRun[];
   storage: StorageStatus;
+}
+
+/** POST /api/warehouse/delete — "delete my stored data". */
+export interface DeleteStoredResult {
+  deleted: { events: number; customers: number; products: number };
+  consents_withdrawn: number;
+  summary: WarehouseCounts;
 }
 
 /** POST /api/warehouse/load */

@@ -6,6 +6,12 @@ WHAT THIS FILE DOES
     load(holder, plan)   write a LoadPlan (api/services/warehouse_loader.py) into
                          the warehouse tables of db/warehouse.sql
     summary(holder)      how many customers, products and events a client has stored
+    export(holder, type) the stored events as ONE flat table (pandas), so the
+                         client and their consultant can open the same stored
+                         data in any service — dashboards, analysis, AI — or
+                         download it as a CSV
+    delete(holder)       delete everything stored for the client ("delete my
+                         stored data")
 
 Only called after the client (or their consultant) saw the preview, accepted
 it, and consented to storage (api/routers/warehouse.py checks all of that).
@@ -34,10 +40,11 @@ import json
 import uuid
 from decimal import Decimal
 
+import pandas as pd
 from fastapi import HTTPException, status
 
 from api.core import database
-from api.services.warehouse_loader import LoadPlan
+from api.services.warehouse_loader import EVENT_TYPES, LoadPlan
 
 # ── In-memory fallback (development only) ────────────────────────────────────
 _clients: dict[str, dict] = {}
@@ -53,6 +60,11 @@ NOT_SET_UP = ("The warehouse tables aren't in the database yet. In Supabase -> S
 def _dec(value: float | None) -> Decimal | None:
     """A number as Decimal for Postgres NUMERIC columns (None stays None)."""
     return None if value is None else Decimal(str(value))
+
+
+def _label(event_type: str) -> str:
+    """The plain-English name of an event type ("transaction/income" -> "Sales / income (money in)")."""
+    return EVENT_TYPES.get(event_type, {}).get("label", event_type)
 
 
 def _client_row(holder: dict) -> dict:
@@ -233,7 +245,7 @@ async def summary(holder: dict) -> dict:
 
     Returns:
         dict: {"set_up": bool (warehouse tables exist), "sources", "customers",
-        "products", "events", "by_type": [{"event_type", "events", "amount"}],
+        "products", "events", "by_type": [{"event_type", "label", "events", "amount"}],
         "first_date", "last_date"} — dates as "YYYY-MM-DD" or None.
 
     Example:
@@ -245,7 +257,8 @@ async def summary(holder: dict) -> dict:
         facts = [f for (c, _, _), f in _facts.items() if c == cid]
         by_type: dict[str, dict] = {}
         for f in facts:
-            t = by_type.setdefault(f["event_type"], {"event_type": f["event_type"], "events": 0, "amount": 0.0})
+            t = by_type.setdefault(f["event_type"], {"event_type": f["event_type"], "label": _label(f["event_type"]),
+                                                    "events": 0, "amount": 0.0})
             t["events"] += 1
             t["amount"] = round(t["amount"] + (f["amount"] or 0), 2)
         keys = sorted(f["date_key"] for f in facts)
@@ -281,6 +294,154 @@ async def summary(holder: dict) -> dict:
     fmt = lambda k: f"{str(k)[:4]}-{str(k)[4:6]}-{str(k)[6:]}" if k else None   # noqa: E731
     return {"set_up": True, "sources": counts["sources"], "customers": counts["customers"],
             "products": counts["products"], "events": counts["events"],
-            "by_type": [{"event_type": t["event_type"], "events": t["events"], "amount": float(t["amount"])}
+            "by_type": [{"event_type": t["event_type"], "label": _label(t["event_type"]), "events": t["events"],
+                         "amount": float(t["amount"])}
                         for t in types],
             "first_date": fmt(counts["first_key"]), "last_date": fmt(counts["last_key"])}
+
+
+# ── Reading stored data back, and deleting it ────────────────────────────────
+
+def _strip_key(key: str | None) -> str | None:
+    """
+    The client's own id from a stored key: "id:1155" -> "1155".
+
+    Customers and products are stored under keys that say how they were
+    identified ("id:", "email:", "name:"). Only "id:" keys are a real id from
+    the client's system; the others return None (the name/email columns carry them).
+    """
+    return key[3:] if key and key.startswith("id:") else None
+
+
+def _flatten(rows: list[dict]) -> pd.DataFrame:
+    """
+    Turn stored events into one flat table: standard columns, then the extras.
+
+    Args:
+        rows: list[dict], one dict per event with the standard fields and an
+            "attributes" dict (the client's other columns).
+
+    Returns:
+        pd.DataFrame: one row per event, oldest first; columns that are empty
+        for every row are left out.
+    """
+    if not rows:
+        return pd.DataFrame(columns=["date", "event_type", "amount"])
+    extras = pd.DataFrame([r.pop("attributes") or {} for r in rows])
+    df = pd.concat([pd.DataFrame(rows), extras], axis=1)
+    df = df.loc[:, ~df.columns.duplicated()]          # an extra named like a standard column: keep the standard one
+    df = df.dropna(axis=1, how="all").sort_values("date", kind="stable").reset_index(drop=True)
+    return df
+
+
+async def export(holder: dict, event_type: str | None = None) -> pd.DataFrame:
+    """
+    The client's stored events as ONE flat table, ready to analyze or download.
+
+    Columns: date (YYYY-MM-DD), event_type, amount, quantity, score,
+    reference_number, status, customer_id, customer_name, customer_email,
+    product, product_category, then every extra column that was kept in
+    `attributes` (store, payment_method, ...). Columns empty for every row are
+    dropped. This is the reverse of the load: the same table the client
+    accepted, with customers and products joined back in.
+
+    Args:
+        holder: dict, the plan holder's accounts row.
+        event_type: str | None, only this type (e.g. "transaction/income"); None = all.
+
+    Returns:
+        pd.DataFrame: one row per stored event (empty when nothing is stored).
+
+    Example:
+        >>> (await export(holder, "transaction/income")).columns[:3].tolist()
+        ['date', 'event_type', 'amount']
+    """
+    cid = str(holder["id"])
+    rows: list[dict] = []
+    if database.pool is None:
+        for (c, source_id, _), f in _facts.items():
+            if c != cid or (event_type and f["event_type"] != event_type):
+                continue
+            cust = _customers.get((cid, source_id, f["customer"])) if f["customer"] else None
+            prod = _products.get((cid, source_id, f["product"])) if f["product"] else None
+            k = str(f["date_key"])
+            rows.append({
+                "date": f"{k[:4]}-{k[4:6]}-{k[6:]}", "event_type": f["event_type"], "amount": f["amount"],
+                "quantity": f["quantity"], "score": f["score"], "reference_number": f["reference_number"],
+                "status": f["status"], "customer_id": _strip_key(f["customer"]),
+                "customer_name": cust["name"] if cust else None, "customer_email": cust["email"] if cust else None,
+                "product": prod["name"] if prod else None, "product_category": prod["category"] if prod else None,
+                "attributes": dict(f["attributes"]),
+            })
+        return _flatten(rows)
+
+    import asyncpg
+
+    try:
+        async with database.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT set_config('app.client_id', $1, true)", cid)
+                records = await conn.fetch(
+                    """SELECT to_char(d.full_date, 'YYYY-MM-DD') AS date,
+                              et.event_type || '/' || et.event_subtype AS event_type,
+                              f.amount::float8 AS amount, f.quantity::float8 AS quantity, f.score::float8 AS score,
+                              f.reference_number, f.status,
+                              c.source_customer_id AS customer_key, c.name AS customer_name, c.email AS customer_email,
+                              p.name AS product, p.category AS product_category, f.attributes::text AS attributes
+                       FROM warehouse.fact_event f
+                       JOIN warehouse.dim_event_type et USING (event_type_id)
+                       JOIN warehouse.dim_date d USING (date_key)
+                       LEFT JOIN warehouse.dim_customer c ON c.customer_key = f.customer_key
+                       LEFT JOIN warehouse.dim_product  p ON p.product_key  = f.product_key
+                       WHERE f.client_id = $1
+                         AND ($2::text IS NULL OR et.event_type || '/' || et.event_subtype = $2)
+                       ORDER BY f.date_key, f.event_id""",
+                    uuid.UUID(cid), event_type)
+    except (asyncpg.exceptions.UndefinedTableError, asyncpg.exceptions.InvalidSchemaNameError):
+        return _flatten([])
+    for r in records:
+        row = dict(r)
+        row["customer_id"] = _strip_key(row.pop("customer_key"))
+        row["attributes"] = json.loads(row["attributes"] or "{}")
+        rows.append(row)
+    return _flatten(rows)
+
+
+async def delete(holder: dict) -> dict:
+    """
+    Delete EVERYTHING stored in the warehouse for this client.
+
+    Removing the client's dim_client row removes the rest with it: every
+    table's client_id points at dim_client with ON DELETE CASCADE (sources,
+    customers, employees, products, events). The calendar and event-type
+    lookup tables are shared and stay. Platform records (the account, consents,
+    load history) are not touched here.
+
+    Args:
+        holder: dict, the plan holder's accounts row.
+
+    Returns:
+        dict: {"events": n, "customers": n, "products": n} — what was deleted.
+
+    Example:
+        >>> await delete(holder)
+        {'events': 18210, 'customers': 400, 'products': 9}
+    """
+    before = await summary(holder)
+    gone = {"events": before["events"], "customers": before["customers"], "products": before["products"]}
+    cid = str(holder["id"])
+    if database.pool is None:
+        _clients.pop(cid, None)
+        for store in (_customers, _products, _facts):
+            for key in [k for k in store if k[0] == cid]:
+                del store[key]
+        for key in [k for k in _sources if k[0] == cid]:
+            del _sources[key]
+        return gone
+    if not before["set_up"]:
+        return gone
+    async with database.pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('app.client_id', $1, true)", cid)
+            await conn.execute("DELETE FROM warehouse.dim_client WHERE client_id = $1", uuid.UUID(cid))
+    return gone

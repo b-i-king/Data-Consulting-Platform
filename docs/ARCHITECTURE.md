@@ -124,14 +124,19 @@ flow never writes to it. The design change, and its safeguards:
    is refused (409), so what's stored is exactly what they saw.
 3. **Consent on record.** The first load needs the "store my data" box ticked,
    saved in `storage_consents` (with the terms version and who clicked).
-   Withdrawing consent means deleting the client's warehouse rows within 30 days
-   (manual for now — see ROADMAP.md).
+   **Delete my stored data** (`POST /api/warehouse/delete`, a button on the
+   "Stored for ..." card) deletes every warehouse row for the client right away
+   and withdraws the consent. Terms: `/storage-terms`; how to delete: `/data-deletion`.
 4. **Audit trail.** Each load writes a `load_runs` row (rows in / loaded /
    skipped, status, error, who started it) — metadata only.
 5. **No duplicates.** Every event row has a stable ID (the client's row ID, or a
    fingerprint of the row), so reloading the same file stores nothing new.
 6. **Isolation.** Each load runs in one transaction that first sets
    `app.client_id`; the RLS policies then only let it touch that client's rows.
+7. **Same data for client and consultant.** "Use my stored data" downloads the
+   stored table as a CSV (`GET /api/warehouse/export`) and opens it like an
+   upload, so the client (with their own login) and their consultant see the
+   same dashboards and analysis — no separate code path per service.
 
 ### 2. Guest first, account only at download
 
@@ -206,7 +211,7 @@ booking links point to `PAID_BOOKING_URL`.
 
 ### 6. Payments through Stripe, decided by the webhook
 
-Plans (monthly or annual) and consulting hours are paid on Stripe's own
+Plans (monthly or annual) are paid on Stripe's own
 Checkout page; Stripe's signed webhook is the only thing that turns a plan on
 or off (`subscriptions` table). Without Stripe keys the site runs in test
 mode. Full design: [PAYMENTS.md](PAYMENTS.md); every table: [DATABASE.md](DATABASE.md).

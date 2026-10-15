@@ -32,6 +32,7 @@
 
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { signin, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
@@ -383,6 +384,19 @@ export default function AuthForm({
             {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
           </button>
         </div>
+        {mode === "signup" && (
+          <p className="text-xs text-ink-muted">
+            By creating an account you agree to the{" "}
+            <Link href="/terms" target="_blank" className="underline hover:text-ink">
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link href="/privacy" target="_blank" className="underline hover:text-ink">
+              Privacy Policy
+            </Link>
+            .
+          </p>
+        )}
       </form>
     </>
   );

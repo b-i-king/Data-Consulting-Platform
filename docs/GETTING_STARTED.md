@@ -32,6 +32,7 @@ Open http://localhost:3000 → **Start as a guest**.
 
 ```bash
 pytest -q                            # backend: services + full API flow
+cd web && npm run lint               # frontend: ESLint
 cd web && npm run typecheck          # frontend: TypeScript checks
 cd web && npm run build              # frontend: production build
 ```

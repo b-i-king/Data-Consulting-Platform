@@ -18,6 +18,7 @@ import type {
   CleaningInput,
   ConsultationStatus,
   ConsultationSummary,
+  DeleteStoredResult,
   LoadPlan,
   LoadResult,
   Location,
@@ -149,10 +150,6 @@ export async function getMyServices(token: string): Promise<MyServices> {
 export const startCheckout = (token: string, planIds: string[], interval: BillingInterval) =>
   postJson<CheckoutResult>("/api/billing/checkout", { plan_ids: planIds, interval }, token);
 
-/** Prepay consulting hours (after the free 30-minute consultation). */
-export const buyConsultingHours = (token: string, hours: number, serviceId?: string) =>
-  postJson<CheckoutResult>("/api/billing/consulting-hours", { hours, ...(serviceId ? { service_id: serviceId } : {}) }, token);
-
 /** Stripe's billing portal: change card, see invoices, cancel anytime. */
 export const openBillingPortal = (token: string) => postJson<{ url: string }>("/api/billing/portal", {}, token);
 
@@ -240,6 +237,25 @@ export async function loadToWarehouse(
   await raiseForStatus(res);
   return res.json();
 }
+
+/**
+ * The client's stored data as a CSV File — the same kind of object as a file
+ * picked from the computer. The workspace feeds it into the normal cleaning
+ * flow ("Use my stored data"), so every service works on stored data, and the
+ * client and their consultant see the same thing. Also used to download it.
+ */
+export async function getStoredDataFile(token: string, eventType?: string): Promise<File> {
+  const q = eventType ? `?event_type=${encodeURIComponent(eventType)}` : "";
+  const res = await apiFetch(`${API_URL}/api/warehouse/export${q}`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "stored_data.csv";
+  return new File([await res.blob()], name, { type: "text/csv" });
+}
+
+/** "Delete my stored data": everything in the warehouse for this client; consent withdrawn. */
+export const deleteStoredData = (token: string) =>
+  postJson<DeleteStoredResult>("/api/warehouse/delete", { confirm: "DELETE" }, token);
 
 /** What this client has stored in the warehouse, and recent loads. */
 export async function getWarehouseSummary(token: string): Promise<WarehouseSummary> {

@@ -1,0 +1,87 @@
+name: Vercel Deployment Checks
+
+# Copied from the Video_Game_Stats_Tracker template.
+# Runs on every push/PR that touches the web/ folder (the Next.js site).
+# Each job reports its own named status back to Vercel through the
+# repository-dispatch status action, so Vercel can block or allow the
+# deployment in its UI (Vercel -> Project -> Settings -> Deployment Checks).
+#
+# Run the same checks on your computer before pushing:
+#   cd web && npm run lint && npm run typecheck
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web/**'
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  # ── Job 1: ESLint (rules in web/eslint.config.mjs) ───────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # `npm ci` installs exactly what package-lock.json lists (faster and
+      # repeatable; fails if package.json and the lock file disagree).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Notify Vercel — lint
+        if: always()
+        uses: vercel/repository-dispatch/actions/status@v1
+        with:
+          name: 'Vercel - data-consulting-platform: lint'
+
+  # ── Job 2: TypeScript type check ─────────────────────────────────────────
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npm run typecheck
+
+      - name: Notify Vercel — typecheck
+        if: always()
+        uses: vercel/repository-dispatch/actions/status@v1
+        with:
+          name: 'Vercel - data-consulting-platform: typecheck'
