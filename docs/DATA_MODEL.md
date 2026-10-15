@@ -49,6 +49,7 @@ explicit, opt-in service (see "Stateless processing" in ARCHITECTURE.md).
 | Employee | `warehouse.dim_employee` + events `employee/hire`, `employee/termination`, `payroll/gross_pay` | |
 | Invoice received / sent | events `invoice/received`, `invoice/sent`, `invoice/paid` | Invoice #, status, due date are columns on the fact |
 | Customer table | `warehouse.dim_customer` | With source IDs **and** fuzzy-match fields (below) |
+| "Unified data": IDs, dates and categories as they are, metrics pivoted into type / value / unit / subtype | `warehouse.unified_data` + `field_map` | One row per metric; the rest in `attributes`. See "Unified data" below |
 | Invoice type table, feedback table | *Not needed as separate tables* | They are rows in `dim_event_type`. Add a dedicated dimension only when a thing has many descriptive fields of its own (as customers and employees do). |
 
 ## ER diagram
@@ -71,6 +72,10 @@ erDiagram
     dim_employee |o--o{ fact_event : "about"
     dim_product |o--o{ fact_event : "about"
     dim_customer |o--o{ dim_customer : "master record"
+    dim_client ||--o{ unified_data : "every metric"
+    dim_source ||--o{ unified_data : "loaded from"
+    dim_event_type ||--o{ unified_data : "type / subtype"
+    field_map ||..o{ unified_data : "names + describes"
 
     accounts {
         uuid id PK
@@ -128,6 +133,33 @@ erDiagram
         bigint master_customer_key FK
         text match_status
     }
+    unified_data {
+        bigint row_id PK
+        uuid client_id FK
+        bigint source_id FK
+        text record_id "Invoice:130 or sha256:..."
+        int line_number "0 header, 1.. lines"
+        text event_type FK
+        text event_subtype FK
+        date event_date
+        text field_name "line_amount"
+        text source_field "Line.Amount / amount"
+        text metric_type "amount, price, cost..."
+        text metric_subtype "line, unit, total..."
+        text metric_unit "usd, count, percent..."
+        numeric metric_value
+        jsonb attributes "IDs, dates, categories"
+        text row_hash "skips no-op reloads"
+    }
+    field_map {
+        int field_map_id PK
+        text system "quickbooks | file_upload"
+        text source_field
+        text field_name
+        text metric_type "NULL = attribute"
+        text metric_subtype
+        text metric_unit
+    }
 ```
 
 ## The grain: one row per event, at the smallest level available
@@ -145,52 +177,84 @@ erDiagram
 If a source only has monthly totals, load monthly totals — the grain is "the
 smallest the source provides". Record it in `attributes` (e.g. `{"grain": "month"}`).
 
-## Unified metrics (the "unified data" design) — prototype, testing
+## Unified data: one shape for every source
 
 **Your idea:** after cleaning, IDs, dates and categorical (demographic) columns
 stay as they are, and the *metrics* are pivoted so every client's numbers fit
 the same columns: `metric_type`, `metric_subtype` (optional), `metric_unit`,
-`metric_value` — plus `source_column`, so each value can always be traced back
-to the client's own column. Same information, one shape.
+`metric_value` — plus the original name, so each value can always be traced
+back. Same information, one shape. That is `warehouse.unified_data`.
 
 ```
-wide (the client's file)                          long (unified)
-order_id | date       | store   | qty | unit_price | amount     order_id | date       | store   | metric_type | metric_subtype | metric_unit | metric_value | source_column
-50001    | 2024-10-11 | Midtown | 3   | 7.00       | 21.00  ->  50001    | 2024-10-11 | Midtown | quantity    |                | count       | 3            | qty
-                                                                 50001    | 2024-10-11 | Midtown | price       | unit           | usd         | 7.00         | unit_price
-                                                                 50001    | 2024-10-11 | Midtown | amount      |                | usd         | 21.00        | amount
+wide (the client's file)                                 unified_data (one row per metric)
+order_id | date       | store   | qty | unit_price | amount     field_name  | metric_type | metric_subtype | metric_unit | metric_value | source_field | attributes
+50001    | 2024-10-11 | Midtown | 3   | 7.00       | 21.00  ->  quantity    | quantity    |                | count       | 3            | qty          | {reference_number: 50001, transaction_date: 2024-10-11, location_name: Midtown}
+                                                                unit_price  | price       | unit           | usd         | 7.00         | unit_price   | (same)
+                                                                line_amount | amount      | line           | usd         | 21.00        | amount       | (same)
 ```
 
-**How it compares with today's `fact_event`:** `fact_event` has fixed measure
-columns (`amount`, `quantity`, `score`) and the event type describes the
-*row*. The unified shape describes each *number*, so a file with ten metric
-columns (cost, tax, discount, tip, hours...) needs no new columns. The two can
-live side by side: `fact_event` for events, a `fact_metric` table for
-"everything measured about them". Trade-offs to decide with real files:
+**How the pieces fit** (code: `api/services/unified.py`, table: `db/warehouse.sql`):
 
-| | Wide (`fact_event`) | Long (`fact_metric`) |
+| Piece | What it does |
+|---|---|
+| `field_map` (table) + `QUICKBOOKS_FIELD_MAP` / `FILE_UPLOAD_FIELD_MAP` (code) | Lines names up across sources (QuickBooks `TxnDate` and a file's `order_date` both become `transaction_date`) **and** says which fields are metrics and what they measure (`Line.Amount` → amount / line / usd). A test keeps the table seed and the code identical. |
+| `classify_metric()` | Describes a number column nobody mapped yet from the words in its name (`shipping_cost` → cost / shipping / usd), with a confidence. Low or medium = a person reviews it. |
+| `attributes` (JSONB) | Everything that is not a metric — IDs, dates, categories, names — kept as is, by unified name, on every metric row of its record line. Filter with `attributes->>'location_name'` (indexed). |
+| `flatten_quickbooks()` / `dataframe_to_unified()` | Turn a QuickBooks API object or a cleaned file into unified rows. QuickBooks header fields are line 0, its `Line` items lines 1, 2, 3. A file whose order number repeats (one row per item) is numbered the same way. |
+| `unified_to_wide()` / `round_trip()` | Pivot back to a normal table and compare every cell with the original — proof that nothing was lost. |
+| `record_id` + `row_hash` + `plan_upsert()` | No duplicates: the source's ID (or a fingerprint of the row), a unique key per metric, and a content fingerprint so an unchanged reload writes nothing. |
+| `spark_engine.melt_to_unified()` | The same reshape in Spark, for tables too big for pandas ([SPARK.md](SPARK.md)). |
+
+**Rules that need context, not just the column name:**
+
+- In an expense (a QuickBooks Purchase, or a file with a `vendor` / `expense…`
+  column), `amount` is money going out, so it becomes a **cost**. From the event
+  it's certain; from column names it's flagged for a person to confirm.
+- A record in another currency (QuickBooks `CurrencyRef`) gets that unit (`cad`)
+  instead of `usd`. **Never sum across units** — filter on `metric_unit`.
+- A line with no numbers at all (a description-only QuickBooks line) gets one
+  row with `field_name = '_no_metric'`, so its attributes are still kept.
+- Numbers that only count positions (QuickBooks `LineNum`) are attributes, not metrics.
+
+**How it compares with `fact_event`:** `fact_event` has fixed measure
+columns (`amount`, `quantity`, `score`) and real dimension keys; the event
+type describes the *row*. It is what the warehouse load in the app writes
+today and what the dashboards read. `unified_data` describes each *number*, so
+a file with ten metric columns (cost, tax, discount, tip, hours…) or a new
+QuickBooks field needs no new columns, and nothing is thrown away. The two
+live side by side; `fact_event` can be rebuilt from `unified_data`.
+
+| | `fact_event` (wide) | `unified_data` (metric rows) |
 |---|---|---|
 | New kind of metric | needs a column (or `attributes`) | just a new `metric_type` value |
 | Rows | one per event | one per event **per metric** (3 metrics = 3× rows) |
 | "Revenue minus cost" | one row, simple | filter + pivot (a view can hide it) |
-| Mixed units in one column | not possible | `metric_unit` keeps them apart — never sum across units |
+| Mixed units in one column | not possible | `metric_unit` keeps them apart |
+| Fields nobody planned for | dropped (or `attributes`) | kept, flagged `mapped = false` |
 
-**Test it before building it** — the `unified-metrics` skill (Data Engineering)
-is the test bench. It stores nothing:
+**Test a client's file before loading it** — the `unified-metrics` skill
+(Data Engineering) runs the same code and stores nothing:
 
 ```bash
 python -m data_skills run unified-metrics samples/sales.csv
+python -m data_skills run unified-metrics samples/expenses.csv --param event=transaction/expense
 python -m data_skills run unified-metrics samples/expenses.csv --param 'metric_map={"amount": {"type": "cost", "subtype": "operating", "unit": "usd"}}'
 ```
 
-For each file it reports every column's role, the guessed type / subtype / unit
-with a confidence, the columns that **need a person's decision** (the cases that
-are hard to automate — e.g. "amount" in an expenses file is a cost), a preview
-of the unified rows, a **round-trip check** (pivot back to wide, compare every
-cell: proves no information is lost), the editable `json_metric_map`, and the
-proposed `fact_metric` table (`sql_proposed_table`). Run it on several real
-client files; once the type/unit list and the review rules hold up, add
-`fact_metric` to `db/warehouse.sql` and a load step after `fact_event`.
+For each file it reports every column's role and unified name, each metric's
+type / subtype / unit with a confidence, the columns that **need a person's
+decision**, a preview of the unified rows, the **round-trip check** (every
+cell of every column), the editable `json_metric_map`, and `sql_field_map`:
+ready-made `field_map` rows for the reviewed columns, so the next file with
+the same headers is mapped automatically.
+
+**Status:** the table, field map, reshape code, round trip and duplicate
+planning are built and tested — including a load of the 18,210-row sales
+sample into PostgreSQL 16 (54,630 metric rows; a second identical load wrote
+0 rows; totals matched pandas to the cent). Still to build: the loader step
+in the app that writes `unified_data` next to `fact_event` (the upsert is
+written out at the bottom of `db/warehouse.sql`), and the QuickBooks
+connector that feeds `flatten_quickbooks()`.
 
 ## Loading data safely
 

@@ -330,20 +330,24 @@ def test_dashboard_offers_up_to_nine_filters():
 
 
 def test_unified_metrics_round_trip_and_review_loop(sales):
-    """Unified metrics: guesses type/subtype/unit, keeps ids/dates/categories, loses nothing, and obeys metric_map.
+    """Unified metrics: the warehouse.unified_data shape — metrics described, ids/dates/categories kept, nothing lost.
 
     Args:
         sales: pd.DataFrame, the cleaned sales sample (fixture).
     """
     r = run_skill("unified-metrics", sales)
     defs = {d["source_column"]: d for d in r.tables["metric_definitions"]}
-    assert (defs["unit_price"]["metric_type"], defs["unit_price"]["metric_subtype"], defs["unit_price"]["metric_unit"]) \
-        == ("price", "unit", "usd")
+    price = defs["unit_price"]
+    assert (price["metric_type"], price["metric_subtype"], price["metric_unit"]) == ("price", "unit", "usd")
+    assert defs["amount"]["field_name"] == "line_amount"           # aligned through the shared field map
     assert r.data["round_trip"]["ok"] and r.data["rows_out"] == sales[["quantity", "unit_price", "amount"]].notna().sum().sum()
+    assert r.data["round_trip"]["cells_checked"] == sales.size     # every column, not just the metrics
+    assert r.data["record_id_column"] == "order_id"                # repeats -> order lines
     first = r.tables["unified_preview"][0]
-    assert {"row_id", "order_id", "order_date", "store", "metric_type", "metric_value", "source_column"} <= set(first)
+    assert {"record_id", "reference_number", "transaction_date", "location_name", "metric_type", "metric_value",
+            "field_name", "source_field"} <= set(first)
 
-    # An unknown name is low confidence and flagged; metric_map fixes it.
+    # An unknown name is low confidence and flagged; metric_map fixes it and proposes a field_map row.
     odd = pd.DataFrame({"day": pd.date_range("2025-01-01", periods=40), "widgets": range(40),
                         "shipping_cost": [1.5] * 40})
     r2 = run_skill("unified-metrics", odd)
@@ -351,10 +355,14 @@ def test_unified_metrics_round_trip_and_review_loop(sales):
     assert {d["source_column"]: d["metric_subtype"] for d in r2.tables["metric_definitions"]}["shipping_cost"] == "shipping"
     r3 = run_skill("unified-metrics", odd, {"metric_map": {"widgets": {"type": "quantity", "subtype": "widgets", "unit": "count"}}})
     assert r3.data["needs_review"] == [] and r3.data["round_trip"]["ok"]
+    assert "'widgets', 'widgets', 'number', 'quantity', 'widgets', 'count'" in r3.artifacts["sql_field_map"]
 
-    # Expenses: "amount" becomes a cost, flagged for confirmation.
+    # Expenses: "amount" becomes a cost, flagged for confirmation; choosing the event settles it.
     exp = run_skill("unified-metrics", _load("expenses"))
     assert exp.tables["metric_definitions"][0]["metric_type"] == "cost" and exp.data["needs_review"] == ["amount"]
+    assert exp.data["event"] == "transaction/expense"
+    sure = run_skill("unified-metrics", _load("expenses"), {"event": "transaction/expense"})
+    assert sure.data["needs_review"] == []
 
 
 EDA_SECTIONS = ["Data Overview", "Summary Statistics", "Missing Values", "Duplicate Values", "Data Distributions",

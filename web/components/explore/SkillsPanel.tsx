@@ -7,17 +7,20 @@
 // user can add (LockedService.tsx). Column options become dropdowns of the
 // table's columns. Results show the summary, findings, charts, tables and
 // downloadable outputs (Markdown reports, SQL, Mermaid diagrams, HTML).
+// The EDA report skill's result is shown as a full report instead
+// (EdaReport.tsx): its charts and tables appear inside their sections.
 
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
-import type { Cell, CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
-import BarChart from "@/components/charts/BarChart";
-import LineChart from "@/components/charts/LineChart";
+import type { CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
+import ChartView from "@/components/charts/ChartView";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import EdaReport, { edaReportOf } from "./EdaReport";
 import { LockedBadge } from "./LockedService";
+import ResultTable from "./ResultTable";
 
 const ALWAYS_INCLUDED = "data_cleaning";
 
@@ -82,39 +85,6 @@ function ParamField(props: {
       {param.type === "columns" && <span className="block text-xs text-ink-muted">Columns: {columns.join(", ")}</span>}
       {param.help && <span className="block text-xs text-ink-muted">{param.help}</span>}
     </label>
-  );
-}
-
-function ResultTable({ rows }: { rows: Record<string, Cell>[] }) {
-  if (!rows.length) return <p className="text-sm text-ink-muted">No rows.</p>;
-  const cols = Object.keys(rows[0]);
-  const show = (v: Cell) => (v == null ? "—" : typeof v === "number" ? v.toLocaleString("en-US", { maximumFractionDigits: 4 }) : String(v));
-  return (
-    <div className="max-h-72 overflow-auto rounded-xl border border-line">
-      <table className="w-full text-sm">
-        {/* Column names exactly as in the cleaned data (lowercase snake_case). */}
-        <thead className="sticky top-0 bg-surface-2 text-left font-mono text-xs text-ink-muted">
-          <tr>
-            {cols.map((c) => (
-              <th key={c} className="whitespace-nowrap px-3 py-2">
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">
-          {rows.slice(0, 200).map((r, i) => (
-            <tr key={i}>
-              {cols.map((c) => (
-                <td key={c} className="max-w-xs truncate whitespace-nowrap px-3 py-1.5" title={show(r[c])}>
-                  {show(r[c])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -197,6 +167,9 @@ export default function SkillsPanel(props: {
       setBusy(false);
     }
   }
+
+  // An EDA report result is drawn as a report (null for every other skill).
+  const eda = result ? edaReportOf(result.data) : null;
 
   // Run once as soon as the skill is known (workspace pages open on a result).
   const autoRan = useRef(false);
@@ -291,7 +264,8 @@ export default function SkillsPanel(props: {
           <div className="space-y-4" aria-live="polite">
             <Card>
               <p className="font-medium">{result.summary}</p>
-              {result.findings.length > 0 && (
+              {/* EDA findings are its Key Takeaways section, shown in the report below. */}
+              {!eda && result.findings.length > 0 && (
                 <ul className="mt-2 list-inside list-disc space-y-1 text-sm">
                   {result.findings.map((f, i) => (
                     <li key={i}>{f}</li>
@@ -301,34 +275,26 @@ export default function SkillsPanel(props: {
               <p className="mt-2 text-xs text-ink-muted">Ran in {result.runtime_seconds.toFixed(2)} s.</p>
             </Card>
 
-            {result.charts.map((c, i) => (
-              <Card key={i}>
-                <h4 className="mb-2 font-semibold">{c.title}</h4>
-                {c.type === "line" ? (
-                  <LineChart
-                    ariaLabel={c.title}
-                    x={c.x}
-                    series={c.series.map((s, j) => ({
-                      name: s.name,
-                      values: s.values,
-                      color: j === 0 ? "var(--color-chart-current)" : "var(--color-chart-previous)",
-                    }))}
-                  />
-                ) : c.type === "bar" ? (
-                  <BarChart categories={c.categories} values={c.values} valueLabel={c.value_label} />
-                ) : (
-                  // Histogram / box / scatter / heatmap: drawn by the EDA report view (in progress).
-                  <p className="text-sm text-ink-muted">This chart type is shown in the EDA report view.</p>
-                )}
-              </Card>
-            ))}
+            {eda ? (
+              // EDA report: sections in order, each with its own charts and table.
+              <EdaReport report={eda} tables={result.tables} />
+            ) : (
+              <>
+                {result.charts.map((c, i) => (
+                  <Card key={i}>
+                    <h4 className="mb-2 font-semibold">{c.title}</h4>
+                    <ChartView spec={c} />
+                  </Card>
+                ))}
 
-            {Object.entries(result.tables).map(([name, rows]) => (
-              <Card key={name}>
-                <h4 className="mb-2 font-semibold capitalize">{name.replace(/_/g, " ")}</h4>
-                <ResultTable rows={rows} />
-              </Card>
-            ))}
+                {Object.entries(result.tables).map(([name, rows]) => (
+                  <Card key={name}>
+                    <h4 className="mb-2 font-semibold capitalize">{name.replace(/_/g, " ")}</h4>
+                    <ResultTable rows={rows} />
+                  </Card>
+                ))}
+              </>
+            )}
 
             {Object.entries(result.artifacts).map(([name, text]) => {
               const [ext, type] = EXT[name.split("_")[0]] ?? ["txt", "text/plain"];

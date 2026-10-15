@@ -42,6 +42,7 @@ api/                      FastAPI backend (Python)
   services/pipeline.py      glues the above together in order
   services/skills_runner.py cleans uploads, then hands them to a data skill
   services/pricing.py       service catalog, runtime billing, quotes
+  services/unified.py       unified data: any source -> one row per metric (IDs, dates, categories kept)
   services/spark_engine.py  optional PySpark engine for big / cloud-warehouse data (off by default)
   services/entitlements.py  which services an account has (drives the workspace)
   services/fair_use.py      download limit + free repeats (fingerprints, never data)
@@ -140,6 +141,16 @@ flow never writes to it. The design change, and its safeguards:
    stored table as a CSV (`GET /api/warehouse/export`) and opens it like an
    upload, so the client (with their own login) and their consultant see the
    same dashboards and analysis — no separate code path per service.
+
+**Next in the warehouse: the unified data table.** `warehouse.unified_data`
+(one row per metric, IDs / dates / categories kept in `attributes`; see
+"Unified data" in [DATA_MODEL.md](DATA_MODEL.md)) is designed, built in SQL
+and tested, and its reshape code is `api/services/unified.py`, but the app
+does not write to it yet: today a load writes `fact_event` and its
+dimensions. When its loader is added it runs inside the same accepted load,
+so every safeguard above applies to it unchanged (preview, consent,
+fingerprint, audit row, RLS, delete). The `unified-metrics` skill tests a
+file against it without storing anything.
 
 ### 2. Guest first, account only at download
 

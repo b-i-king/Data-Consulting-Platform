@@ -1,43 +1,62 @@
 """
-Unified data: turn ANY source (QuickBooks JSON, an uploaded file) into ONE long
-table with one row per field, and plan loads that never add duplicate data.
+Unified data: turn ANY source (QuickBooks JSON, an uploaded file) into ONE
+shape — IDs, dates and categories kept as they are, every METRIC pivoted into
+its own row — and plan loads that never add duplicate data.
 
 WHY THIS EXISTS
 ---------------
-Data Engineering clients bring data from many places, and every place names
-its fields differently: QuickBooks says "TxnDate" and "CustomerRef.name", a
-spreadsheet says "order_date" and "Customer". A wide table would need a new
-column for every new field from every new source. Instead we "pivot long":
+Every client's data names its numbers differently (QuickBooks "TotalAmt" and
+"Line.Amount", a spreadsheet "amount", "unit_price", "shipping_cost", "csat").
+A wide table would need a new column for every new number from every new
+source. Instead each number becomes a ROW described the same way for everyone:
 
-    one source record  ->  one row PER FIELD
-    (record_id, line_number, field_name, value)
+    metric_type     what is measured            amount, price, cost, quantity, score
+    metric_subtype  which one (optional)        line, total, unit, shipping, csat
+    metric_unit     what the number is in       usd, count, percent, score, hours
+    metric_value    the number itself
 
-so a field nobody has seen before is just another row, never a new column.
-The matching database table is `warehouse.unified_data` in db/warehouse.sql;
-the design is explained in docs/DATA_MODEL.md ("Unified data") and the storage
-decision in docs/ARCHITECTURE.md.
+and everything that is NOT a metric — IDs, dates, categories and other text
+(customer, store, product, age group) — stays as it is, in `attributes`, on
+every metric row of that record:
+
+    wide:  order_id | order_date | store   | quantity | unit_price | amount
+           50001    | 2024-10-11 | Midtown | 3        | 7.00       | 21.00
+
+    long:  record_id | field_name | metric_type | metric_subtype | metric_unit | metric_value | attributes
+           50001     | quantity   | quantity    |                | count       | 3            | {order_id, order_date, store}
+           50001     | unit_price | price       | unit           | usd         | 7.00         | {order_id, order_date, store}
+           50001     | line_amount| amount      | line           | usd         | 21.00        | {order_id, order_date, store}
+
+The matching database table is `warehouse.unified_data` (db/warehouse.sql);
+the design is explained in docs/DATA_MODEL.md ("Unified data"). The
+`unified-metrics` skill is the test bench: it runs this module on a client's
+file, shows every decision, and proves by round trip that nothing is lost.
 
 THE PIECES, IN ORDER
 --------------------
-1. ALIGN NAMES. `QUICKBOOKS_FIELD_MAP` and `FILE_UPLOAD_FIELD_MAP` translate
-   each source's field names into one shared vocabulary (TxnDate and order_date
-   both become "transaction_date"). The same pairs are seeded into
-   `warehouse.field_map`; a test keeps the two copies identical. Fields that
-   are NOT in a map are still kept, named by snake_case of their path, and
-   flagged `mapped = False` so nothing is ever lost.
-2. FLATTEN. `flatten_quickbooks()` turns one QuickBooks Online API object
-   (an Invoice, a Purchase, ...) into long rows: header fields get
-   line_number 0, each item in its `Line` list gets line_number 1, 2, 3, ...
-   `dataframe_to_unified()` does the same for a cleaned DataFrame (a melt).
-3. PIVOT BACK. `unified_to_wide()` turns long rows back into a normal table
-   (one row per record + line), so analysis code can keep using pandas.
-4. NO DUPLICATES. `value_hash()` fingerprints a value; `plan_upsert()`
-   compares a new batch with what is already stored and splits it into
-   insert / update / unchanged (plus "stale": stored fields that disappeared).
+1. ALIGN NAMES AND DESCRIBE METRICS. `QUICKBOOKS_FIELD_MAP` and
+   `FILE_UPLOAD_FIELD_MAP` translate each source's field names into one shared
+   vocabulary (TxnDate and order_date both become "transaction_date") and say
+   which fields are metrics, with their type / subtype / unit. The same rows
+   are seeded into `warehouse.field_map`; a test keeps the two copies
+   identical. A field that is in NO map is still kept, under the snake_case of
+   its own name with `mapped = False`; if it is a number, `classify_metric()`
+   guesses its type from the words in its name (with a confidence, so a person
+   can review the guess).
+2. RESHAPE. `flatten_quickbooks()` turns one QuickBooks Online API object (an
+   Invoice, a Purchase, ...) into rows: header fields are line_number 0, each
+   item of its `Line` list is line 1, 2, 3, ... `dataframe_to_unified()` does
+   the same for a cleaned DataFrame (pandas-style melt of the metric columns).
+3. PIVOT BACK. `unified_to_wide()` rebuilds a normal table (one row per
+   record + line); `round_trip()` compares it with the original, cell by cell.
+4. NO DUPLICATES. `row_hash()` fingerprints a row's content; `plan_upsert()`
+   compares a new batch with what is stored and splits it into insert /
+   update / unchanged (plus "stale": stored metrics that disappeared).
    Re-loading the same data therefore inserts nothing and changes nothing.
 
-This module is pure pandas: it never writes to a database. Storage wiring
-(an asyncpg loader using the SQL upsert in db/warehouse.sql) comes later.
+This module is pure pandas: it never writes to a database. The loader that
+writes `unified_data` (an asyncpg upsert like the example at the bottom of
+db/warehouse.sql) is the next step; today's warehouse load writes fact_event.
 
 COLUMNS SET LATER, AT LOAD TIME
 -------------------------------
@@ -62,18 +81,9 @@ import pandas as pd
 
 # ── Columns (same names as warehouse.unified_data) ──────────────────────────
 
-# The kinds of value a field can hold. Exactly one of the value_* columns is
-# filled on each row, chosen by value_type.
+# The kinds of value a field can hold (field_map.value_type). Metrics are
+# always numbers; the other kinds are kept in `attributes`.
 VALUE_TYPES = ("text", "number", "date", "timestamp", "boolean")
-
-# value_type -> the column that holds the value.
-VALUE_COLUMN = {
-    "text": "value_text",
-    "number": "value_number",
-    "date": "value_date",
-    "timestamp": "value_timestamp",
-    "boolean": "value_bool",
-}
 
 # The columns this module produces, in the same order as the SQL table
 # (minus the load-time columns listed in the module docstring).
@@ -84,21 +94,25 @@ UNIFIED_COLUMNS = [
     "event_subtype",       # e.g. "sent"
     "event_date",          # the date used in the clean data (e.g. TxnDate)
     "source_modified_at",  # when the source last changed the record (UTC)
-    "field_name",          # unified name, e.g. "customer_name"
-    "source_field",        # original name/path, e.g. "CustomerRef.name"
-    "value_type",          # one of VALUE_TYPES
-    "value_text",
-    "value_number",
-    "value_date",
-    "value_timestamp",
-    "value_bool",
-    "value_hash",          # fingerprint of the normalized value (see value_hash)
-    "mapped",              # True if field_name came from a field map
+    "field_name",          # unified name of the metric, e.g. "line_amount"
+    "source_field",        # original name/path, e.g. "Line.Amount" or "Amount ($)"
+    "metric_type",         # e.g. "amount"
+    "metric_subtype",      # e.g. "line" (None when there is no "which one")
+    "metric_unit",         # e.g. "usd"
+    "metric_value",        # the number
+    "attributes",          # dict: the record line's IDs, dates and categories, by unified name
+    "row_hash",            # fingerprint of the row's content (see row_hash)
+    "mapped",              # True if the metric's name/description came from a field map or a person
 ]
 
-# One field of one record: the unique key inside one client + one source.
-# In SQL the key is (client_id, source_id, record_id, line_number, field_name).
+# One metric of one line of one record: the unique key inside one client +
+# one source. In SQL the key is (client_id, source_id, record_id, line_number, field_name).
 KEY_COLUMNS = ["record_id", "line_number", "field_name"]
+
+# field_name of the one row a line gets when it has NO metric at all (e.g. a
+# QuickBooks description-only line, or a file row whose numbers are all
+# blank), so its attributes are never lost. Its metric columns are empty.
+NO_METRIC = "_no_metric"
 
 # ── QuickBooks Online: which entity is which event ──────────────────────────
 # entity name in the API -> (event_type, event_subtype, field holding the date).
@@ -116,117 +130,185 @@ QUICKBOOKS_ENTITIES: dict[str, tuple[str, str, str]] = {
 # API bookkeeping keys that are not business data (every object has them).
 QUICKBOOKS_SKIP_FIELDS = {"domain", "sparse"}
 
-# ── Field maps: source name -> (unified field_name, value_type) ─────────────
+# ── Field maps ──────────────────────────────────────────────────────────────
+# source name -> (field_name, value_type, metric_type, metric_subtype, metric_unit).
+# The last three are None for a field that is NOT a metric (an ID, a date, a
+# name, a category, or a number that only counts lines such as LineNum): those
+# are kept in `attributes`.
 # Paths use dots for nesting and leave out list positions: "Line.Amount" is the
 # Amount of every item in the Line list. KEEP IN SYNC with the
 # warehouse.field_map seed in db/warehouse.sql (tests/test_unified.py checks).
-QUICKBOOKS_FIELD_MAP: dict[str, tuple[str, str]] = {
+FieldSpec = tuple[str, str, "str | None", "str | None", "str | None"]
+
+QUICKBOOKS_FIELD_MAP: dict[str, FieldSpec] = {
     # Header (line_number 0)
-    "Id":                           ("source_record_id", "text"),
-    "SyncToken":                    ("sync_token", "text"),
-    "TxnDate":                      ("transaction_date", "date"),
-    "DueDate":                      ("due_date", "date"),
-    "DocNumber":                    ("reference_number", "text"),
-    "TotalAmt":                     ("total_amount", "number"),
-    "Balance":                      ("balance_due", "number"),
-    "UnappliedAmt":                 ("unapplied_amount", "number"),
-    "TxnTaxDetail.TotalTax":        ("tax_amount", "number"),
-    "CurrencyRef.value":            ("currency", "text"),
-    "CurrencyRef.name":             ("currency_name", "text"),
-    "ExchangeRate":                 ("exchange_rate", "number"),
-    "CustomerRef.value":            ("customer_source_id", "text"),
-    "CustomerRef.name":             ("customer_name", "text"),
-    "VendorRef.value":              ("vendor_source_id", "text"),
-    "VendorRef.name":               ("vendor_name", "text"),
-    "EntityRef.value":              ("payee_source_id", "text"),
-    "EntityRef.name":               ("payee_name", "text"),
-    "EntityRef.type":               ("payee_type", "text"),
-    "AccountRef.value":             ("payment_account_id", "text"),
-    "AccountRef.name":              ("payment_account_name", "text"),
-    "DepositToAccountRef.name":     ("deposit_account_name", "text"),
-    "PaymentType":                  ("payment_type", "text"),
-    "PaymentMethodRef.name":        ("payment_method_name", "text"),
-    "PaymentRefNum":                ("payment_reference", "text"),
-    "DepartmentRef.name":           ("location_name", "text"),
-    "SalesTermRef.name":            ("terms", "text"),
-    "PrivateNote":                  ("memo", "text"),
-    "CustomerMemo.value":           ("customer_memo", "text"),
-    "BillEmail.Address":            ("customer_email", "text"),
-    "BillAddr.Line1":               ("bill_address_line1", "text"),
-    "BillAddr.City":                ("bill_city", "text"),
-    "BillAddr.CountrySubDivisionCode": ("bill_state", "text"),
-    "BillAddr.PostalCode":          ("bill_postal_code", "text"),
-    "EmailStatus":                  ("email_status", "text"),
-    "LinkedTxn.TxnId":              ("linked_txn_id", "text"),
-    "LinkedTxn.TxnType":            ("linked_txn_type", "text"),
-    "MetaData.CreateTime":          ("source_created_at", "timestamp"),
-    "MetaData.LastUpdatedTime":     ("source_updated_at", "timestamp"),
+    "Id":                           ("source_record_id", "text", None, None, None),
+    "SyncToken":                    ("sync_token", "text", None, None, None),
+    "TxnDate":                      ("transaction_date", "date", None, None, None),
+    "DueDate":                      ("due_date", "date", None, None, None),
+    "DocNumber":                    ("reference_number", "text", None, None, None),
+    "TotalAmt":                     ("total_amount", "number", "amount", "total", "usd"),
+    "Balance":                      ("balance_due", "number", "balance", "due", "usd"),
+    "UnappliedAmt":                 ("unapplied_amount", "number", "amount", "unapplied", "usd"),
+    "TxnTaxDetail.TotalTax":        ("tax_amount", "number", "tax", None, "usd"),
+    "CurrencyRef.value":            ("currency", "text", None, None, None),
+    "CurrencyRef.name":             ("currency_name", "text", None, None, None),
+    "ExchangeRate":                 ("exchange_rate", "number", "rate", "exchange", "ratio"),
+    "CustomerRef.value":            ("customer_source_id", "text", None, None, None),
+    "CustomerRef.name":             ("customer_name", "text", None, None, None),
+    "VendorRef.value":              ("vendor_source_id", "text", None, None, None),
+    "VendorRef.name":               ("vendor_name", "text", None, None, None),
+    "EntityRef.value":              ("payee_source_id", "text", None, None, None),
+    "EntityRef.name":               ("payee_name", "text", None, None, None),
+    "EntityRef.type":               ("payee_type", "text", None, None, None),
+    "AccountRef.value":             ("payment_account_id", "text", None, None, None),
+    "AccountRef.name":              ("payment_account_name", "text", None, None, None),
+    "DepositToAccountRef.name":     ("deposit_account_name", "text", None, None, None),
+    "PaymentType":                  ("payment_type", "text", None, None, None),
+    "PaymentMethodRef.name":        ("payment_method_name", "text", None, None, None),
+    "PaymentRefNum":                ("payment_reference", "text", None, None, None),
+    "DepartmentRef.name":           ("location_name", "text", None, None, None),
+    "SalesTermRef.name":            ("terms", "text", None, None, None),
+    "PrivateNote":                  ("memo", "text", None, None, None),
+    "CustomerMemo.value":           ("customer_memo", "text", None, None, None),
+    "BillEmail.Address":            ("customer_email", "text", None, None, None),
+    "BillAddr.Line1":               ("bill_address_line1", "text", None, None, None),
+    "BillAddr.City":                ("bill_city", "text", None, None, None),
+    "BillAddr.CountrySubDivisionCode": ("bill_state", "text", None, None, None),
+    "BillAddr.PostalCode":          ("bill_postal_code", "text", None, None, None),
+    "EmailStatus":                  ("email_status", "text", None, None, None),
+    "LinkedTxn.TxnId":              ("linked_txn_id", "text", None, None, None),
+    "LinkedTxn.TxnType":            ("linked_txn_type", "text", None, None, None),
+    "MetaData.CreateTime":          ("source_created_at", "timestamp", None, None, None),
+    "MetaData.LastUpdatedTime":     ("source_updated_at", "timestamp", None, None, None),
     # Line items (line_number 1, 2, ...)
-    "Line.Id":                      ("line_source_id", "text"),
-    "Line.LineNum":                 ("line_num", "number"),
-    "Line.DetailType":              ("line_detail_type", "text"),
-    "Line.Amount":                  ("line_amount", "number"),
-    "Line.Description":             ("line_description", "text"),
-    "Line.SalesItemLineDetail.ItemRef.value":        ("item_source_id", "text"),
-    "Line.SalesItemLineDetail.ItemRef.name":         ("item_name", "text"),
-    "Line.SalesItemLineDetail.Qty":                  ("quantity", "number"),
-    "Line.SalesItemLineDetail.UnitPrice":            ("unit_price", "number"),
-    "Line.SalesItemLineDetail.ServiceDate":          ("service_date", "date"),
-    "Line.SalesItemLineDetail.TaxCodeRef.value":     ("tax_code", "text"),
-    "Line.SalesItemLineDetail.ItemAccountRef.name":  ("income_account_name", "text"),
-    "Line.ItemBasedExpenseLineDetail.ItemRef.value": ("item_source_id", "text"),
-    "Line.ItemBasedExpenseLineDetail.ItemRef.name":  ("item_name", "text"),
-    "Line.ItemBasedExpenseLineDetail.Qty":           ("quantity", "number"),
-    "Line.ItemBasedExpenseLineDetail.UnitPrice":     ("unit_price", "number"),
-    "Line.ItemBasedExpenseLineDetail.TaxCodeRef.value": ("tax_code", "text"),
-    "Line.AccountBasedExpenseLineDetail.AccountRef.value": ("expense_category_id", "text"),
-    "Line.AccountBasedExpenseLineDetail.AccountRef.name":  ("expense_category", "text"),
-    "Line.AccountBasedExpenseLineDetail.BillableStatus":   ("billable_status", "text"),
-    "Line.AccountBasedExpenseLineDetail.TaxCodeRef.value": ("tax_code", "text"),
-    "Line.DiscountLineDetail.DiscountPercent":       ("discount_percent", "number"),
-    "Line.LinkedTxn.TxnId":                          ("linked_txn_id", "text"),
-    "Line.LinkedTxn.TxnType":                        ("linked_txn_type", "text"),
+    "Line.Id":                      ("line_source_id", "text", None, None, None),
+    "Line.LineNum":                 ("line_num", "number", None, None, None),     # a position, not a measure
+    "Line.DetailType":              ("line_detail_type", "text", None, None, None),
+    "Line.Amount":                  ("line_amount", "number", "amount", "line", "usd"),
+    "Line.Description":             ("line_description", "text", None, None, None),
+    "Line.SalesItemLineDetail.ItemRef.value":        ("item_source_id", "text", None, None, None),
+    "Line.SalesItemLineDetail.ItemRef.name":         ("item_name", "text", None, None, None),
+    "Line.SalesItemLineDetail.Qty":                  ("quantity", "number", "quantity", None, "count"),
+    "Line.SalesItemLineDetail.UnitPrice":            ("unit_price", "number", "price", "unit", "usd"),
+    "Line.SalesItemLineDetail.ServiceDate":          ("service_date", "date", None, None, None),
+    "Line.SalesItemLineDetail.TaxCodeRef.value":     ("tax_code", "text", None, None, None),
+    "Line.SalesItemLineDetail.ItemAccountRef.name":  ("income_account_name", "text", None, None, None),
+    "Line.ItemBasedExpenseLineDetail.ItemRef.value": ("item_source_id", "text", None, None, None),
+    "Line.ItemBasedExpenseLineDetail.ItemRef.name":  ("item_name", "text", None, None, None),
+    "Line.ItemBasedExpenseLineDetail.Qty":           ("quantity", "number", "quantity", None, "count"),
+    "Line.ItemBasedExpenseLineDetail.UnitPrice":     ("unit_price", "number", "price", "unit", "usd"),
+    "Line.ItemBasedExpenseLineDetail.TaxCodeRef.value": ("tax_code", "text", None, None, None),
+    "Line.AccountBasedExpenseLineDetail.AccountRef.value": ("expense_category_id", "text", None, None, None),
+    "Line.AccountBasedExpenseLineDetail.AccountRef.name":  ("expense_category", "text", None, None, None),
+    "Line.AccountBasedExpenseLineDetail.BillableStatus":   ("billable_status", "text", None, None, None),
+    "Line.AccountBasedExpenseLineDetail.TaxCodeRef.value": ("tax_code", "text", None, None, None),
+    "Line.DiscountLineDetail.DiscountPercent":       ("discount_percent", "number", "discount", None, "percent"),
+    "Line.LinkedTxn.TxnId":                          ("linked_txn_id", "text", None, None, None),
+    "Line.LinkedTxn.TxnType":                        ("linked_txn_type", "text", None, None, None),
 }
 
 # Generic uploaded-file headers, after snake_case ("Order Date" -> "order_date").
 # A file row is treated like ONE line item, so "amount" lines up with
-# QuickBooks' Line.Amount. Per-upload overrides go in `source_field_map`.
-FILE_UPLOAD_FIELD_MAP: dict[str, tuple[str, str]] = {
-    "date":            ("transaction_date", "date"),
-    "order_date":      ("transaction_date", "date"),
-    "transaction_date": ("transaction_date", "date"),
-    "expense_date":    ("transaction_date", "date"),
-    "invoice_date":    ("transaction_date", "date"),
-    "due_date":        ("due_date", "date"),
-    "order_id":        ("reference_number", "text"),
-    "invoice_number":  ("reference_number", "text"),
-    "receipt_number":  ("reference_number", "text"),
-    "customer_id":     ("customer_source_id", "text"),
-    "customer":        ("customer_name", "text"),
-    "customer_name":   ("customer_name", "text"),
-    "customer_email":  ("customer_email", "text"),
-    "vendor":          ("vendor_name", "text"),
-    "supplier":        ("vendor_name", "text"),
-    "product":         ("item_name", "text"),
-    "item":            ("item_name", "text"),
-    "description":     ("line_description", "text"),
-    "quantity":        ("quantity", "number"),
-    "qty":             ("quantity", "number"),
-    "unit_price":      ("unit_price", "number"),
-    "price":           ("unit_price", "number"),
-    "amount":          ("line_amount", "number"),
-    "total":           ("total_amount", "number"),
-    "total_amount":    ("total_amount", "number"),
-    "tax":             ("tax_amount", "number"),
-    "payment_method":  ("payment_method_name", "text"),
-    "store":           ("location_name", "text"),
-    "location":        ("location_name", "text"),
-    "memo":            ("memo", "text"),
-    "notes":           ("memo", "text"),
+# QuickBooks' Line.Amount. Per-upload overrides go in `source_field_map`
+# (names) and `metric_map` (metric descriptions).
+FILE_UPLOAD_FIELD_MAP: dict[str, FieldSpec] = {
+    "date":            ("transaction_date", "date", None, None, None),
+    "order_date":      ("transaction_date", "date", None, None, None),
+    "transaction_date": ("transaction_date", "date", None, None, None),
+    "expense_date":    ("transaction_date", "date", None, None, None),
+    "invoice_date":    ("transaction_date", "date", None, None, None),
+    "due_date":        ("due_date", "date", None, None, None),
+    "order_id":        ("reference_number", "text", None, None, None),
+    "invoice_number":  ("reference_number", "text", None, None, None),
+    "receipt_number":  ("reference_number", "text", None, None, None),
+    "customer_id":     ("customer_source_id", "text", None, None, None),
+    "customer":        ("customer_name", "text", None, None, None),
+    "customer_name":   ("customer_name", "text", None, None, None),
+    "customer_email":  ("customer_email", "text", None, None, None),
+    "vendor":          ("vendor_name", "text", None, None, None),
+    "supplier":        ("vendor_name", "text", None, None, None),
+    "product":         ("item_name", "text", None, None, None),
+    "item":            ("item_name", "text", None, None, None),
+    "description":     ("line_description", "text", None, None, None),
+    "quantity":        ("quantity", "number", "quantity", None, "count"),
+    "qty":             ("quantity", "number", "quantity", None, "count"),
+    "unit_price":      ("unit_price", "number", "price", "unit", "usd"),
+    "price":           ("unit_price", "number", "price", "unit", "usd"),
+    "amount":          ("line_amount", "number", "amount", "line", "usd"),
+    "total":           ("total_amount", "number", "amount", "total", "usd"),
+    "total_amount":    ("total_amount", "number", "amount", "total", "usd"),
+    "tax":             ("tax_amount", "number", "tax", None, "usd"),
+    "payment_method":  ("payment_method_name", "text", None, None, None),
+    "store":           ("location_name", "text", None, None, None),
+    "location":        ("location_name", "text", None, None, None),
+    "memo":            ("memo", "text", None, None, None),
+    "notes":           ("memo", "text", None, None, None),
 }
 
 # system name in warehouse.dim_source / field_map -> its map.
 FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP}
+
+# ── Guessing metrics nobody mapped ──────────────────────────────────────────
+# (word in the name) -> (metric_type, metric_unit, subtype when the word itself
+# is specific). The FIRST word found, scanning top to bottom, gives the type,
+# so more specific words come first ("nps" before "score").
+KNOWN_MEASURES: list[tuple[str, str, str, str | None]] = [
+    # word         type          unit       subtype
+    ("csat",       "score",      "score",   "csat"),
+    ("nps",        "score",      "score",   "nps"),
+    ("rating",     "score",      "score",   "rating"),
+    ("stars",      "score",      "score",   "rating"),
+    ("score",      "score",      "score",   None),
+    ("price",      "price",      "usd",     None),
+    ("cost",       "cost",       "usd",     None),
+    ("expense",    "cost",       "usd",     "expense"),
+    ("spend",      "cost",       "usd",     "spend"),
+    ("fee",        "cost",       "usd",     "fee"),
+    ("tax",        "tax",        "usd",     None),
+    ("discount",   "discount",   "usd",     None),
+    ("tip",        "amount",     "usd",     "tip"),
+    ("revenue",    "amount",     "usd",     "revenue"),
+    ("sales",      "amount",     "usd",     "sales"),
+    ("income",     "amount",     "usd",     "income"),
+    ("amount",     "amount",     "usd",     None),
+    ("total",      "amount",     "usd",     "total"),
+    ("balance",    "balance",    "usd",     None),
+    ("salary",     "pay",        "usd",     "salary"),
+    ("wage",       "pay",        "usd",     "wage"),
+    ("pay",        "pay",        "usd",     None),
+    ("profit",     "profit",     "usd",     None),
+    ("margin",     "margin",     "percent", None),
+    ("pct",        "rate",       "percent", None),
+    ("percent",    "rate",       "percent", None),
+    ("rate",       "rate",       "percent", None),
+    ("hours",      "time",       "hours",   None),
+    ("hrs",        "time",       "hours",   None),
+    ("minutes",    "time",       "minutes", None),
+    ("mins",       "time",       "minutes", None),
+    ("days",       "time",       "days",    None),
+    ("quantity",   "quantity",   "count",   None),
+    ("qty",        "quantity",   "count",   None),
+    ("units",      "quantity",   "count",   None),
+    ("count",      "count",      "count",   None),
+    ("visits",     "count",      "count",   "visits"),
+    ("orders",     "count",      "count",   "orders"),
+    ("age",        "age",        "years",   None),
+    ("weight",     "weight",     "lbs",     None),
+]
+# Words that name the UNIT outright; they win over the measure word's default
+# unit ("discount_pct" is a discount in percent, not dollars).
+UNIT_WORDS = {"pct": "percent", "percent": "percent", "hours": "hours", "hrs": "hours",
+              "minutes": "minutes", "mins": "minutes", "days": "days"}
+
+# Money going OUT: in these events an "amount" is a cost.
+EXPENSE_EVENTS = {("transaction", "expense"), ("invoice", "received"), ("payroll", "gross_pay")}
+# Words in OTHER columns that say "this table is expenses" (when no event is given).
+EXPENSE_HINTS = {"expense", "expenses", "vendor", "supplier", "bill", "payee"}
+# Names that look like identifiers, not measures (order_no, zip, sku, phone...).
+ID_NAME = re.compile(r"(^id$|_id$|^id_|_no$|_num$|number$|code$|zip|postal|phone|sku|^key$|_key$)", re.I)
+# Names that suggest a text column holds dates.
+DATE_NAME = re.compile(r"(date|_at$|_on$|time|day$|month|period)", re.I)
 
 
 # ── Small helpers ───────────────────────────────────────────────────────────
@@ -255,6 +337,17 @@ def snake_case(name: str) -> str:
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", str(name))
     text = re.sub(r"[^0-9a-zA-Z]+", "_", text)       # dots, spaces, brackets -> "_"
     return text.strip("_").lower()
+
+
+def _words(name: str) -> list[str]:
+    """
+    Split a name into lowercase words: "Unit Price ($)" -> ["unit", "price"], "TaxPercent" -> ["tax", "percent"].
+
+    Example:
+        >>> _words("TaxPercent")
+        ['tax', 'percent']
+    """
+    return [w for w in snake_case(name).split("_") if w]
 
 
 def _is_missing(value: Any) -> bool:
@@ -290,7 +383,7 @@ def _canonical(value: Any, value_type: str) -> str:
 
     450, 450.0 and Decimal("450.00") all become "450"; dates become
     "YYYY-MM-DD"; timestamps become UTC ISO strings; booleans "true"/"false";
-    text is trimmed. This is what `value_hash` fingerprints.
+    text is trimmed. This is what `value_hash` and `row_hash` fingerprint.
 
     Args:
         value: the value (already of the right kind for value_type).
@@ -322,13 +415,40 @@ def _canonical(value: Any, value_type: str) -> str:
     return str(value).strip()
 
 
+def _infer_type(value: Any) -> str:
+    """
+    Guess the value_type of a value nobody mapped, from its Python type.
+
+    Text is never guessed to be a date: an unmapped "2026-09-01" stays text,
+    which is safe (nothing is mis-read); a field map can say otherwise.
+
+    Args:
+        value: a JSON or pandas value.
+
+    Returns:
+        str: one of VALUE_TYPES.
+
+    Example:
+        >>> _infer_type(True), _infer_type(3), _infer_type("x")
+        ('boolean', 'number', 'text')
+    """
+    if isinstance(value, (bool, np.bool_)):          # check before int: True is an int
+        return "boolean"
+    if isinstance(value, (int, float, Decimal, np.integer, np.floating)):
+        return "number"
+    if isinstance(value, (pd.Timestamp, dt.datetime)):
+        return "timestamp"
+    if isinstance(value, dt.date):
+        return "date"
+    return "text"
+
+
 def value_hash(value: Any, value_type: str | None = None) -> str:
     """
-    Fingerprint a value (SHA-256 of its type + canonical form).
+    Fingerprint one value (SHA-256 of its type + canonical form).
 
-    Two loads of the same value give the same hash, so the database can skip
-    the row (no rewrite, no modified_at bump). A different value, or the same
-    digits as a different type (text "450" vs. number 450), gives a different hash.
+    Equal values give equal hashes however they are written; the same digits
+    as a different type (text "450" vs. number 450) give a different hash.
 
     Args:
         value: the value to fingerprint.
@@ -348,34 +468,6 @@ def value_hash(value: Any, value_type: str | None = None) -> str:
         value = Decimal(value.strip())
     payload = f"{kind}:{_canonical(value, kind)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _infer_type(value: Any) -> str:
-    """
-    Guess the value_type of a value nobody mapped, from its Python type.
-
-    Text is never guessed to be a date: an unmapped "2026-09-01" stays text,
-    which is safe (nothing is mis-read); a field map can say otherwise.
-
-    Args:
-        value: a JSON or pandas value.
-
-    Returns:
-        str: one of VALUE_TYPES.
-
-    Example:
-        >>> _infer_type(True), _infer_type(3), _infer_type("x")
-        ('boolean', 'number', 'text')
-    """
-    if isinstance(value, bool):                     # check before int: True is an int
-        return "boolean"
-    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
-        return "number"
-    if isinstance(value, (pd.Timestamp, dt.datetime)):
-        return "timestamp"
-    if isinstance(value, dt.date):
-        return "date"
-    return "text"
 
 
 def _typed_value(value: Any, value_type: str) -> tuple[str, Any]:
@@ -398,6 +490,8 @@ def _typed_value(value: Any, value_type: str) -> tuple[str, Any]:
         >>> _typed_value("N/A", "number")
         ('text', 'N/A')
     """
+    if isinstance(value, np.generic):
+        value = value.item()
     try:
         if value_type == "number":
             if isinstance(value, bool):
@@ -424,64 +518,249 @@ def _typed_value(value: Any, value_type: str) -> tuple[str, Any]:
     return "text", str(value).strip() if isinstance(value, str) else str(value)
 
 
-def _make_row(*, record_id: str, line_number: int, event_type: str, event_subtype: str,
-              event_date: Any, source_modified_at: Any, field_name: str, source_field: str,
-              value: Any, value_type: str, mapped: bool) -> dict:
+def _date_key(value: Any) -> str:
     """
-    Build one long row (a dict with every UNIFIED_COLUMNS key).
-
-    Args:
-        record_id: the record's ID or content hash.
-        line_number: 0 for header fields, 1.. for line items.
-        event_type: e.g. "invoice".
-        event_subtype: e.g. "sent".
-        event_date: the record's date (datetime.date or None).
-        source_modified_at: the source's last-updated time (pd.Timestamp or None).
-        field_name: the unified field name.
-        source_field: the original name/path.
-        value: the raw value (converted here).
-        value_type: the expected value_type.
-        mapped: True if field_name came from a field map.
-
-    Returns:
-        dict: one row, with exactly one value_* column filled.
+    Write a date as "YYYY-MM-DD" ("" when missing), so stored and new dates compare fairly.
 
     Example:
-        >>> row = _make_row(record_id="Invoice:1", line_number=0, event_type="invoice",
-        ...                 event_subtype="sent", event_date=None, source_modified_at=None,
-        ...                 field_name="total_amount", source_field="TotalAmt", value=10,
-        ...                 value_type="number", mapped=True)
-        >>> row["value_number"], row["value_text"]
-        (10.0, None)
+        >>> _date_key(None), _date_key("2026-09-14")
+        ('', '2026-09-14')
     """
-    actual_type, typed = _typed_value(value, value_type)
-    row = {
-        "record_id": record_id,
-        "line_number": int(line_number),
-        "event_type": event_type,
-        "event_subtype": event_subtype,
-        "event_date": event_date,
-        "source_modified_at": source_modified_at,
-        "field_name": field_name,
-        "source_field": source_field,
-        "value_type": actual_type,
-        "value_hash": value_hash(typed, actual_type),
-        "mapped": mapped,
+    return "" if _is_missing(value) else pd.Timestamp(value).date().isoformat()
+
+
+# ── Describing metrics ──────────────────────────────────────────────────────
+
+def classify_metric(name: str) -> dict:
+    """
+    Guess metric_type, metric_subtype and metric_unit from a field's name.
+
+    The name's words are checked against KNOWN_MEASURES; the first match gives
+    the type and default unit. A unit word in the name ("pct", "hours") sets
+    the unit. The OTHER words become the subtype ("shipping_cost" -> cost /
+    shipping). No match: the type is the name itself, unit "number",
+    confidence "low" (a person should decide).
+
+    Args:
+        name: the column name, or the last part of a source path ("TaxPercent").
+
+    Returns:
+        dict: {"type", "subtype", "unit", "confidence" ("high" | "medium" | "low"), "why"}.
+
+    Example:
+        >>> classify_metric("shipping_cost")
+        {'type': 'cost', 'subtype': 'shipping', 'unit': 'usd', 'confidence': 'high', 'why': 'found "cost" in the name'}
+        >>> classify_metric("discount_pct")["unit"], classify_metric("widgets")["confidence"]
+        ('percent', 'low')
+    """
+    words = _words(name)
+    for word, mtype, unit, default_sub in KNOWN_MEASURES:
+        if word in words:
+            unit_word = next((w for w in words if w in UNIT_WORDS and w != word), None)
+            if unit_word:
+                unit = UNIT_WORDS[unit_word]
+            rest = [w for w in words if w not in (word, unit_word)]
+            subtype = "_".join(rest) or default_sub
+            # Leftover words we can't place (e.g. "x_y_z_amount") lower confidence a little.
+            confidence = "high" if len(rest) <= 2 else "medium"
+            return {"type": mtype, "subtype": subtype, "unit": unit, "confidence": confidence,
+                    "why": f'found "{word}" in the name'}
+    return {"type": "_".join(words) or str(name), "subtype": None, "unit": "number", "confidence": "low",
+            "why": "no known measure in the name — please set type, subtype and unit"}
+
+
+def _expense_context(event_type: str | None, event_subtype: str | None, other_names: Iterable[str]) -> str | None:
+    """
+    Decide whether this data is money going OUT, and why.
+
+    The event says so for sure (a QuickBooks Purchase is transaction/expense).
+    Without an event, a "vendor" / "supplier" / "expense..." column is a strong
+    hint, but only a hint (a person should confirm).
+
+    Returns:
+        str | None: "event" (certain), "columns" (a guess), or None.
+
+    Example:
+        >>> _expense_context("transaction", "expense", []), _expense_context(None, None, ["vendor"])
+        ('event', 'columns')
+    """
+    if (event_type, event_subtype) in EXPENSE_EVENTS:
+        return "event"
+    if event_type is None and {w for n in other_names for w in _words(n)} & EXPENSE_HINTS:
+        return "columns"
+    return None
+
+
+def _describe(spec: FieldSpec | None, name_for_guess: str, *, expense: str | None,
+              currency: str | None, override: dict | None) -> dict:
+    """
+    The metric description of one NUMBER field: from its field map row, else guessed.
+
+    Then two context rules apply: in an expense, "amount" means "cost"; a
+    non-US-dollar currency replaces the "usd" unit. A person's `override`
+    (metric_map) wins over everything.
+
+    Args:
+        spec: the field's FieldSpec when a map knows it (its metric_type must be set).
+        name_for_guess: the name classify_metric reads when there is no spec.
+        expense: result of _expense_context.
+        currency: the record's currency code (QuickBooks CurrencyRef), or None.
+        override: {"type", "subtype", "unit"} from the person, or None.
+
+    Returns:
+        dict: {"type", "subtype", "unit", "confidence", "why"}; confidence is
+        "mapped" (from a field map), "set by you", or classify_metric's.
+
+    Example:
+        >>> _describe(None, "amount", expense="event", currency=None, override=None)["type"]
+        'cost'
+    """
+    if spec is not None:
+        meta = {"type": spec[2], "subtype": spec[3], "unit": spec[4], "confidence": "mapped",
+                "why": "from the field map"}
+    else:
+        meta = classify_metric(name_for_guess)
+    if expense and meta["type"] == "amount":
+        meta = {**meta, "type": "cost"}
+        if expense == "event":
+            meta["why"] += "; money going out (an expense), so it is a cost"
+        else:
+            meta["why"] += "; the table looks like expenses (vendor / expense columns), so it's a cost — please confirm"
+            if meta["confidence"] in ("high", "mapped"):
+                meta["confidence"] = "medium"
+    if currency and currency.upper() != "USD" and meta["unit"] == "usd":
+        meta["unit"] = currency.lower()
+    if override:
+        meta = {**meta, **{k: override[k] for k in ("type", "subtype", "unit") if k in override},
+                "confidence": "set by you", "why": "from metric_map"}
+    return meta
+
+
+def describe_metric_column(column: str) -> dict:
+    """
+    Unified name and description of one metric COLUMN of an uploaded file, by its name alone.
+
+    The shared file map first ("amount" -> line_amount, amount / line / usd),
+    else a guess from the words in the name. Used where only names are known,
+    such as the Spark reshape (spark_engine.melt_to_unified).
+
+    Args:
+        column: the column name.
+
+    Returns:
+        dict: {"field_name", "type", "subtype", "unit", "confidence", "why"}.
+
+    Example:
+        >>> describe_metric_column("Amount")["field_name"], describe_metric_column("shipping_cost")["type"]
+        ('line_amount', 'cost')
+    """
+    spec = FILE_UPLOAD_FIELD_MAP.get(snake_case(column))
+    if spec is not None and spec[2] is None:
+        spec = None            # in the map, but not as a metric: describe it by its name
+    meta = _describe(spec, column, expense=None, currency=None, override=None)
+    return {"field_name": spec[0] if spec else snake_case(column), **meta}
+
+
+# ── Building rows ───────────────────────────────────────────────────────────
+
+def _json_safe(value: Any) -> Any:
+    """
+    One attribute value as JSON-friendly Python (numpy -> plain, NaN -> None).
+
+    Dates, timestamps and booleans are KEPT as Python objects here so a
+    pivot back gives the same types; `attributes_json()` writes them as text
+    for the database.
+    """
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def _attr_canonical(value: Any) -> str:
+    """The canonical text of an attribute value (for the row fingerprint)."""
+    return _canonical(value, _infer_type(value))
+
+
+def _attributes_key(attributes: dict | None) -> dict:
+    """The attributes in canonical form (sorted, blanks dropped): the part of row_hash shared by a line's rows."""
+    return {k: _attr_canonical(v) for k, v in sorted((attributes or {}).items()) if not _is_missing(v)}
+
+
+def row_hash(row: dict, attributes_key: dict | None = None) -> str:
+    """
+    Fingerprint everything a row SAYS: the metric, its value, the record date and the attributes.
+
+    Two loads of the same data give the same hash, so `plan_upsert` (and the
+    SQL upsert) can skip the row: nothing rewritten, modified_at untouched.
+    A changed value, a corrected customer name or a re-classified metric gives
+    a new hash, so the row is updated.
+
+    Args:
+        row: a dict with metric_type, metric_subtype, metric_unit,
+            metric_value, event_date and attributes.
+        attributes_key: _attributes_key(row["attributes"]) when already
+            made (every row of a line shares it, so it is made once per line).
+
+    Returns:
+        str: 64 hex characters.
+
+    Example:
+        >>> a = {"metric_type": "amount", "metric_subtype": None, "metric_unit": "usd",
+        ...      "metric_value": 21, "event_date": None, "attributes": {"store": "Midtown"}}
+        >>> row_hash(a) == row_hash({**a, "metric_value": 21.0})
+        True
+    """
+    value = row.get("metric_value")
+    payload = {
+        "metric": [row.get("metric_type"), row.get("metric_subtype"), row.get("metric_unit")],
+        "value": None if _is_missing(value) else _canonical(value, "number"),
+        "date": _date_key(row.get("event_date")),
+        "attributes": attributes_key if attributes_key is not None else _attributes_key(row.get("attributes")),
     }
-    for kind, column in VALUE_COLUMN.items():
-        row[column] = typed if kind == actual_type else None
-    return {column: row[column] for column in UNIFIED_COLUMNS}   # same order as the table
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _line_rows(*, record_id: str, line_number: int, event_type: str, event_subtype: str,
+               event_date: Any, source_modified_at: Any, attributes: dict, metrics: list[dict]) -> list[dict]:
+    """
+    The rows for ONE line of one record: one per metric, all sharing the line's attributes.
+
+    Args:
+        record_id, line_number, event_type, event_subtype, event_date, source_modified_at:
+            the line's identity (see UNIFIED_COLUMNS).
+        attributes: {field_name: value} of every non-metric field on the line.
+        metrics: dicts with field_name, source_field, type, subtype, unit, value, mapped.
+
+    Returns:
+        list[dict]: rows with every UNIFIED_COLUMNS key. A line with no metric
+        gets one NO_METRIC row, so its attributes are still kept.
+
+    Example:
+        >>> rows = _line_rows(record_id="1", line_number=0, event_type="transaction", event_subtype="income",
+        ...                   event_date=None, source_modified_at=None, attributes={"store": "A"}, metrics=[])
+        >>> rows[0]["field_name"], rows[0]["metric_value"]
+        ('_no_metric', None)
+    """
+    base = {"record_id": record_id, "line_number": int(line_number), "event_type": event_type,
+            "event_subtype": event_subtype, "event_date": event_date, "source_modified_at": source_modified_at}
+    items = metrics or [{"field_name": NO_METRIC, "source_field": "", "type": None, "subtype": None,
+                         "unit": None, "value": None, "mapped": True}]
+    shared = _attributes_key(attributes)
+    rows = []
+    for m in items:
+        row = {**base, "field_name": m["field_name"], "source_field": m["source_field"],
+               "metric_type": m["type"], "metric_subtype": m["subtype"], "metric_unit": m["unit"],
+               "metric_value": m["value"], "attributes": dict(attributes), "mapped": bool(m["mapped"])}
+        row["row_hash"] = row_hash(row, shared)
+        rows.append({c: row[c] for c in UNIFIED_COLUMNS})           # same order as the table
+    return rows
 
 
 def _to_frame(rows: Iterable[dict]) -> pd.DataFrame:
     """
-    Put long rows into a DataFrame with the standard columns, in order.
-
-    Args:
-        rows: dicts made by `_make_row` (may be empty).
-
-    Returns:
-        pd.DataFrame: columns exactly UNIFIED_COLUMNS.
+    Put rows into a DataFrame with the standard columns, in order.
 
     Example:
         >>> list(_to_frame([]).columns) == UNIFIED_COLUMNS
@@ -489,11 +768,31 @@ def _to_frame(rows: Iterable[dict]) -> pd.DataFrame:
     """
     frame = pd.DataFrame(list(rows), columns=UNIFIED_COLUMNS)
     frame["line_number"] = frame["line_number"].astype("int64")
-    # Keep value columns as plain Python objects so each row's value survives
-    # untouched (a number column with None would otherwise turn into NaN).
-    for column in VALUE_COLUMN.values():
-        frame[column] = frame[column].astype(object)
+    frame["metric_value"] = pd.to_numeric(frame["metric_value"], errors="coerce")
+    # Text columns as plain Python objects with None for "no value": pandas 3
+    # would otherwise store blanks as NaN (a float), which the database
+    # driver refuses for a TEXT column (e.g. a metric with no subtype).
+    for column in ("record_id", "event_type", "event_subtype", "field_name", "source_field",
+                   "metric_type", "metric_subtype", "metric_unit", "row_hash"):
+        frame[column] = frame[column].astype(object).where(frame[column].notna(), None)
     return frame
+
+
+def attributes_json(attributes: dict) -> str:
+    """
+    The attributes as JSON text for the database's JSONB column.
+
+    Dates become "YYYY-MM-DD", timestamps UTC ISO text, so they sort and
+    compare correctly in SQL: (attributes->>'transaction_date')::date.
+
+    Example:
+        >>> attributes_json({"d": dt.date(2026, 9, 1), "store": "Midtown"})
+        '{"d": "2026-09-01", "store": "Midtown"}'
+    """
+    def plain(v: Any) -> Any:
+        kind = _infer_type(v)
+        return _canonical(v, kind) if kind in ("date", "timestamp") else v
+    return json.dumps({k: plain(v) for k, v in attributes.items()})
 
 
 # ── QuickBooks Online ───────────────────────────────────────────────────────
@@ -530,41 +829,41 @@ def _walk(value: Any, path: list[str], indexes: list[int]):
         yield lookup_path, source_field, indexes, value
 
 
-def _field_name_for(lookup_path: str, indexes: list[int], field_map: dict) -> tuple[str, str, bool]:
+def _field_name_for(lookup_path: str, indexes: list[int], field_map: dict) -> tuple[str, FieldSpec | None]:
     """
-    Pick the unified field name and expected type for one leaf.
+    Pick the unified field name (and the map row, if any) for one leaf.
 
     Args:
         lookup_path: the path without list positions, e.g. "LinkedTxn.TxnId".
         indexes: list positions on the way (the 2nd LinkedTxn adds "_2").
-        field_map: source path -> (field_name, value_type).
+        field_map: source path -> FieldSpec.
 
     Returns:
-        tuple: (field_name, value_type or "" to infer, mapped).
+        tuple: (field_name, FieldSpec or None when no map knows the path).
 
     Example:
-        >>> _field_name_for("LinkedTxn.TxnId", [1], QUICKBOOKS_FIELD_MAP)
-        ('linked_txn_id_2', 'text', True)
+        >>> _field_name_for("LinkedTxn.TxnId", [1], QUICKBOOKS_FIELD_MAP)[0]
+        'linked_txn_id_2'
     """
-    if lookup_path in field_map:
-        name, kind = field_map[lookup_path]
-        mapped = True
-    else:
-        name, kind, mapped = snake_case(lookup_path), "", False
+    spec = field_map.get(lookup_path)
+    name = spec[0] if spec else snake_case(lookup_path)
     # The first item of a list keeps the plain name; later items get _2, _3...
     if any(indexes):
         name += "_" + "_".join(str(i + 1) for i in indexes)
-    return name, kind, mapped
+    return name, spec
 
 
 def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = None) -> list[dict]:
     """
-    Flatten one QuickBooks Online API object into long rows (one per field).
+    Turn one QuickBooks Online API object into unified rows (one per metric).
 
-    Header fields get line_number 0; the n-th item of the object's `Line` list
-    gets line_number n (1-based, in the order QuickBooks returns them). Known
-    fields are renamed through the field map; unknown fields are KEPT with a
-    snake_case name and mapped=False. Missing/empty values make no row.
+    Header fields belong to line_number 0; the n-th item of the object's
+    `Line` list is line_number n (1-based, in the order QuickBooks returns
+    them). On each line, number fields the map calls metrics (and unmapped
+    numbers that don't look like IDs) become rows; every other field goes
+    into that line's `attributes`. Known fields are renamed through the field
+    map; unknown ones are KEPT under a snake_case name (an unknown metric gets
+    mapped=False). Missing/empty values are skipped.
 
     The record_id is "<entity>:<Id>" because QuickBooks Ids are only unique
     within one entity type (Invoice 130 and Payment 130 can both exist).
@@ -575,7 +874,7 @@ def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = 
         field_map: optional override of QUICKBOOKS_FIELD_MAP.
 
     Returns:
-        list[dict]: long rows with the UNIFIED_COLUMNS keys.
+        list[dict]: rows with the UNIFIED_COLUMNS keys.
 
     Raises:
         ValueError: if the entity is unknown or the object has no Id.
@@ -583,8 +882,8 @@ def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = 
     Example:
         >>> rows = flatten_quickbooks("Invoice", {"Id": "130", "TxnDate": "2026-09-14",
         ...     "TotalAmt": 96.0, "Line": [{"Amount": 96.0, "DetailType": "SalesItemLineDetail"}]})
-        >>> sorted((r["line_number"], r["field_name"]) for r in rows)[:3]
-        [(0, 'source_record_id'), (0, 'total_amount'), (0, 'transaction_date')]
+        >>> [(r["line_number"], r["field_name"], r["metric_value"]) for r in rows]
+        [(0, 'total_amount', 96.0), (1, 'line_amount', 96.0)]
     """
     if entity_name not in QUICKBOOKS_ENTITIES:
         raise ValueError(f"Unknown QuickBooks entity {entity_name!r}; known: {sorted(QUICKBOOKS_ENTITIES)}")
@@ -598,6 +897,8 @@ def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = 
     event_date = None if _is_missing(raw_date) else _typed_value(raw_date, "date")[1]
     raw_updated = (obj.get("MetaData") or {}).get("LastUpdatedTime")
     source_modified_at = None if _is_missing(raw_updated) else _typed_value(raw_updated, "timestamp")[1]
+    currency = (obj.get("CurrencyRef") or {}).get("value")
+    expense = _expense_context(event_type, event_subtype, [])
 
     # Header = everything except the Line list; then one group per line item.
     header = {k: v for k, v in obj.items() if k != "Line" and k not in QUICKBOOKS_SKIP_FIELDS}
@@ -606,27 +907,38 @@ def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = 
 
     rows: list[dict] = []
     for line_number, content, prefix in groups:
+        attributes: dict[str, Any] = {}
+        metrics: list[dict] = []
         used: set[str] = set()       # field names already used on this line
         for lookup_path, source_field, indexes, value in _walk(content, prefix, []):
             if _is_missing(value):
                 continue
-            name, kind, mapped = _field_name_for(lookup_path, indexes, fmap)
+            name, spec = _field_name_for(lookup_path, indexes, fmap)
             if name in used:         # two paths mapped to one name: keep both
-                name, mapped = snake_case(source_field), False
+                name, spec = snake_case(source_field), None
             used.add(name)
-            rows.append(_make_row(
-                record_id=record_id, line_number=line_number,
-                event_type=event_type, event_subtype=event_subtype,
-                event_date=event_date, source_modified_at=source_modified_at,
-                field_name=name, source_field=source_field,
-                value=value, value_type=kind or _infer_type(value), mapped=mapped,
-            ))
+            kind, typed = _typed_value(value, spec[1] if spec else _infer_type(value))
+            # A metric: a number the map calls a metric, or an unmapped number
+            # whose name doesn't look like an ID ("LineNum" is mapped as NOT a metric).
+            is_metric = kind == "number" and (
+                spec[2] is not None if spec else not ID_NAME.search(snake_case(lookup_path.split(".")[-1])))
+            if not is_metric:
+                attributes[name] = typed
+                continue
+            # Unmapped: guess from the path's last part ("TaxPercent"), not the whole path.
+            meta = _describe(spec, lookup_path.split(".")[-1], expense=expense, currency=currency, override=None)
+            metrics.append({"field_name": name, "source_field": source_field, "type": meta["type"],
+                            "subtype": meta["subtype"], "unit": meta["unit"], "value": typed,
+                            "mapped": spec is not None})
+        rows += _line_rows(record_id=record_id, line_number=line_number, event_type=event_type,
+                           event_subtype=event_subtype, event_date=event_date,
+                           source_modified_at=source_modified_at, attributes=attributes, metrics=metrics)
     return rows
 
 
 def quickbooks_response_to_unified(response: dict) -> pd.DataFrame:
     """
-    Flatten a whole QuickBooks Online query response into one long DataFrame.
+    Flatten a whole QuickBooks Online query response into one unified DataFrame.
 
     Walks `response["QueryResponse"]` and flattens every known entity list in
     it (Invoice, Purchase, ...). Unknown entity lists are skipped.
@@ -636,7 +948,7 @@ def quickbooks_response_to_unified(response: dict) -> pd.DataFrame:
             GET /v3/company/<realmId>/query?query=select * from Invoice.
 
     Returns:
-        pd.DataFrame: long rows, columns UNIFIED_COLUMNS.
+        pd.DataFrame: rows, columns UNIFIED_COLUMNS.
 
     Example:
         >>> df = quickbooks_response_to_unified({"QueryResponse": {"Invoice": [
@@ -659,9 +971,6 @@ def _column_value_type(series: pd.Series) -> str:
     """
     Pick the value_type for a whole DataFrame column from its dtype.
 
-    Args:
-        series: one column.
-
     Returns:
         str: "boolean", "number", "date" (datetime with no time part),
         "timestamp", or "text".
@@ -680,6 +989,134 @@ def _column_value_type(series: pd.Series) -> str:
             return "date"
         return "timestamp"
     return "text"
+
+
+def _as_dates(series: pd.Series) -> pd.Series | None:
+    """
+    A text column with a date-like name whose every value parses as a date -> the parsed dates; else None.
+
+    The cleaning step keeps dates as ISO text ("2024-10-11"), so this is how
+    order_date is recognized as a date.
+    """
+    if not DATE_NAME.search(str(series.name)) or not (
+            series.dtype == object or pd.api.types.is_string_dtype(series)):
+        return None
+    values = series.dropna()
+    if values.empty or not values.map(lambda v: isinstance(v, str)).all():
+        return None
+    parsed = pd.to_datetime(series, errors="coerce", format="mixed")
+    return parsed if parsed.notna().sum() == len(values) else None
+
+
+def plan_columns(
+    df: pd.DataFrame,
+    *,
+    event_type: str | None = None,
+    event_subtype: str | None = None,
+    metric_columns: list[str] | None = None,
+    id_columns: list[str] | None = None,
+    metric_map: dict[str, dict] | None = None,
+    source_field_map: dict[str, str | tuple] | None = None,
+) -> list[dict]:
+    """
+    Decide, for every column, its ROLE and its unified name — and for metrics, their description.
+
+    Roles: "metric" (a number that is measured), "id", "date", "category"
+    (everything else: text, yes/no, demographics). Only metrics become rows;
+    the other three stay as they are, in `attributes`.
+
+    Order of decisions for each column:
+      1. id_columns / metric_columns chosen by a person win.
+      2. A field map row (source_field_map, then FILE_UPLOAD_FIELD_MAP by the
+         snake_case name) gives the unified name, and says whether it is a metric.
+      3. Otherwise: a date column -> date; an ID-like name -> id; a number ->
+         metric (described by classify_metric); anything else -> category.
+    Context: in an expense (event, or vendor / expense columns) "amount" is a
+    cost. metric_map ({column: {"type", "subtype", "unit"}}) overrides any guess.
+
+    Args:
+        df: the cleaned table.
+        event_type, event_subtype: what each row is, if known (e.g. "transaction", "expense").
+        metric_columns: force exactly these columns to be metrics.
+        id_columns: force these columns to be IDs.
+        metric_map: a person's corrections of metric descriptions.
+        source_field_map: {column: field_name} (or a FieldSpec tuple) for this upload.
+
+    Returns:
+        list[dict]: one per column, in table order: column, role, field_name,
+        mapped, value_type, metric_type, metric_subtype, metric_unit,
+        confidence ("mapped", "set by you", "high", "medium", "low", or None for
+        non-metrics) and why.
+
+    Raises:
+        ValueError: a chosen column isn't in the table, or metric_map is malformed.
+
+    Example:
+        >>> plan = plan_columns(pd.DataFrame({"order_id": [1], "store": ["A"], "amount": [2.0]}))
+        >>> [(p["column"], p["role"], p["field_name"]) for p in plan]
+        [('order_id', 'id', 'reference_number'), ('store', 'category', 'location_name'), ('amount', 'metric', 'line_amount')]
+    """
+    for chosen in (metric_columns or []) + (id_columns or []) + list(metric_map or {}):
+        if chosen not in df.columns:
+            raise ValueError(f"Column {chosen!r} isn't in this table.")
+    for column, override in (metric_map or {}).items():
+        if not isinstance(override, dict):
+            raise ValueError(f"metric_map[{column!r}] must be an object with type / subtype / unit.")
+    overrides = source_field_map or {}
+    expense = _expense_context(event_type, event_subtype,
+                               [c for c in df.columns if c not in (metric_columns or [])])
+
+    plan = []
+    for column in df.columns:
+        series = df[column]
+        kind = _column_value_type(series)
+        if kind == "text" and _as_dates(series) is not None:
+            kind = "date"
+        # The map row, if any: a per-upload name first, then the shared file map.
+        spec: FieldSpec | None = None
+        if column in overrides:
+            target = overrides[column]
+            spec = tuple(target) if isinstance(target, (tuple, list)) else (target, kind, None, None, None)
+            if len(spec) < 5:
+                spec = (*spec, *([None] * (5 - len(spec))))
+        elif snake_case(column) in FILE_UPLOAD_FIELD_MAP:
+            spec = FILE_UPLOAD_FIELD_MAP[snake_case(column)]
+        name = spec[0] if spec else snake_case(column)
+
+        if id_columns and column in id_columns:
+            role = "id"
+        elif metric_columns is not None:
+            role = "metric" if column in metric_columns else None
+        elif spec is not None and spec[2] is not None and kind == "number":
+            role = "metric"
+        elif spec is None and kind == "number" and not ID_NAME.search(str(column)):
+            role = "metric"
+        else:
+            role = None
+        if role is None:     # not a metric: which kind of attribute?
+            role = "date" if kind in ("date", "timestamp") else "id" if ID_NAME.search(str(column)) else "category"
+
+        entry = {"column": column, "role": role, "field_name": name, "mapped": spec is not None,
+                 "value_type": kind, "metric_type": None, "metric_subtype": None, "metric_unit": None,
+                 "confidence": None, "why": "kept as it is"}
+        if role == "metric":
+            if kind != "number":
+                raise ValueError(f"Column {column!r} isn't a number column, so it can't be a metric.")
+            map_spec = spec if spec is not None and spec[2] is not None else None
+            meta = _describe(map_spec, str(column), expense=expense, currency=None,
+                             override=(metric_map or {}).get(column))
+            entry.update(metric_type=meta["type"], metric_subtype=meta["subtype"], metric_unit=meta["unit"],
+                         confidence=meta["confidence"], why=meta["why"],
+                         mapped=map_spec is not None or meta["confidence"] == "set by you")
+        plan.append(entry)
+
+    # Two columns aligned to one name (e.g. "store" and "location") would collide.
+    names = pd.Series([p["field_name"] for p in plan])
+    clashes = sorted(names[names.duplicated()].unique())
+    if clashes:
+        raise ValueError(f"Several columns map to the same field: {clashes}; "
+                         "pass source_field_map to rename one")
+    return plan
 
 
 def _row_content_hash(df: pd.DataFrame, types: dict[str, str]) -> pd.Series:
@@ -718,14 +1155,19 @@ def dataframe_to_unified(
     *,
     event_type: str,
     event_subtype: str,
-    date_column: str | None,
+    date_column: str | None = None,
     id_column: str | None = None,
     line_column: str | None = None,
-    source_field_map: dict[str, str | tuple[str, str]] | None = None,
+    plan: list[dict] | None = None,
     keep_identical_rows: bool = False,
+    **plan_options: Any,
 ) -> pd.DataFrame:
     """
-    Melt a cleaned DataFrame into long rows (one row per cell with a value).
+    Reshape a cleaned DataFrame into unified rows: one per metric cell with a value.
+
+    Like pandas `melt` with the id / date / category columns as `id_vars`:
+    each metric column becomes rows, and the other columns ride along in
+    `attributes` (by their unified name), exactly as they were.
 
     record_id comes from `id_column` when the file has IDs. Without one, it is
     a SHA-256 hash of the row's content, so the SAME row uploaded twice gets
@@ -738,37 +1180,47 @@ def dataframe_to_unified(
     (e.g. one row per invoice line): then rows of the same ID are numbered
     1, 2, 3... in file order.
 
-    Column names are aligned through `source_field_map` first, then
-    FILE_UPLOAD_FIELD_MAP (by snake_case name); any other column keeps its
-    snake_case name with mapped=False. Values are typed by the column's dtype.
-
     Args:
         df: the cleaned data (one row per record or line).
         event_type: e.g. "transaction" (must exist in dim_event_type).
         event_subtype: e.g. "income".
-        date_column: the column holding the date used in the clean data, or None.
+        date_column: the column holding the date used in the clean data
+            (copied to event_date), or None.
         id_column: the column holding each record's ID, if the file has one.
         line_column: a column holding line numbers (integers), if any.
-        source_field_map: optional {column: field_name} or
-            {column: (field_name, value_type)} for this upload; value_type is
-            ignored here (the column's dtype decides), the name is used.
+        plan: the result of plan_columns, if already made (e.g. after review).
         keep_identical_rows: keep exact duplicate rows as separate records.
+        **plan_options: passed to plan_columns when `plan` is None
+            (metric_columns, id_columns, metric_map, source_field_map).
 
     Returns:
-        pd.DataFrame: long rows, columns UNIFIED_COLUMNS.
+        pd.DataFrame: rows, columns UNIFIED_COLUMNS. `.attrs["plan"]` holds the
+        column plan, which `unified_to_wide` uses to give back the original names.
+
+    Raises:
+        ValueError: a named column is missing, the ID column has blanks, or two
+        columns map to one field.
 
     Example:
-        >>> sales = pd.DataFrame({"order_date": pd.to_datetime(["2026-09-01"]), "amount": [21.0]})
+        >>> sales = pd.DataFrame({"order_date": pd.to_datetime(["2026-09-01"]), "store": ["A"], "amount": [21.0]})
         >>> long = dataframe_to_unified(sales, event_type="transaction",
         ...     event_subtype="income", date_column="order_date")
-        >>> long["field_name"].tolist()
-        ['transaction_date', 'line_amount']
+        >>> long[["field_name", "metric_type", "metric_value"]].values.tolist()
+        [['line_amount', 'amount', 21.0]]
+        >>> sorted(long["attributes"].iloc[0])
+        ['location_name', 'transaction_date']
     """
     data = df.reset_index(drop=True)
     for column in (date_column, id_column, line_column):
         if column is not None and column not in data.columns:
             raise ValueError(f"Column {column!r} is not in the data")
-    types = {c: _column_value_type(data[c]) for c in data.columns}
+    if plan is None:
+        plan = plan_columns(data, event_type=event_type, event_subtype=event_subtype, **plan_options)
+    types = {p["column"]: p["value_type"] for p in plan}
+    # Text dates found by plan_columns are parsed once, so they are real dates.
+    for p in plan:
+        if p["value_type"] == "date" and _column_value_type(data[p["column"]]) == "text":
+            data[p["column"]] = _as_dates(data[p["column"]])
 
     # 1. record_id: the file's own ID, or a content hash.
     if id_column is not None:
@@ -797,114 +1249,155 @@ def dataframe_to_unified(
     else:
         event_dates = pd.Series([None] * len(data), index=data.index, dtype=object)
 
-    # 4. One block of long rows per column (a melt), skipping empty cells.
-    overrides = source_field_map or {}
+    # 4. Per row: attributes from the non-metric columns, one row per metric with a value.
+    kept = [p for p in plan if p["role"] != "metric"]
+    measured = [p for p in plan if p["role"] == "metric"]
+    # Each column as a plain Python list, read once (reading cell by cell with
+    # pandas .at is about 50 times slower on a file of 20,000 rows).
+    values = {p["column"]: data[p["column"]].tolist() for p in plan}
+    for p in kept:
+        if p["value_type"] == "date":
+            values[p["column"]] = [None if _is_missing(v) else pd.Timestamp(v).date() for v in values[p["column"]]]
+    ids, lines, dates = record_ids.tolist(), line_numbers.tolist(), event_dates.tolist()
     rows: list[dict] = []
-    for column in data.columns:
-        if column in overrides:
-            target = overrides[column]
-            name, mapped = (target[0] if isinstance(target, tuple) else target), True
-        elif snake_case(column) in FILE_UPLOAD_FIELD_MAP:
-            name, mapped = FILE_UPLOAD_FIELD_MAP[snake_case(column)][0], True
-        else:
-            name, mapped = snake_case(column), False
-        kind = types[column]
-        for i, value in data[column].items():
-            if _is_missing(value):
-                continue
-            if kind == "number":
-                value = value.item() if hasattr(value, "item") else value   # numpy -> Python
-            rows.append(_make_row(
-                record_id=record_ids[i], line_number=int(line_numbers[i]),
-                event_type=event_type, event_subtype=event_subtype,
-                event_date=event_dates[i], source_modified_at=None,
-                field_name=name, source_field=str(column),
-                value=value, value_type=kind, mapped=mapped,
-            ))
+    for i in range(len(data)):
+        attributes = {p["field_name"]: _json_safe(values[p["column"]][i]) for p in kept
+                      if not _is_missing(values[p["column"]][i])}
+        metrics = [{"field_name": p["field_name"], "source_field": str(p["column"]),
+                    "type": p["metric_type"], "subtype": p["metric_subtype"], "unit": p["metric_unit"],
+                    "value": float(values[p["column"]][i]), "mapped": p["mapped"]}
+                   for p in measured if not _is_missing(values[p["column"]][i])]
+        rows += _line_rows(record_id=ids[i], line_number=int(lines[i]), event_type=event_type,
+                           event_subtype=event_subtype, event_date=dates[i], source_modified_at=None,
+                           attributes=attributes, metrics=metrics)
     long = _to_frame(rows)
-    # Two columns aligned to one name (e.g. "store" and "location") would break
-    # the unique key; refuse loudly instead of silently dropping one.
-    names = long.groupby("field_name")["source_field"].nunique()
-    if (names > 1).any():
-        raise ValueError(f"Several columns map to the same field: {sorted(names[names > 1].index)}; "
-                         "pass source_field_map to rename one")
+    long.attrs["plan"] = plan
     return long
 
 
 # ── Pivot back to wide ──────────────────────────────────────────────────────
 
-def unified_to_wide(long_df: pd.DataFrame, *, use_source_names: bool = False) -> pd.DataFrame:
+def unified_to_wide(long_df: pd.DataFrame, *, use_source_names: bool = False,
+                    plan: list[dict] | None = None) -> pd.DataFrame:
     """
-    Pivot long rows back into a normal table: one row per record_id + line_number.
+    Pivot unified rows back into a normal table: one row per record_id + line_number.
 
-    Each field becomes a column, typed by its value_type (numbers numeric,
-    dates datetime, booleans boolean). Rows keep the order they first appear
-    in long_df. A field a record doesn't have is NaN/None in that row.
+    The attributes of each line become columns again, and each metric
+    (field_name) becomes a numeric column. Rows keep the order they first
+    appear in long_df. A field a line doesn't have is empty in that row.
 
     Args:
-        long_df: rows with at least KEY_COLUMNS, "value_type", the value_*
-            columns and (with use_source_names) "source_field".
-        use_source_names: name columns by source_field (the client's original
-            header, e.g. "order_date") instead of the unified field_name.
+        long_df: unified rows (UNIFIED_COLUMNS).
+        use_source_names: name columns as the client's original headers
+            ("order_date") instead of unified names ("transaction_date"), in
+            the original column order. Needs the column plan: `plan`, or the
+            one dataframe_to_unified stored in long_df.attrs.
+        plan: the column plan from plan_columns (see use_source_names).
 
     Returns:
         pd.DataFrame: columns record_id, line_number, then one per field.
 
     Example:
         >>> long = dataframe_to_unified(pd.DataFrame({"qty": [2, 3]}), event_type="transaction",
-        ...     event_subtype="income", date_column=None)
+        ...     event_subtype="income")
         >>> unified_to_wide(long)["quantity"].tolist()
         [2.0, 3.0]
     """
+    keys = ["record_id", "line_number"]
     if long_df.empty:
-        return pd.DataFrame(columns=["record_id", "line_number"])
-    data = long_df.copy()
-    column_key = "source_field" if use_source_names else "field_name"
-    # Pick each row's value from the column its value_type names.
-    data["_value"] = [row[VALUE_COLUMN[row["value_type"]]] for _, row in data.iterrows()]
+        return pd.DataFrame(columns=keys)
+    # Attributes: the same on every row of a line, so take the line's first row.
+    first = long_df.drop_duplicates(subset=keys)
+    attrs = pd.DataFrame(first["attributes"].tolist(), index=first.index)
+    wide = pd.concat([first[keys], attrs], axis=1).reset_index(drop=True)
 
-    # Remember row and column order before pivoting (pivot would sort them).
-    order = data[["record_id", "line_number"]].drop_duplicates()
-    columns = list(dict.fromkeys(data[column_key]))
-    types = data.groupby(column_key)["value_type"].agg(lambda s: s.mode().iloc[0])
+    measured = long_df[long_df["field_name"] != NO_METRIC]
+    if not measured.empty:
+        metrics = measured.pivot_table(index=keys, columns="field_name", values="metric_value", aggfunc="first")
+        metric_order = list(dict.fromkeys(measured["field_name"]))       # first-seen order, not sorted
+        wide = wide.merge(metrics[metric_order].reset_index(), on=keys, how="left")
 
-    wide = data.pivot_table(index=["record_id", "line_number"], columns=column_key,
-                            values="_value", aggfunc="first", dropna=False)
-    wide = order.merge(wide.reset_index(), on=["record_id", "line_number"], how="left")
-    wide = wide[["record_id", "line_number"] + columns]
+    # Real date columns again (attributes hold datetime.date objects).
+    for column in wide.columns[2:]:
+        values = wide[column].dropna()
+        if len(values) and values.map(lambda v: isinstance(v, (dt.date, pd.Timestamp))).all():
+            wide[column] = pd.to_datetime(wide[column])
 
-    for column in columns:
-        kind = types[column]
-        if kind == "number":
-            wide[column] = pd.to_numeric(wide[column], errors="coerce")
-        elif kind == "date":
-            wide[column] = pd.to_datetime(wide[column], errors="coerce")
-        elif kind == "timestamp":
-            wide[column] = pd.to_datetime(wide[column], errors="coerce", utc=True)
-        elif kind == "boolean":
-            wide[column] = wide[column].astype("boolean")
+    if use_source_names:
+        plan = plan or long_df.attrs.get("plan")
+        if not plan:
+            raise ValueError("use_source_names needs the column plan (pass plan=...)")
+        rename = {p["field_name"]: p["column"] for p in plan}
+        wide = wide.rename(columns=rename)
+        wide = wide.reindex(columns=keys + [p["column"] for p in plan])
     wide.columns.name = None
-    return wide.reset_index(drop=True)
+    return wide
+
+
+def round_trip(df: pd.DataFrame, long_df: pd.DataFrame, plan: list[dict] | None = None) -> dict:
+    """
+    Prove nothing was lost: pivot the unified rows back and compare EVERY cell with the original.
+
+    Blanks equal blanks; numbers compare as numbers (3 == 3.0); dates by day
+    or exact time; everything else as text. Rows are matched in order, so
+    build `long_df` with keep_identical_rows=True (identical rows otherwise
+    collapse into one record, by design).
+
+    Args:
+        df: the original cleaned table.
+        long_df: dataframe_to_unified(df, ...).
+        plan: the column plan (default: long_df.attrs["plan"]).
+
+    Returns:
+        dict: {"ok", "cells_checked", "mismatches", "examples"} — up to 5
+        differing cells as {"row", "column", "original", "rebuilt"}.
+
+    Example:
+        >>> d = pd.DataFrame({"store": ["A", None], "amount": [2.0, None]})
+        >>> round_trip(d, dataframe_to_unified(d, event_type="transaction", event_subtype="income",
+        ...            keep_identical_rows=True))["ok"]
+        True
+    """
+    original = df.reset_index(drop=True)
+    plan = plan or long_df.attrs.get("plan") or []
+    rebuilt = unified_to_wide(long_df, use_source_names=True, plan=plan)
+    columns = list(original.columns)
+    # Date columns compare as dates on both sides (the cleaned file may hold
+    # "2024-10-11" as text; the rebuilt column holds real dates).
+    date_columns = {p["column"] for p in plan if p["value_type"] in ("date", "timestamp")}
+
+    def norm(v: Any, is_date: bool = False) -> Any:
+        if _is_missing(v):
+            return None
+        if is_date:
+            return pd.Timestamp(v).isoformat()
+        kind = _infer_type(v)
+        if kind == "number":
+            return float(v)
+        if kind in ("date", "timestamp"):
+            return pd.Timestamp(v).isoformat()
+        if kind == "boolean":
+            return bool(v)
+        return str(v).strip()
+
+    mismatches, examples = 0, []
+    same_rows = len(rebuilt) == len(original)
+    for column in columns:
+        is_date = column in date_columns
+        before = original[column].tolist()           # plain lists: fast to compare
+        after = rebuilt[column].tolist() if same_rows and column in rebuilt.columns else None
+        for i in range(len(original)):
+            a = norm(before[i], is_date)
+            b = norm(after[i], is_date) if after is not None else "(missing)"
+            if a != b:
+                mismatches += 1
+                if len(examples) < 5:
+                    examples.append({"row": i + 1, "column": str(column), "original": a, "rebuilt": b})
+    return {"ok": mismatches == 0, "cells_checked": len(original) * len(columns),
+            "mismatches": mismatches, "examples": examples}
 
 
 # ── Anti-duplicate load planning ────────────────────────────────────────────
-
-def _date_key(value: Any) -> str:
-    """
-    Write a date as "YYYY-MM-DD" ("" when missing), so stored and new dates compare fairly.
-
-    Args:
-        value: a date, Timestamp, ISO string, None or NaN.
-
-    Returns:
-        str: the ISO date or "".
-
-    Example:
-        >>> _date_key(None), _date_key("2026-09-14")
-        ('', '2026-09-14')
-    """
-    return "" if _is_missing(value) else pd.Timestamp(value).date().isoformat()
-
 
 def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> dict[str, pd.DataFrame]:
     """
@@ -913,24 +1406,25 @@ def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> d
     Both frames must be for ONE client and ONE source (the SQL key adds
     client_id and source_id to KEY_COLUMNS). Steps:
 
-    1. De-duplicate the new batch: identical rows count once; if one field of
-       one record appears twice with different values, the copy with the
-       latest source_modified_at wins (otherwise the last one).
+    1. De-duplicate the new batch: identical rows count once; if one metric of
+       one record line appears twice with different content, the copy with
+       the latest source_modified_at wins (otherwise the last one).
     2. Compare each new row with the stored row of the same key:
-         not stored                       -> "insert"
-         stored, same value_hash and date -> "unchanged" (nothing written,
-                                             modified_at keeps its old value)
-         stored, different value or date  -> "update"
+         not stored              -> "insert"
+         stored, same row_hash   -> "unchanged" (nothing written, modified_at
+                                    keeps its old value)
+         stored, different hash  -> "update" (a value, the date, an attribute
+                                    or the metric's description changed)
     3. "stale": stored rows of records that ARE in the new batch but whose
-       field is no longer there (a value was cleared or a line was removed in
+       key is no longer there (a value was cleared or a line was removed in
        QuickBooks). The loader decides whether to delete them.
 
     This mirrors the SQL upsert in db/warehouse.sql
-    (ON CONFLICT ... DO UPDATE ... WHERE value_hash IS DISTINCT FROM ...).
+    (ON CONFLICT ... DO UPDATE ... WHERE row_hash IS DISTINCT FROM ...).
 
     Args:
-        new_long: long rows about to be loaded.
-        existing_long: long rows already stored (None or empty if none). Extra
+        new_long: rows about to be loaded.
+        existing_long: rows already stored (None or empty if none). Extra
             columns such as row_id are carried into "update" and "stale".
 
     Returns:
@@ -938,18 +1432,17 @@ def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> d
 
     Example:
         >>> batch = dataframe_to_unified(pd.DataFrame({"qty": [2]}), event_type="transaction",
-        ...     event_subtype="income", date_column=None)
+        ...     event_subtype="income")
         >>> plan = plan_upsert(batch, batch)
         >>> len(plan["insert"]), len(plan["unchanged"])
         (0, 1)
     """
     new = new_long.copy()
-    if "value_hash" not in new.columns or new["value_hash"].isna().any():
-        new["value_hash"] = [value_hash(row[VALUE_COLUMN[row["value_type"]]], row["value_type"])
-                             for _, row in new.iterrows()]
+    if "row_hash" not in new.columns or new["row_hash"].isna().any():
+        new["row_hash"] = [row_hash(row) for row in new.to_dict("records")]
 
     # 1. Identical rows once; conflicting copies -> the newest wins.
-    new = new.drop_duplicates(subset=KEY_COLUMNS + ["value_hash", "event_date"])
+    new = new.drop_duplicates(subset=KEY_COLUMNS + ["row_hash"])
     if "source_modified_at" in new.columns and new["source_modified_at"].notna().any():
         modified = pd.to_datetime(new["source_modified_at"], utc=True, errors="coerce")
         new = new.assign(_modified=modified).sort_values("_modified", kind="stable", na_position="first")
@@ -961,22 +1454,20 @@ def plan_upsert(new_long: pd.DataFrame, existing_long: pd.DataFrame | None) -> d
         return {"insert": new.reset_index(drop=True), "update": empty.copy(),
                 "unchanged": empty.copy(), "stale": empty.copy()}
 
-    # 2. Compare by key. Stored extras (row_id, ...) come along with "_old" names.
+    # 2. Compare by key. Stored extras (row_id, ...) come along.
     old = existing_long.copy()
     extras = [c for c in old.columns if c not in new.columns]
-    stored = old[KEY_COLUMNS + ["value_hash", "event_date"] + extras].rename(
-        columns={"value_hash": "_old_hash", "event_date": "_old_date"})
+    stored = old[KEY_COLUMNS + ["row_hash"] + extras].rename(columns={"row_hash": "_old_hash"})
     merged = new.merge(stored, on=KEY_COLUMNS, how="left", indicator=True)
     is_new = merged["_merge"] == "left_only"
-    same_hash = merged["value_hash"] == merged["_old_hash"]
-    same_date = merged["event_date"].map(_date_key) == merged["_old_date"].map(_date_key)
-    helper = ["_old_hash", "_old_date", "_merge"]
+    same = merged["row_hash"] == merged["_old_hash"]
+    helper = ["_old_hash", "_merge"]
 
     insert = merged[is_new].drop(columns=helper + extras)
-    unchanged = merged[~is_new & same_hash & same_date].drop(columns=helper)
-    update = merged[~is_new & ~(same_hash & same_date)].drop(columns=helper)
+    unchanged = merged[~is_new & same].drop(columns=helper)
+    update = merged[~is_new & ~same].drop(columns=helper)
 
-    # 3. Stale: stored fields of re-sent records that the new batch no longer has.
+    # 3. Stale: stored keys of re-sent records that the new batch no longer has.
     resent = old[old["record_id"].isin(new["record_id"])]
     keys_now = set(map(tuple, new[KEY_COLUMNS].astype(str).to_numpy()))
     is_stale = [tuple(k) not in keys_now for k in resent[KEY_COLUMNS].astype(str).to_numpy()]
