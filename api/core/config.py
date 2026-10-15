@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     # How long a login token stays valid (minutes). 7 days by default.
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
 
+    # ── Passwords (Supabase Auth, email + password) ───────────────────────────
+    # Supabase -> Project Settings -> API: the Project URL and the anon /
+    # publishable key (NOT the service_role / secret key). When both are set,
+    # Supabase Auth stores and checks passwords (api/services/auth.py). When
+    # empty, passwords are hashed and checked by the API itself ("local" mode)
+    # so you can develop and run tests without Supabase.
+    supabase_url: str = Field(default="", alias="SUPABASE_URL")
+    supabase_key: str = Field(default="", alias="SUPABASE_KEY")
+
     # ── CORS (which websites may call this API) ───────────────────────────────
     # Comma-separated list, e.g. "http://localhost:3000,https://yourdomain.com"
     # (a trailing "/" is ignored, so a pasted "https://x.vercel.app/" still works).
@@ -88,6 +97,15 @@ class Settings(BaseSettings):
     # Your scheduling link (Calendly, Cal.com, Google Calendar booking page…).
     # Shown whenever a guest picks a service that needs a human consultant.
     booking_url: str = Field(default="https://calendly.com/your-link", alias="BOOKING_URL")
+    # A SECOND scheduling link for paid consulting sessions ($80/hour), shown
+    # once a client's free consultation is marked as done (api/services/consultations.py).
+    # Empty = everyone keeps seeing BOOKING_URL.
+    paid_booking_url: str = Field(default="", alias="PAID_BOOKING_URL")
+    # Cal.com webhook signing secret (Cal.com -> Settings -> Developer ->
+    # Webhooks -> "Secret"). Lets Cal.com tell the app when a consultation is
+    # booked, rescheduled, canceled or has ended. Empty = webhook switched off;
+    # you can still mark consultations by hand in the workspace.
+    calcom_webhook_secret: str = Field(default="", alias="CALCOM_WEBHOOK_SECRET")
 
     # Hourly consulting rate after the free 30-minute first consultation (and
     # from the first hour for Data Strategy & Discovery). Placeholder: $80.
@@ -107,9 +125,9 @@ class Settings(BaseSettings):
     # one is the default consultant: clients who tick "I'd like a consultant to
     # do this for me" are assigned to them. Empty = no consultants.
     consultant_emails: str = Field(default="", alias="CONSULTANT_EMAILS")
-    # A secret code a consultant must enter to sign in (or sign up). Sign-in is
-    # by email only for now, so without this anyone who knows a consultant's
-    # email could see every client. Empty = consultant sign-in is switched off.
+    # A secret code a consultant must enter to sign in (or sign up), on top of
+    # their password — a consultant can open every assigned client, so they get
+    # a second check. Empty = consultant sign-in is switched off.
     consultant_access_code: str = Field(default="", alias="CONSULTANT_ACCESS_CODE")
 
     model_config = {

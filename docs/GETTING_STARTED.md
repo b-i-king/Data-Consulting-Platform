@@ -39,11 +39,15 @@ cd web && npm run build              # frontend: production build
 ## 4. (Optional) Connect Supabase locally
 
 1. Create a project at https://supabase.com.
-2. SQL Editor → paste `db/schema.sql` → Run. (Only if you're offering Data
-   Engineering: also run `db/warehouse.sql` — see docs/DATA_MODEL.md.)
-3. Project Settings → Database → Connection string → **Transaction pooler**
-   (port 6543). Put it in `.env` as `DATABASE_URL=...`.
-4. Restart the API; `/health` should now say `"database": "connected"`.
+2. **Connect** → **Transaction pooler** (port 6543). Put it in `.env` as `DATABASE_URL=...`.
+3. Create the tables: `python scripts/setup_database.py` (runs `db/schema.sql` and
+   `db/warehouse.sql`, then lists every table) — or paste both files into the SQL Editor.
+4. Optional, for Supabase passwords: `SUPABASE_URL` and `SUPABASE_KEY` (anon /
+   publishable key). Without them, passwords are hashed by the API itself.
+5. Restart the API; `/health` should now say `"database": "connected"` (and
+   `"auth": "supabase"` with step 4).
+
+The full first run as the consultant: [RUN_THROUGH.md](RUN_THROUGH.md).
 
 ## Sample files to try
 

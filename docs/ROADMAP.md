@@ -2,7 +2,18 @@
 
 What exists today and what comes next, in priority order.
 
-## ✅ v0.1 — this version
+## ✅ v0.2 — consultant run-through
+
+- Email + password sign-in (Supabase Auth; local hashes in development)
+- Consultants see and test all seven services (AI as a preview)
+- Data Engineering: preview how data will be transformed for the warehouse,
+  and why, then accept (with storage consent) or not — [ARCHITECTURE.md](ARCHITECTURE.md)
+- Consultations: Cal.com webhook + consultant confirmation; free call, then
+  the paid booking link
+- `scripts/setup_database.py` creates and checks every table
+- Step-by-step first run: [RUN_THROUGH.md](RUN_THROUGH.md)
+
+## ✅ v0.1
 
 - Guest questionnaire: individual/business → where data lives → upload
 - Flat files: CSV, TSV, TXT, Excel (multi-sheet), JSON, Parquet
@@ -17,17 +28,21 @@ What exists today and what comes next, in priority order.
 
 ## Next
 
-### 1. Security — verified sign-in *(do before launch)*
-Email-only sign-in is a placeholder. Replace with **Supabase Auth magic links**:
-1. Enable Email auth in Supabase.
-2. In the web app, call `supabase.auth.signInWithOtp({ email })`.
-3. In FastAPI, verify the Supabase JWT (`SUPABASE_JWT_SECRET`) in
-   `api/core/security.py` instead of issuing our own tokens.
-4. Team members receive an invite email instead of being created silently.
-5. Consultants: replace the shared `CONSULTANT_ACCESS_CODE` with their own
-   verified sign-in (and ideally two-factor), since a consultant can open every
-   client assigned to them. Keep `CONSULTANT_EMAILS` (or a `consultants.active`
-   flag) as the list of who may be one.
+### 1. Security — verified sign-in *(finish before launch)*
+- ✅ Email + password through **Supabase Auth** (`api/services/auth.py`), with
+  local hashes when Supabase isn't configured. Turn on Supabase's "Confirm
+  email" setting for verified addresses (the app already handles it).
+Still to do:
+1. **Forgot password**: `supabase.auth.reset_password_for_email(email,
+   {"redirect_to": SITE_URL + "/reset-password"})` plus a small page that sets
+   the new password. Until then, reset from Supabase → Authentication → Users.
+2. **Invite emails** for team colleagues and consultant-added clients. Today the
+   first sign-in with their email sets the password, so whoever gets there first
+   chooses it — sign them in promptly.
+3. Consultants: replace the shared `CONSULTANT_ACCESS_CODE` with two-factor
+   (Supabase MFA), since a consultant can open every client assigned to them.
+4. Google and Apple sign-in (Supabase Auth providers) — no table changes needed.
+5. Sign-in rate limiting on our side (Supabase rate-limits its own endpoints).
 
 ### 2. Payments — ✅ built, in test mode
 Stripe subscriptions (each plan has a monthly and an annual price), Checkout,
@@ -62,14 +77,20 @@ tools automatically when possible, and by a consultant when they want a person.
 ### 5. Data engineering — managed storage *(priority 3)*
 For clients who want their data stored and managed for them. The schema is
 ready (`db/warehouse.sql`, [DATA_MODEL.md](DATA_MODEL.md)): one shared star
-schema, `client_id` + Row Level Security. To build, in order:
-1. `storage_consents` (explicit opt-in, terms version) — [DATABASE.md](DATABASE.md).
-2. Record the design change in ARCHITECTURE.md ("Stateless processing" gets an
-   opt-in exception), plus a privacy policy section on stored data.
-3. Loaders that write cleaned files into the warehouse (`load_runs`), with a
-   review screen for "review" fuzzy matches.
-4. Delete-on-request (withdrawn consent → rows deleted within 30 days).
-5. Storage pricing in the Data Engineering plan.
+schema, `client_id` + Row Level Security.
+1. ✅ `storage_consents` (explicit opt-in, terms version) — [DATABASE.md](DATABASE.md).
+2. ✅ Design change recorded in ARCHITECTURE.md ("Managed storage").
+   Still needed: a privacy policy / terms page the consent box links to.
+3. ✅ Loader with a **preview → accept** screen: every transformation step with
+   its "why", the first rows of each table, consent, `load_runs` audit, no
+   duplicates on reload. Next: fuzzy-match review (customers named slightly
+   differently across sources), employees (`dim_employee`), and loading
+   several tables of one upload in one go.
+4. Delete-on-request (withdrawn consent → rows deleted within 30 days) — a
+   "Withdraw and delete" button plus a scheduled job.
+5. Dashboards and skills that read from the warehouse (today they read the
+   uploaded files).
+6. Storage pricing in the Data Engineering plan.
 
 ### 6. QuickBooks *(priority 4)*
 The first connector, and the "enhancer" for everything else: customers,
@@ -95,9 +116,14 @@ budget. When the AI can't answer, offer the consultant (free 30 minutes). Flip
   (searchable), "Add a client", every tool unlocked, downloads billed to the client.
 - ✅ Free 30-minute first consultation, then $80/hour prepaid through Stripe
   (Data Strategy & Discovery is paid from the first hour).
-- Track consulting hours used vs. bought; reassign a client to another
-  consultant; "invite this client" email; notes per client.
-- Pass questionnaire answers to the booking link (Calendly supports prefill).
+- ✅ Consultation tracking: Cal.com webhook (booked / rescheduled / canceled /
+  ended) + the consultant's "Confirm it happened"; then the paid Cal.com link
+  (`PAID_BOOKING_URL`). Booking links carry the client's name, email and id.
+- ✅ Consultants see all seven services, AI as a preview.
+- Track consulting hours used vs. bought (deduct confirmed paid sessions);
+  reassign a client to another consultant; "invite this client" email; notes
+  per client; a list of bookings from people without an account yet.
+- Pass questionnaire answers to the booking link (Cal.com `metadata[...]`).
 - Admin page: new signups, plans, usage, hours.
 
 ### Intake analytics

@@ -27,7 +27,17 @@
 // top of the left pane (ClientPicker.tsx). Picking a client shows that
 // client's plan and data tools; every signed-in request then carries
 // X-Acting-As, and the server checks the client is assigned to this consultant.
-// "Book a call" prompts are hidden for consultants.
+// "Book a call" prompts are hidden for consultants. Consultants see ALL SEVEN
+// services, including AI (not launched yet) marked "Preview". Working on a
+// client also shows the Consultations card (ConsultationPanel.tsx): confirm
+// the free call happened, which switches the client to the paid booking link.
+//
+// DATA ENGINEERING opens on "Load into database": a preview of how the data
+// will be transformed for the warehouse, and why, to accept or not
+// (components/explore/WarehouseLoad.tsx).
+//
+// BOOKING LINKS come from the plan (api/services/consultations.py): the free
+// consultation link until a consultant confirms it happened, then the paid one.
 //
 // PLAN & BILLING (💳, bottom of the left pane): plans (monthly / yearly via
 // Stripe Checkout), "Manage billing · cancel anytime", the free 30-minute
@@ -58,6 +68,8 @@ import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, type Session } from "@/lib/session";
 import type { ConsultantClient, IntakeOptions } from "@/lib/types";
 import ClientPicker, { AddClientForm } from "./ClientPicker";
+import ConsultationPanel from "./ConsultationPanel";
+import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult } from "@/lib/types";
 import Dashboard from "@/components/explore/Dashboard";
@@ -69,12 +81,16 @@ import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
+const ENGINEERING = "data_engineering";
+const AI = "ai";
 const BILLING = "__billing"; // the "Plan & billing" page (not a service)
-const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard)
-// The skill each built-in view already shows, so it isn't listed twice in the menu.
+const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard / database load)
+// The skill each built-in view already shows, so it isn't listed twice in the menu
+// (Data Engineering's load view isn't a skill, so nothing is hidden for it).
 const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
   [CLEANING]: { skill: "data-cleaning", label: "Cleaning report" },
   [DASHBOARD]: { skill: "build-dashboard", label: "Dashboard" },
+  [ENGINEERING]: { skill: "", label: "Load into database (preview first)" },
 };
 
 /** The name shown in the left pane: the visualization service IS the dashboard. */
@@ -334,6 +350,17 @@ export default function Workspace() {
   const isConsultant = session.account.role === "consultant";
   // Whose workspace is on screen: the client a consultant is working on, or me.
   const who = plan?.account ?? session.account;
+  const whoName = who.company_name ?? `${who.first_name} ${who.last_name}`;
+  // Free consultation until a consultant confirms it happened; then the paid link.
+  // Services paid from the first hour (Data Strategy & Discovery) always use the paid link.
+  const bookFor = (s?: Service) =>
+    plan ? (s && s.consultation.free_minutes === 0 ? plan.consulting.paid_booking_url : plan.consulting.booking_url) : bookingUrl;
+  const freeLeft = !!plan && !plan.consulting.free_used;
+  const previewChip = (
+    <span className="rounded-full border border-consultant/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-consultant">
+      Preview
+    </span>
+  );
 
   const item = (s: Service, isLocked: boolean) => (
     <li key={s.id} className="shrink-0 lg:shrink">
@@ -352,6 +379,7 @@ export default function Workspace() {
             {categoryEmoji(s.id)}
           </span>
           <span className={current === s.id ? "font-semibold" : ""}>{navName(s)}</span>
+          {!s.available && !isLocked && previewChip}
           {isLocked && <span className="sr-only">(not on your plan)</span>}
         </button>
         {isLocked && (
@@ -430,7 +458,8 @@ export default function Workspace() {
             )}
             {currentService && (
               <>
-                <span aria-hidden>{categoryEmoji(currentService.id)}</span> {navName(currentService)}
+                <span aria-hidden>{categoryEmoji(currentService.id)}</span> {navName(currentService)}{" "}
+                {!currentService.available && currentService.active && previewChip}
               </>
             )}
           </h1>
@@ -448,7 +477,7 @@ export default function Workspace() {
         {isConsultant && plan?.acting && (
           <p role="status" className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
             <span className="mr-2 rounded-full bg-consultant px-2 py-0.5 text-xs font-semibold text-on-consultant">Consultant</span>
-            You&apos;re working on <strong>{who.company_name ?? `${who.first_name} ${who.last_name}`}</strong>
+            You&apos;re working on <strong>{whoName}</strong>
             {who.company_name && ` (${who.first_name} ${who.last_name})`}. Downloads are billed to them.
             {plan.interests.length > 0 && (
               <span className="mt-1 block text-xs text-ink-muted">
@@ -456,6 +485,21 @@ export default function Workspace() {
                 {plan.interests.map((id) => plan.services.find((s) => s.id === id)?.name ?? id).join(", ")}
               </span>
             )}
+          </p>
+        )}
+        {isConsultant && plan?.acting && !addingClient && current !== BILLING && (
+          <ConsultationPanel
+            token={session.token}
+            summary={plan.consulting}
+            freeMinutes={plan.consulting.free_minutes}
+            onChanged={reloadPlan}
+          />
+        )}
+        {isConsultant && current === AI && currentService && !currentService.available && (
+          <p className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
+            <strong>AI is in preview.</strong> Only consultants see it here; clients see it as “Early access”. Questions
+            are answered by the built-in plain-English parser (totals, averages, top N, by category, by year) with the
+            calculation shown. A language model comes later (docs/ROADMAP.md).
           </p>
         )}
         {isConsultant && addingClient && (
@@ -483,7 +527,7 @@ export default function Workspace() {
               key={suggestTool ?? "billing"}
               token={session.token}
               plan={plan}
-              bookingUrl={bookingUrl}
+              bookingUrl={bookFor()}
               onChanged={reloadPlan}
               suggestTool={suggestTool}
             />
@@ -502,9 +546,16 @@ export default function Workspace() {
               ) : (
                 <Button onClick={() => setSection(BILLING)}>Buy consulting hours</Button>
               )}
-              {!isConsultant && currentService.consultation.free_minutes > 0 && (
-                <a href={bookingUrl} target="_blank" rel="noreferrer" className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
-                  Book a free {currentService.consultation.free_minutes}-minute call
+              {!isConsultant && (
+                <a
+                  href={bookFor(currentService)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand"
+                >
+                  {currentService.consultation.free_minutes > 0 && freeLeft
+                    ? `Book a free ${currentService.consultation.free_minutes}-minute call`
+                    : `Book a consulting session (${fmtUsd(plan?.consulting.rate_per_hour_usd ?? 0)}/hour)`}
                 </a>
               )}
 
@@ -603,7 +654,7 @@ export default function Workspace() {
                 <GroupDetails
                   key={group.group_id}
                   group={group}
-                  bookingUrl={bookingUrl}
+                  bookingUrl={bookFor()}
                   applied={columnActions[String(group.group_id)] ?? {}}
                   onApply={(actions) => applyActions(group.group_id, actions)}
                   appliedNames={columnNames[String(group.group_id)] ?? {}}
@@ -624,6 +675,16 @@ export default function Workspace() {
                   </p>
                 </Card>
               ))}
+
+            {current === ENGINEERING && choice === VIEW && (
+              <WarehouseLoad
+                key={`load-${group.group_id}`}
+                token={session.token}
+                input={input}
+                groupId={group.group_id}
+                clientName={whoName}
+              />
+            )}
 
             {choice !== VIEW && plan && (current === CLEANING || group.report.analysis_ready) && (
               <SkillsPanel

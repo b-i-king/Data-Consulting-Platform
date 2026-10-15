@@ -142,6 +142,10 @@ class SignupIn(BaseModel):
     wants_consultant: bool = False
     # Only consultants (CONSULTANT_EMAILS) send this; see api/services/consultants.py.
     access_code: str | None = Field(default=None, max_length=200)
+    # The new password. Required by POST /api/accounts/signup (checked there,
+    # with a friendly message); left out when a consultant adds a client — the
+    # client then chooses one on their first sign-in. See api/services/auth.py.
+    password: str | None = Field(default=None, max_length=128)
 
     @field_validator("first_name")
     @classmethod
@@ -363,6 +367,7 @@ class SignupIn(BaseModel):
 
 class SigninIn(BaseModel):
     email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
     access_code: str | None = Field(default=None, max_length=200)   # consultants only
 
     @field_validator("email", mode="before")
@@ -414,11 +419,17 @@ class AccountOut(BaseModel):
 
 
 class AuthOut(BaseModel):
-    """Returned after signup/sign-in: the token plus who it belongs to."""
+    """Returned after signup/sign-in: the token plus who it belongs to.
 
-    access_token: str
+    When Supabase's "Confirm email" setting is on, a new sign-up gets NO token
+    yet: `needs_confirmation` is True and `message` says to open the emailed
+    link, then sign in."""
+
+    access_token: str | None = None
     token_type: str = "bearer"
     account: AccountOut
+    needs_confirmation: bool = False
+    message: str | None = None
 
 
 class QuoteIn(BaseModel):
@@ -452,5 +463,17 @@ class ConsultingHoursIn(BaseModel):
 
     hours: int = Field(ge=1, le=40)
     service_id: str | None = Field(default=None, max_length=60)
+
+
+class ConsultationUpdateIn(BaseModel):
+    """A consultant marks a client's consultation (api/routers/consultations.py).
+
+    With `consultation_id`: change that consultation's status. Without it: add a
+    consultation by hand (for calls booked before the Cal.com webhook was set up)."""
+
+    status: Literal["completed", "no_show", "canceled", "booked"]
+    consultation_id: str | None = Field(default=None, max_length=64)
+    kind: Literal["free", "paid"] = "free"
+    note: str | None = Field(default=None, max_length=500)
 
 

@@ -11,6 +11,7 @@ python-multipart>=0.0.9     # needed by FastAPI to accept file uploads
 pydantic-settings>=2.0.0
 email-validator>=2.0.0
 PyJWT>=2.8.0
+supabase>=2.10.0            # Supabase Auth: email + password sign-in (api/services/auth.py)
 
 # Payments (subscriptions, consulting hours) — api/services/billing.py
 stripe>=10.0.0

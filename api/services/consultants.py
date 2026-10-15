@@ -26,9 +26,10 @@ Every signed-in request names who it's for:
     as another client, and a consultant can never open someone else's client.
 The database repeats the safe default (RLS on, no public access); see db/schema.sql.
 
-⚠️ Sign-in is still by email only (see api/routers/accounts.py), so consultant
-sign-in also needs CONSULTANT_ACCESS_CODE. Replace both with verified sign-in
-(e.g. Supabase Auth) before real clients — docs/ROADMAP.md.
+Consultants sign in with email + password (api/services/auth.py) AND the
+shared CONSULTANT_ACCESS_CODE, because a consultant can open every client
+assigned to them. Replace the shared code with two-factor sign-in (Supabase
+MFA) before real clients — docs/ROADMAP.md.
 """
 
 from __future__ import annotations

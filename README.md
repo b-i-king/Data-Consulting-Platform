@@ -92,7 +92,9 @@ No database is needed for local development. See [docs/GETTING_STARTED.md](docs/
 | [docs/PRICING.md](docs/PRICING.md) | Services, runtime billing, what downloads cost you, open decisions |
 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | One database for many clients: star schema, ER diagram, privacy |
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Cloud sources & integrations (QuickBooks, Gusto): status and plan |
+| [docs/RUN_THROUGH.md](docs/RUN_THROUGH.md) | **Start here:** database, your consultant account, all seven services, consultations — step by step |
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Run it locally |
+| [docs/DATABASE.md](docs/DATABASE.md) | Every table, ER diagram, `scripts/setup_database.py` |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Supabase + Render + Vercel |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What's next (auth, payments, connectors, mobile) |
 | [docs/TESTING.md](docs/TESTING.md) | **Try it yourself** with the sample data (web, command line, API) |

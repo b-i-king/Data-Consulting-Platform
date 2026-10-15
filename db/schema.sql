@@ -16,12 +16,19 @@
 --   * subscriptions one row per client subscription, kept in sync by Stripe
 --   * subscription_items  the tools in each subscription ("build your own")
 --   * consulting_purchases  prepaid consulting hours bought through Stripe
---   Full design, ER diagram and planned tables: docs/DATABASE.md
+--   * consultations the free first call and paid sessions (Cal.com webhook,
+--                   or marked by hand by the consultant)
+--   * storage_consents  a client's "yes, store my data" (Data Engineering)
+--   * load_runs     one row per load into the warehouse (metadata only)
 --   * intake_responses  optional, anonymous answers to the guest questionnaire
 --                       (helps you see which data sources people use)
+--   Full design, ER diagram and planned tables: docs/DATABASE.md
 --
--- WHAT IS *NOT* STORED
---   Client data. Uploaded files are processed in memory and discarded.
+-- WHAT IS *NOT* STORED (in this file's tables)
+--   Client data. Uploaded files are processed in memory and discarded. The
+--   only exception is managed storage: a client who consents can load cleaned
+--   data into the separate warehouse schema (db/warehouse.sql).
+--   Passwords: Supabase Auth keeps them; local mode keeps only a one-way hash.
 --
 -- Safe to re-run: every statement uses IF NOT EXISTS.
 -- ============================================================================
@@ -74,6 +81,15 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_country_code TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS location_label TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS industry_other TEXT;   -- "Other": what they typed (no NAICS match)
 CREATE INDEX IF NOT EXISTS idx_accounts_naics ON accounts (naics_sector, naics_subsector);
+
+-- Passwords (api/services/auth.py). Exactly one is set once the person has a
+-- password; both stay NULL for accounts made FOR someone (a team colleague, or
+-- a client a consultant added) until their first sign-in sets one.
+--   auth_user_id   Supabase Auth user id (auth.users.id) — Supabase mode. The
+--                  password itself lives in Supabase, never in this table.
+--   password_hash  one-way scrypt hash — local mode (no Supabase configured).
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS auth_user_id UUID UNIQUE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
 
 -- ── Consultants (dimension table) ───────────────────────────────────────────
 -- One row per consultant. A consultant signs in with a normal account (the
@@ -234,6 +250,72 @@ CREATE TABLE IF NOT EXISTS consulting_purchases (
 );
 CREATE INDEX IF NOT EXISTS idx_consulting_purchases_account ON consulting_purchases (account_id, created_at DESC);
 
+-- ── Consultations (the free first call, then paid sessions) ─────────────────
+-- One row per consultation booked through Cal.com (written by the Cal.com
+-- webhook) or entered by hand by the consultant. The FREE consultation counts
+-- as used only when a consultant marks one 'completed' — after that the
+-- client is sent to PAID_BOOKING_URL ($80/hour). See api/services/consultations.py.
+CREATE TABLE IF NOT EXISTS consultations (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- The plan holder (individual or team owner). NULL when someone booked
+    -- with an email that has no account yet; matched later by attendee_email.
+    account_id          UUID REFERENCES accounts (id) ON DELETE SET NULL,
+    attendee_email      TEXT,                      -- lowercase
+    attendee_name       TEXT,
+    kind                TEXT NOT NULL CHECK (kind IN ('free', 'paid')),
+    -- booked    on the calendar (also after a reschedule)
+    -- canceled  canceled or rejected in Cal.com, or by the consultant
+    -- ended     Cal.com says the meeting ended — waiting for your confirmation
+    -- completed YOU confirmed it happened (this is what uses up the free call)
+    -- no_show   the client didn't come (the free call is NOT used up)
+    status              TEXT NOT NULL CHECK (status IN ('booked', 'canceled', 'ended', 'completed', 'no_show')),
+    source              TEXT NOT NULL CHECK (source IN ('calcom', 'manual')),
+    calcom_booking_uid  TEXT UNIQUE,               -- Cal.com's booking id (NULL for manual rows)
+    starts_at           TIMESTAMPTZ,
+    ends_at             TIMESTAMPTZ,
+    confirmed_by        UUID REFERENCES consultants (id) ON DELETE SET NULL,
+    confirmed_at        TIMESTAMPTZ,
+    note                TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_consultations_account ON consultations (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_consultations_email ON consultations (attendee_email);
+
+-- ── Managed storage: consent and load history (Data Engineering) ────────────
+-- A client's explicit "yes, store my data in the warehouse". Loading into
+-- db/warehouse.sql is refused without an active (not withdrawn) row here.
+-- See docs/ARCHITECTURE.md -> "Managed storage (opt-in exception)".
+CREATE TABLE IF NOT EXISTS storage_consents (
+    id            BIGSERIAL PRIMARY KEY,
+    account_id    UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,   -- plan holder
+    consented_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    withdrawn_at  TIMESTAMPTZ,              -- set -> delete their warehouse rows within 30 days
+    terms_version TEXT NOT NULL,            -- which storage terms they agreed to
+    consented_by  UUID REFERENCES accounts (id) ON DELETE SET NULL   -- who clicked (client, or consultant acting)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_consents_account ON storage_consents (account_id);
+
+-- One row per load into the warehouse: what was loaded, how many rows, and
+-- whether it worked. Metadata only (the rows themselves are in warehouse.*).
+CREATE TABLE IF NOT EXISTS load_runs (
+    id                BIGSERIAL PRIMARY KEY,
+    account_id        UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,   -- plan holder = warehouse client_id
+    source            TEXT NOT NULL DEFAULT 'file_upload',   -- 'file_upload', later 'quickbooks', ...
+    source_name       TEXT NOT NULL,                         -- e.g. 'sales.csv'
+    event_type        TEXT NOT NULL,                         -- e.g. 'transaction/income'
+    rows_in           INTEGER NOT NULL DEFAULT 0,            -- rows in the cleaned table
+    rows_loaded       INTEGER NOT NULL DEFAULT 0,            -- new fact_event rows
+    rows_skipped      INTEGER NOT NULL DEFAULT 0,            -- no date, or already loaded
+    plan_fingerprint  TEXT,                                  -- the preview the person accepted
+    status            TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+    error             TEXT,
+    started_by        UUID REFERENCES accounts (id) ON DELETE SET NULL,
+    started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_load_runs_account ON load_runs (account_id, started_at DESC);
+
 -- ── Intake responses (optional analytics, not used by the API yet) ─────────
 -- Anonymous answers to the guest questionnaire. Useful for deciding which
 -- connector (Snowflake? QuickBooks?) to build next.
@@ -265,3 +347,6 @@ ALTER TABLE consulting_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_events     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE intake_responses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE consultations    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_consents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE load_runs        ENABLE ROW LEVEL SECURITY;

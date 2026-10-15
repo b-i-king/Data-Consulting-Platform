@@ -80,7 +80,9 @@ tools are offered.
 ### The signed-in workspace
 
 1. On the home page, click **Create an account** (under "Start as a guest"), sign up
-   with any email, and you land in **/app**.
+   with any email and a password (8+ characters), and you land in **/app**.
+   (As the consultant — all seven services, the database load and
+   consultations — follow [RUN_THROUGH.md](RUN_THROUGH.md).)
 2. The left pane shows 🧹 Data Cleaning on top (always included) and every other
    service grayed out with an **i** button — click one to see what it adds, its price,
    and how to get it.

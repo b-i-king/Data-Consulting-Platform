@@ -1,13 +1,19 @@
-// Sign-up / sign-in form, by email address.
+// Sign-up / sign-in form: email address + password.
 //
 // Used in two places:
 //   * the wizard's last step (create an account to download), and
 //   * the /signin page (reached from the home page), which then opens the
 //     signed-in workspace at /app.
 //
-// Signup asks: individual -> first name, last name, email, and (optional)
-// location; business -> plus business name and optional team members.
-// Sign-in asks only for the email. Guests never see these fields.
+// Signup asks: individual -> first name, last name, email, password (typed
+// twice), and (optional) location; business -> plus business name and optional
+// team members. Sign-in asks for the email and password. Guests never see these fields.
+//
+// PASSWORDS (api/services/auth.py): at least 8 characters. Supabase Auth checks
+// them when it's configured. If Supabase's "Confirm email" setting is on, a new
+// sign-up gets no session yet: the form says "check your email" and switches to
+// sign-in. A colleague (or a client a consultant added) has no password yet —
+// the password typed at their FIRST sign-in becomes theirs.
 //
 // Signup also offers "I'd like <consultant> to do this for me" (a "done for
 // you" client, assigned to the default consultant). A plan picked on "Your
@@ -23,8 +29,6 @@
 //     (and the server refuses an address that already has an account)
 //   * location: picked from the city list, never free text
 // Messages appear under each field once you leave it (or press Create account).
-//
-// ⚠️ Email-only sign-in is a placeholder — see api/routers/accounts.py.
 
 "use client";
 
@@ -35,6 +39,8 @@ import type { AccountType, Industry, Location, TeamMemberInput } from "@/lib/typ
 import { capitalizeFirst, companyNameError, emailError, personNameError, repeatedEmails } from "@/lib/validation";
 import { Button, Card, ChoiceCard, ErrorBox, StepHeader } from "@/components/wizard/ui";
 import LocationPicker from "./LocationPicker";
+
+const MIN_PASSWORD = 8; // same rule as api/services/auth.py
 
 const inputCls = (bad: boolean) =>
   `w-full rounded-xl border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 ${
@@ -84,6 +90,9 @@ export default function AuthForm({
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState(""); // sign-up: the password typed again
+  const [notice, setNotice] = useState<string | null>(null); // e.g. "check your email"
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState<Location | null>(null);
   const [team, setTeam] = useState<TeamMemberInput[]>([]);
@@ -105,7 +114,13 @@ export default function AuthForm({
   // Every problem in the form, by field key. Empty = ready to send.
   const errors = useMemo(() => {
     const e: Record<string, string | null> = { email: emailError(email) };
+    e.password = !password
+      ? "Enter your password."
+      : mode === "signup" && password.length < MIN_PASSWORD
+        ? `Use at least ${MIN_PASSWORD} characters.`
+        : null;
     if (mode === "signup") {
+      e.confirm = confirm !== password ? "The two passwords don't match." : null;
       e.first = personNameError(first, "First name");
       e.last = personNameError(last, "Last name");
       if (type === "business") {
@@ -121,24 +136,26 @@ export default function AuthForm({
       }
     }
     return e;
-  }, [mode, type, first, last, email, company, team]);
+  }, [mode, type, first, last, email, password, confirm, company, team]);
   const hasErrors = Object.values(errors).some(Boolean);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setSubmitted(true);
     setError(null);
+    setNotice(null);
     if (hasErrors) return; // messages are now shown under each field
     setBusy(true);
     try {
       const res =
         mode === "signin"
-          ? await signin(email.trim(), showCode ? code.trim() : undefined)
+          ? await signin(email.trim(), password, showCode ? code.trim() : undefined)
           : await signup({
               account_type: type,
               first_name: first.trim(),
               last_name: last.trim(),
               email: email.trim(),
+              password,
               ...(location ? { location_id: location.id } : {}),
               ...(serviceIds.length ? { service_ids: serviceIds } : {}),
               ...(wants ? { wants_consultant: true } : {}),
@@ -151,6 +168,15 @@ export default function AuthForm({
                   }
                 : {}),
             });
+      if (!res.access_token || res.needs_confirmation) {
+        // Supabase wants the email confirmed first: no session yet.
+        setNotice(res.message ?? "Check your email for a confirmation link, then sign in.");
+        setMode("signin");
+        setPassword("");
+        setConfirm("");
+        setSubmitted(false);
+        return;
+      }
       onSignedIn({ token: res.access_token, account: res.account });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
@@ -206,6 +232,36 @@ export default function AuthForm({
             autoComplete="email"
           />
         </Field>
+
+        <div className={mode === "signup" ? "grid gap-3 sm:grid-cols-2" : ""}>
+          <Field
+            label="Password"
+            error={errors.password}
+            show={show("password")}
+            hint={mode === "signup" ? `At least ${MIN_PASSWORD} characters.` : "First time signing in to an account someone made for you? Choose your password here."}
+          >
+            <input
+              type="password"
+              className={inputCls(show("password") && !!errors.password)}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onBlur={leave("password")}
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            />
+          </Field>
+          {mode === "signup" && (
+            <Field label="Password again" error={errors.confirm} show={show("confirm")}>
+              <input
+                type="password"
+                className={inputCls(show("confirm") && !!errors.confirm)}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                onBlur={leave("confirm")}
+                autoComplete="new-password"
+              />
+            </Field>
+          )}
+        </div>
 
         {mode === "signup" && (
           <div className="space-y-1 text-sm">
@@ -301,6 +357,11 @@ export default function AuthForm({
         {(submitted || touched.email) && errors.repeats && (
           <p role="alert" className="text-sm text-bad">
             {errors.repeats}
+          </p>
+        )}
+        {notice && (
+          <p role="status" className="rounded-2xl border border-good/40 bg-good/10 p-3 text-sm">
+            {notice}
           </p>
         )}
         <ErrorBox message={error} />

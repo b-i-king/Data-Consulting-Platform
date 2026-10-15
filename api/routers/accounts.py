@@ -1,8 +1,8 @@
 """
 Account endpoints.
 
-    POST /api/accounts/signup         create an individual or business account
-    POST /api/accounts/signin         get a new token for an existing email
+    POST /api/accounts/signup         create an individual or business account (email + password)
+    POST /api/accounts/signin         check email + password, get a new token
     GET  /api/accounts/me             who am I? (requires token)
     GET  /api/accounts/services       services on my plan + the full catalog (requires token)
     POST /api/accounts/services       record interest in a project with a consultant (doesn't unlock tools)
@@ -20,13 +20,15 @@ CONSULTANT_EMAILS and they must send CONSULTANT_ACCESS_CODE. Their token says
 role "consultant". The services endpoints accept `X-Acting-As: <client id>`
 from a consultant to work on an assigned client (api/services/consultants.py).
 
-⚠️ SECURITY NOTE — READ BEFORE LAUNCH
--------------------------------------
-For this first version, sign-in is by email only (no password, no email
-verification). That keeps the guest-to-account step frictionless while we
-iterate, but it means anyone who knows an email could get a token for it.
-Before real clients use the platform, switch to Supabase Auth "magic link"
-emails (or another verified sign-in). Steps are in docs/ROADMAP.md.
+PASSWORDS
+---------
+Sign-up and sign-in use an email + password (api/services/auth.py): Supabase
+Auth checks the password when SUPABASE_URL / SUPABASE_KEY are set, otherwise
+the API keeps a one-way hash (local development). After the password checks
+out, the API issues its own login token, as before.
+Still to do before launch (docs/ROADMAP.md): "forgot password", and invite
+emails for colleagues / consultant-added clients (today their first sign-in
+sets their password).
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ from api.models.accounts import (
     SignupIn,
     TeamMemberIn,
 )
-from api.services import account_store, billing, consultants, entitlements, locations, pricing
+from api.services import account_store, auth, billing, consultants, consultations, entitlements, locations, pricing
 from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
@@ -182,13 +184,63 @@ async def signup(body: SignupIn):
     is_consultant = consultants.is_consultant_email(body.email)
     if is_consultant:
         consultants.check_access_code(body.access_code)   # 403 without the right code
-    owner = await create_client_account(body, consultant_id=None if is_consultant else "default")
+    password = auth.check_password_rules(body.password)  # 422 if missing or too short
+    await _check_new_signup(body)                          # 400/409 BEFORE the password is registered
+    creds = await auth.register_password(body.email, password)
+    owner = await create_client_account(body, consultant_id=None if is_consultant else "default", credentials=creds)
     if is_consultant:
         await consultants.register(owner)
+    if creds.needs_confirmation:
+        return await _confirm_email_response(owner)
     return await _auth_response(owner)
 
 
-async def create_client_account(body: SignupIn, consultant_id: str | None) -> dict:
+async def _confirm_email_response(acc: dict) -> AuthOut:
+    """
+    Reply for a sign-up that must confirm its email first (no token yet).
+
+    Happens only in Supabase mode with Supabase's "Confirm email" setting on.
+
+    Args:
+        acc: dict, the account row just created.
+
+    Returns:
+        AuthOut: needs_confirmation True, no access token, and a message.
+    """
+    return AuthOut(account=await _full_account_out(acc), needs_confirmation=True,
+                   message=f"Almost done: we emailed a confirmation link to {acc['email']}. "
+                           "Open it, then come back and sign in.")
+
+
+async def _check_new_signup(body: SignupIn) -> None:
+    """
+    Refuse a sign-up before anything is written: unknown services or taken emails.
+
+    Args:
+        body: SignupIn, the validated sign-up form.
+
+    Returns:
+        None: returns quietly when the sign-up can go ahead.
+
+    Raises:
+        HTTPException: 400 "Unknown service id(s): ..."; 409 when the owner's or a
+            colleague's email already has an account (one email = one account).
+    """
+    unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown service id(s): {', '.join(unknown)}")
+    for email in [body.email, *(m.email for m in body.team_members)]:
+        if await account_store.get_account_by_email(email):
+            who = "You already have" if email == body.email else f"{email} already has"
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"{who} an account. Each email address can only be used once"
+                       + (" — please sign in instead." if email == body.email else "."),
+            )
+
+
+async def create_client_account(body: SignupIn, consultant_id: str | None,
+                                credentials: auth.Credentials | None = None) -> dict:
     """
     Create the account (+ team members, + services on the plan). Shared by
     signup and by a consultant adding a client (api/routers/consultants.py).
@@ -207,6 +259,8 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
     Args:
         body: SignupIn, the validated sign-up form.
         consultant_id: str | None, "default", a consultant's id, or None (see above).
+        credentials: auth.Credentials | None, the password registered at sign-up;
+            None when a consultant adds a client (they choose one at first sign-in).
 
     Returns:
         dict: the newly created owner account row.
@@ -220,19 +274,9 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
         owner = await create_client_account(body, consultant_id="default")
         owner["email"]   # -> "ana@example.com"
     """
-    unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
-    if unknown:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown service id(s): {', '.join(unknown)}")
     # Check EVERY email before creating anything, so a taken address never
     # leaves a half-created signup behind (one email = one account).
-    for email in [body.email, *(m.email for m in body.team_members)]:
-        if await account_store.get_account_by_email(email):
-            who = "You already have" if email == body.email else f"{email} already has"
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail=f"{who} an account. Each email address can only be used once"
-                       + (" — please sign in instead." if email == body.email else "."),
-            )
+    await _check_new_signup(body)
     place = locations.get(body.location_id) if body.location_id else None
     wants = body.wants_consultant or (consultant_id not in (None, "default"))
     if consultant_id == "default":
@@ -253,6 +297,8 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
             industry_other=body.industry_other,
             wants_consultant=wants,
             consultant_id=consultant_id,
+            auth_user_id=credentials.auth_user_id if credentials else None,
+            password_hash=credentials.password_hash if credentials else None,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -272,33 +318,52 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
 @router.post("/signin", response_model=AuthOut)
 async def signin(body: SigninIn):
     """
-    POST /api/accounts/signin — issue a new token for an existing email.
+    POST /api/accounts/signin — check the email + password and issue a new token.
 
-    Sign-in is by email only for now (see the security note at the top).
     Consultant emails must also send the access code; their consultant row is
     (re)registered on each sign-in, so the default consultant picks up any
     clients waiting for one. The last-login time is updated.
 
+    FIRST SIGN-IN FOR AN ACCOUNT MADE FOR SOMEONE: a colleague added to a team,
+    or a client a consultant added, has no password yet. Their first sign-in
+    SETS the password typed (and marks the account active). ⚠️ Until invite
+    emails exist, whoever signs in first with that email chooses the password —
+    sign in for them promptly, or tell them to (docs/ROADMAP.md).
+
     Args:
-        body: SigninIn, the email (and, for consultants, the access code).
+        body: SigninIn, the email, password (and, for consultants, the access code).
 
     Returns:
-        AuthOut: a fresh login token and the account.
+        AuthOut: a fresh login token and the account (or, for a first sign-in
+        that Supabase must confirm by email, needs_confirmation and no token).
 
     Raises:
         HTTPException: 403 for a consultant email without the right code;
-            404 "No account found for that email. Please sign up."
+            401 "Wrong email or password."; 403 while Supabase waits for the
+            email to be confirmed; 422 for a too-short first password.
 
     Example:
         POST /api/accounts/signin
-        {"email": "ana@example.com"}
+        {"email": "ana@example.com", "password": "correct horse"}
         -> 200 {"access_token": "eyJ...", "token_type": "bearer", "account": {...}}
     """
     if consultants.is_consultant_email(body.email):
         consultants.check_access_code(body.access_code)   # 403 without the right code
     acc = await account_store.get_account_by_email(body.email)
     if acc is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No account found for that email. Please sign up.")
+        # Same message as a wrong password, so the form doesn't reveal who has an account.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            detail=f"{auth.WRONG_PASSWORD} New here? Create an account instead.")
+    if auth.has_password(acc):
+        await auth.check_password(acc, body.password)
+    else:
+        # First sign-in for an account made for this person: the password typed becomes theirs.
+        creds = await auth.register_password(acc["email"], auth.check_password_rules(body.password))
+        await account_store.set_credentials(str(acc["id"]), auth_user_id=creds.auth_user_id,
+                                            password_hash=creds.password_hash)
+        acc = await account_store.get_account(str(acc["id"]))
+        if creds.needs_confirmation:
+            return await _confirm_email_response(acc)
     await account_store.touch_last_login(str(acc["id"]))
     if consultants.is_consultant_email(body.email):
         await consultants.register(acc)
@@ -464,7 +529,9 @@ async def _services_out(ctx: dict) -> dict:
         data["can_add"], data["billing"]   # -> (True, {"stripe": False})
     """
     acc = ctx["account"]
-    active = await entitlements.active_services(acc)
+    # A consultant (own workspace or a client's) also sees services not launched
+    # yet (AI) as a preview, so they can test all seven.
+    active = await entitlements.active_services(acc, preview_all=ctx["consultant"] is not None)
     holder_id = await entitlements.plan_holder_id(acc)
     subs = await account_store.list_subscriptions(holder_id)
     return {
@@ -486,6 +553,8 @@ async def _services_out(ctx: dict) -> dict:
             "rate_per_hour_usd": pricing.consulting_rate(),
             "free_minutes": pricing.FREE_CONSULTATION_MINUTES,
             "hours_bought": await account_store.consulting_hours(holder_id),
+            # Free call used up? Which booking link to show? (api/services/consultations.py)
+            **(await consultations.summary(acc)),
         },
     }
 

@@ -31,7 +31,15 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false        # e.g. https://your-site.vercel.app
       - key: BOOKING_URL
-        sync: false
+        sync: false        # your FREE 30-minute Cal.com event
+      - key: PAID_BOOKING_URL
+        sync: false        # your paid ($80/hour) Cal.com event; shown after the free call is confirmed
+      - key: CALCOM_WEBHOOK_SECRET
+        sync: false        # Cal.com -> Settings -> Developer -> Webhooks -> Secret
+      - key: SUPABASE_URL
+        sync: false        # Supabase -> Project Settings -> API -> Project URL (passwords)
+      - key: SUPABASE_KEY
+        sync: false        # the anon / publishable key (NOT service_role)
       - key: STRIPE_SECRET_KEY
         sync: false        # empty = test mode (docs/PAYMENTS.md)
       - key: STRIPE_WEBHOOK_SECRET

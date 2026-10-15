@@ -18,9 +18,13 @@ WHAT IS STORED (and what is NOT)
 --------------------------------
 Stored: name, email, account type, team membership, the services on each
 account's plan, the consultant (if any) assigned to each client, subscriptions
-and prepaid consulting hours (kept in sync by Stripe), and a usage record per
-download (file name, row count, runtime, amount) for billing.
-NOT stored: the client's uploaded data. Files are processed in memory only.
+and prepaid consulting hours (kept in sync by Stripe), a usage record per
+download (file name, row count, runtime, amount) for billing, consultations
+(free and paid calls), storage consents and load-run summaries.
+Passwords: only a Supabase user id, or a one-way hash in local mode.
+NOT stored here: the client's uploaded data. Files are processed in memory
+only. (Clients who consent to managed storage have cleaned rows loaded into
+the separate warehouse schema — api/services/warehouse_store.py.)
 """
 
 from __future__ import annotations
@@ -39,6 +43,9 @@ _consultants: dict[str, dict] = {}       # consultant_id -> consultant
 _subscriptions: dict[str, dict] = {}     # subscription id -> subscription
 _consulting: list[dict] = []             # prepaid consulting hours
 _plans: dict[str, dict] = {}             # plan id -> subscription_plans row (Stripe ids)
+_consultations: dict[str, dict] = {}     # consultation id -> consultations row
+_consents: list[dict] = []               # storage_consents rows
+_load_runs: list[dict] = []              # load_runs rows
 
 
 class AccountExistsError(ValueError):
@@ -123,6 +130,8 @@ async def create_account(
     industry_other: str | None = None,
     wants_consultant: bool = False,
     consultant_id: str | None = None,
+    auth_user_id: str | None = None,
+    password_hash: str | None = None,
 ) -> dict:
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
@@ -153,6 +162,9 @@ async def create_account(
         wants_consultant: bool, True if the client asked for "done for you" help.
         consultant_id: str | None, the consultant assigned (kept only when
             `wants_consultant` is True).
+        auth_user_id: str | None, the Supabase Auth user id (Supabase mode).
+        password_hash: str | None, the scrypt hash (local mode). Both stay None
+            for accounts made FOR someone; see api/services/auth.py.
 
     Returns:
         dict: the new account (same fields as the accounts table).
@@ -200,6 +212,9 @@ async def create_account(
         "wants_consultant": bool(wants_consultant),
         "consultant_id": consultant_id if wants_consultant else None,
         "stripe_customer_id": None,     # set the first time they pay (billing.py)
+        # Password (api/services/auth.py): Supabase user id OR local hash.
+        "auth_user_id": auth_user_id,
+        "password_hash": password_hash,
     }
 
     if database.pool is None:
@@ -218,9 +233,10 @@ async def create_account(
                                          industry_supersector, naics_sector, naics_subsector,
                                          company_size, location_geoname_id, location_city,
                                          location_region, location_country_code, location_label,
-                                         industry_other, wants_consultant, consultant_id)
+                                         industry_other, wants_consultant, consultant_id,
+                                         auth_user_id, password_hash)
                    VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13,
-                           $14, $15, $16, $17, $18, $19, $20, $21)""",
+                           $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
                 company_name, team_role, status, account["last_login_at"],
                 industry_supersector, naics_sector, naics_subsector,
@@ -228,6 +244,7 @@ async def create_account(
                 account["location_region"], account["location_country_code"], account["location_label"],
                 industry_other, account["wants_consultant"],
                 uuid.UUID(account["consultant_id"]) if account["consultant_id"] else None,
+                uuid.UUID(auth_user_id) if auth_user_id else None, password_hash,
             )
             if team:
                 await conn.execute(
@@ -263,6 +280,36 @@ async def touch_last_login(account_id: str) -> None:
         return
     await database.pool.execute(
         "UPDATE accounts SET last_login_at = now() WHERE id = $1", uuid.UUID(account_id)
+    )
+
+
+async def set_credentials(account_id: str, *, auth_user_id: str | None, password_hash: str | None) -> None:
+    """
+    Save a password (Supabase user id or local hash) and mark the account active.
+
+    Used when an account made FOR someone (an invited colleague, or a client a
+    consultant added) signs in for the first time and chooses a password. Also
+    used to link an existing Supabase user id after a successful sign-in.
+
+    Args:
+        account_id: str, the account's UUID as text.
+        auth_user_id: str | None, the Supabase Auth user id (Supabase mode).
+        password_hash: str | None, the scrypt hash (local mode).
+
+    Returns:
+        None. Updates accounts.auth_user_id / password_hash and sets status "active".
+
+    Example:
+        >>> await set_credentials(account_id, auth_user_id=None, password_hash="scrypt$...")
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(auth_user_id=auth_user_id, password_hash=password_hash, status="active")
+        return
+    await database.pool.execute(
+        """UPDATE accounts SET auth_user_id = $2, password_hash = $3, status = 'active'
+           WHERE id = $1""",
+        uuid.UUID(account_id), uuid.UUID(auth_user_id) if auth_user_id else None, password_hash,
     )
 
 
@@ -890,3 +937,269 @@ async def insert_missing_plans(plans: list[dict]) -> None:
             plan["annual_price_usd"], plan["sort_order"], plan.get("kind", "tool"), bool(plan.get("is_base")),
             list(plan.get("requires", [])),
         )
+
+
+# ── Consultations (table consultations; see api/services/consultations.py) ──
+
+_CONSULTATION_FIELDS = ("account_id", "attendee_email", "attendee_name", "kind", "status", "source",
+                        "calcom_booking_uid", "starts_at", "ends_at", "confirmed_by", "confirmed_at", "note")
+_UUID_FIELDS = {"account_id", "confirmed_by"}   # stored as UUID in Postgres
+
+
+def _db_value(field: str, value):
+    """
+    Convert one consultation value for asyncpg (UUID columns need uuid.UUID).
+
+    Args:
+        field: str, the column name.
+        value: the value from Python (str ids, datetimes, text).
+
+    Returns:
+        The value ready for the query.
+    """
+    return uuid.UUID(str(value)) if field in _UUID_FIELDS and value else value
+
+
+async def save_consultation(row: dict) -> dict:
+    """
+    Insert a consultation, or update it when `row` has an "id".
+
+    Only the keys in `row` are written on an update, so a caller can change
+    just the status, say. `updated_at` is always refreshed.
+
+    Args:
+        row: dict, consultations columns (see db/schema.sql). Include "id" to update.
+
+    Returns:
+        dict: the full consultations row after the change.
+
+    Example:
+        >>> c = await save_consultation({"account_id": aid, "kind": "free", "status": "booked",
+        ...                              "source": "calcom", "calcom_booking_uid": "abc"})
+        >>> (await save_consultation({"id": c["id"], "status": "completed"}))["status"]
+        'completed'
+    """
+    fields = {k: v for k, v in row.items() if k in _CONSULTATION_FIELDS}
+    if database.pool is None:
+        if row.get("id") and str(row["id"]) in _consultations:
+            existing = _consultations[str(row["id"])]
+            existing.update(fields, updated_at=_now())
+            return existing
+        cid = str(uuid.uuid4())
+        base = dict.fromkeys(_CONSULTATION_FIELDS)
+        _consultations[cid] = {**base, **fields, "id": cid, "created_at": _now(), "updated_at": _now()}
+        return _consultations[cid]
+    if row.get("id"):
+        sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+        rec = await database.pool.fetchrow(
+            f"UPDATE consultations SET {sets}, updated_at = now() WHERE id = $1 RETURNING *",
+            uuid.UUID(str(row["id"])), *(_db_value(k, v) for k, v in fields.items()),
+        )
+    else:
+        cols = ", ".join(fields)
+        marks = ", ".join(f"${i + 1}" for i in range(len(fields)))
+        rec = await database.pool.fetchrow(
+            f"INSERT INTO consultations ({cols}) VALUES ({marks}) RETURNING *",
+            *(_db_value(k, v) for k, v in fields.items()),
+        )
+    return dict(rec)
+
+
+async def get_consultation(consultation_id: str) -> dict | None:
+    """
+    Look up one consultation by its id.
+
+    Args:
+        consultation_id: str, the consultation's UUID as text.
+
+    Returns:
+        dict | None: the consultations row, or None.
+
+    Example:
+        >>> (await get_consultation(cid))["kind"]
+        'free'
+    """
+    if database.pool is None:
+        return _consultations.get(consultation_id)
+    try:
+        key = uuid.UUID(consultation_id)
+    except ValueError:
+        return None
+    row = await database.pool.fetchrow("SELECT * FROM consultations WHERE id = $1", key)
+    return dict(row) if row else None
+
+
+async def get_consultation_by_booking(uid: str) -> dict | None:
+    """
+    Look up a consultation by Cal.com's booking uid (used by the webhook).
+
+    Args:
+        uid: str, Cal.com's booking uid.
+
+    Returns:
+        dict | None: the consultations row, or None.
+
+    Example:
+        >>> (await get_consultation_by_booking("bk_123"))["status"]
+        'booked'
+    """
+    if database.pool is None:
+        return next((c for c in _consultations.values() if c["calcom_booking_uid"] == uid), None)
+    row = await database.pool.fetchrow("SELECT * FROM consultations WHERE calcom_booking_uid = $1", uid)
+    return dict(row) if row else None
+
+
+async def list_consultations(account_id: str, email: str | None = None) -> list[dict]:
+    """
+    List a client's consultations, newest first.
+
+    Matches rows linked to the account, plus rows booked with the account's
+    email before the account existed (account_id still NULL).
+
+    Args:
+        account_id: str, the plan holder's account id.
+        email: str | None, the plan holder's email (lowercase).
+
+    Returns:
+        list[dict]: consultations rows.
+
+    Example:
+        >>> [c["status"] for c in await list_consultations(aid, "ana@example.com")]
+        ['completed']
+    """
+    email = (email or "").lower()
+    if database.pool is None:
+        rows = [c for c in _consultations.values()
+                if str(c.get("account_id") or "") == account_id
+                or (email and not c.get("account_id") and c.get("attendee_email") == email)]
+        return sorted(rows, key=lambda c: c["created_at"], reverse=True)
+    rows = await database.pool.fetch(
+        """SELECT * FROM consultations
+           WHERE account_id = $1 OR (account_id IS NULL AND attendee_email = $2)
+           ORDER BY created_at DESC""",
+        uuid.UUID(account_id), email,
+    )
+    return [dict(r) for r in rows]
+
+
+# ── Managed storage: consents and load runs ─────────────────────────────────
+
+async def active_storage_consent(account_id: str) -> dict | None:
+    """
+    Return the client's current "store my data" consent, or None.
+
+    Args:
+        account_id: str, the plan holder's account id.
+
+    Returns:
+        dict | None: the newest storage_consents row that hasn't been withdrawn.
+
+    Example:
+        >>> (await active_storage_consent(aid))["terms_version"]
+        '2026-10-15'
+    """
+    if database.pool is None:
+        live = [c for c in _consents if c["account_id"] == account_id and c["withdrawn_at"] is None]
+        return live[-1] if live else None
+    row = await database.pool.fetchrow(
+        """SELECT * FROM storage_consents WHERE account_id = $1 AND withdrawn_at IS NULL
+           ORDER BY consented_at DESC LIMIT 1""",
+        uuid.UUID(account_id),
+    )
+    return dict(row) if row else None
+
+
+async def add_storage_consent(account_id: str, terms_version: str, consented_by: str) -> dict:
+    """
+    Record a client's consent to managed storage.
+
+    Args:
+        account_id: str, the plan holder's account id.
+        terms_version: str, which storage terms they agreed to.
+        consented_by: str, the account that clicked (the client, or a consultant acting).
+
+    Returns:
+        dict: the new storage_consents row.
+
+    Example:
+        >>> await add_storage_consent(aid, "2026-10-15", aid)
+    """
+    row = {"account_id": account_id, "terms_version": terms_version, "consented_by": consented_by,
+           "consented_at": _now(), "withdrawn_at": None}
+    if database.pool is None:
+        row["id"] = len(_consents) + 1
+        _consents.append(row)
+        return row
+    rec = await database.pool.fetchrow(
+        """INSERT INTO storage_consents (account_id, terms_version, consented_by)
+           VALUES ($1, $2, $3) RETURNING *""",
+        uuid.UUID(account_id), terms_version, uuid.UUID(consented_by),
+    )
+    return dict(rec)
+
+
+async def save_load_run(row: dict) -> dict:
+    """
+    Insert a load run, or update it when `row` has an "id".
+
+    Args:
+        row: dict, load_runs columns (see db/schema.sql). Include "id" to update.
+
+    Returns:
+        dict: the load_runs row after the change.
+
+    Example:
+        >>> run = await save_load_run({"account_id": aid, "source_name": "sales.csv",
+        ...                            "event_type": "transaction/income", "status": "running"})
+        >>> (await save_load_run({"id": run["id"], "status": "succeeded"}))["status"]
+        'succeeded'
+    """
+    allowed = ("account_id", "source", "source_name", "event_type", "rows_in", "rows_loaded", "rows_skipped",
+               "plan_fingerprint", "status", "error", "started_by", "finished_at")
+    fields = {k: v for k, v in row.items() if k in allowed}
+    uuid_fields = {"account_id", "started_by"}
+    if database.pool is None:
+        if row.get("id"):
+            existing = next(r for r in _load_runs if r["id"] == row["id"])
+            existing.update(fields)
+            return existing
+        new = {"source": "file_upload", "rows_in": 0, "rows_loaded": 0, "rows_skipped": 0, "error": None,
+               "plan_fingerprint": None, "started_by": None, "finished_at": None,
+               **fields, "id": len(_load_runs) + 1, "started_at": _now()}
+        _load_runs.append(new)
+        return new
+    values = [uuid.UUID(str(v)) if k in uuid_fields and v else v for k, v in fields.items()]
+    if row.get("id"):
+        sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+        rec = await database.pool.fetchrow(f"UPDATE load_runs SET {sets} WHERE id = $1 RETURNING *",
+                                           int(row["id"]), *values)
+    else:
+        cols = ", ".join(fields)
+        marks = ", ".join(f"${i + 1}" for i in range(len(fields)))
+        rec = await database.pool.fetchrow(f"INSERT INTO load_runs ({cols}) VALUES ({marks}) RETURNING *", *values)
+    return dict(rec)
+
+
+async def list_load_runs(account_id: str, limit: int = 20) -> list[dict]:
+    """
+    List a client's most recent loads into the warehouse, newest first.
+
+    Args:
+        account_id: str, the plan holder's account id.
+        limit: int, how many to return (default 20).
+
+    Returns:
+        list[dict]: load_runs rows.
+
+    Example:
+        >>> [r["source_name"] for r in await list_load_runs(aid)]
+        ['sales.csv']
+    """
+    if database.pool is None:
+        rows = [r for r in _load_runs if r["account_id"] == account_id]
+        return sorted(rows, key=lambda r: r["started_at"], reverse=True)[:limit]
+    rows = await database.pool.fetch(
+        "SELECT * FROM load_runs WHERE account_id = $1 ORDER BY started_at DESC LIMIT $2",
+        uuid.UUID(account_id), limit,
+    )
+    return [dict(r) for r in rows]

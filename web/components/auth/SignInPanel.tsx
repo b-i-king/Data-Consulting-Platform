@@ -25,7 +25,7 @@ export default function SignInPanel({ initialMode }: { initialMode: "signup" | "
         initialMode={initialMode}
         consultantName={consultantName}
         title={{ signup: "Create your account", signin: "Sign in" }}
-        subtitle="Use your email address. Your workspace shows the services on your plan."
+        subtitle="Use your email address and password. Your workspace shows the services on your plan."
         onSignedIn={(s) => {
           saveSession(s);
           router.push("/app");

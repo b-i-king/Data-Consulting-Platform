@@ -154,7 +154,9 @@ export default function BillingPanel(props: {
             rel="noopener noreferrer"
             className="rounded-full border border-line px-4 py-1.5 text-sm font-semibold hover:border-brand"
           >
-            Book the free {plan.consulting.free_minutes}-minute call
+            {plan.consulting.free_used
+              ? `Book a consulting session (${fmtUsd(rate)}/hour)`
+              : `Book the free ${plan.consulting.free_minutes}-minute call`}
           </a>
           {plan.can_add && (
             <>

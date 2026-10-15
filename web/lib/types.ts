@@ -598,9 +598,13 @@ export interface Location {
 }
 
 export interface AuthResponse {
-  access_token: string;
+  /** null when Supabase must confirm the email first (needs_confirmation). */
+  access_token: string | null;
   token_type: "bearer";
   account: Account;
+  /** True: no token yet — the person must open the emailed link, then sign in. */
+  needs_confirmation?: boolean;
+  message?: string | null;
 }
 
 export interface TeamMemberInput {
@@ -629,6 +633,8 @@ export interface SignupInput {
   wants_consultant?: boolean;
   /** Consultants only (CONSULTANT_ACCESS_CODE). */
   access_code?: string;
+  /** Required for your own sign-up (8+ characters); left out when a consultant adds a client. */
+  password?: string;
 }
 
 /** GET /api/accounts/services — the plan behind the workspace's left pane. */
@@ -651,5 +657,111 @@ export interface MyServices {
   billing: { stripe: boolean };
   /** A live plan includes Data Cleaning: downloads cost nothing extra. */
   downloads_included: boolean;
-  consulting: { rate_per_hour_usd: number; free_minutes: number; hours_bought: number };
+  consulting: { rate_per_hour_usd: number; free_minutes: number; hours_bought: number } & ConsultationSummary;
+}
+
+// ── Consultations (api/services/consultations.py) ─────────────────────────────
+
+export type ConsultationStatus = "booked" | "canceled" | "ended" | "completed" | "no_show";
+
+/** One free or paid consultation (from the Cal.com webhook, or entered by the consultant). */
+export interface Consultation {
+  id: string;
+  kind: "free" | "paid";
+  status: ConsultationStatus;
+  source: "calcom" | "manual";
+  /** ISO times (UTC). */
+  starts_at: string | null;
+  ends_at: string | null;
+  confirmed_at: string | null;
+  note: string | null;
+  attendee_email: string | null;
+}
+
+/** GET /api/consultations (also inside MyServices.consulting). */
+export interface ConsultationSummary {
+  /** True once a consultant confirmed the free consultation happened. */
+  free_used: boolean;
+  /** The link to show now: free until the free call is used, then paid. */
+  booking_url: string;
+  free_booking_url: string;
+  paid_booking_url: string;
+  /** False: PAID_BOOKING_URL isn't set, so the free link is reused. */
+  paid_link_configured: boolean;
+  /** True when CALCOM_WEBHOOK_SECRET is set (bookings arrive automatically). */
+  webhook_configured: boolean;
+  history: Consultation[];
+}
+
+// ── Warehouse loads (Data Engineering; api/routers/warehouse.py) ──────────────
+
+export interface PreviewTable {
+  columns: string[];
+  rows: Record<string, Cell>[];
+  total: number;
+}
+
+/** POST /api/warehouse/preview — how the data will be transformed, and why. */
+export interface LoadPlan {
+  source_name: string;
+  event_type: string;
+  event_types: { id: string; label: string; measure: string }[];
+  /** Warehouse field (role) -> the client's column, or null. */
+  mapping: Record<string, string | null>;
+  columns: string[];
+  roles: { id: string; label: string }[];
+  steps: { title: string; why: string }[];
+  tables: Record<string, PreviewTable>;
+  counts: { rows_in: number; rows_to_load: number; rows_skipped: number; customers: number; products: number };
+  skipped: Record<string, number>;
+  /** Send back to /load to accept exactly this preview. */
+  fingerprint: string;
+  ready: boolean;
+  problem: string | null;
+  storage: StorageStatus;
+}
+
+export interface StorageStatus {
+  /** database = Supabase; memory = local test mode (lost on restart); unavailable = DB down. */
+  mode: "database" | "memory" | "unavailable";
+  consented: boolean;
+  terms_version: string;
+}
+
+export interface LoadRun {
+  id: string;
+  source_name: string;
+  event_type: string;
+  rows_in: number;
+  rows_loaded: number;
+  rows_skipped: number;
+  status: "running" | "succeeded" | "failed";
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface WarehouseCounts {
+  set_up: boolean;
+  sources: number;
+  customers: number;
+  products: number;
+  events: number;
+  by_type: { event_type: string; events: number; amount: number }[];
+  first_date: string | null;
+  last_date: string | null;
+}
+
+/** GET /api/warehouse/summary */
+export interface WarehouseSummary {
+  warehouse: WarehouseCounts;
+  loads: LoadRun[];
+  storage: StorageStatus;
+}
+
+/** POST /api/warehouse/load */
+export interface LoadResult {
+  load_run: LoadRun;
+  result: { rows_loaded: number; rows_already_stored: number; customers: number; products: number };
+  summary: WarehouseCounts;
 }

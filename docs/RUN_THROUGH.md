@@ -1,0 +1,235 @@
+# Your first full run-through (as the consultant)
+
+The goal: sign in as yourself (the consultant), see **all seven services**, run
+each one on the sample bakery data, load data into the database (after
+previewing it), and track a consultation from free to paid — **without Stripe**.
+Plan on about an hour the first time.
+
+The order matters: **the database, then YOUR consultant account, then clients.**
+The `consultants` row is created the first time you sign in with your
+consultant email, and "do it for me" clients are assigned to you only once it
+exists.
+
+---
+
+## Step 1 — Supabase (database + passwords), about 10 minutes
+
+1. Create a project at <https://supabase.com> (or open yours). Save the database
+   password it asks for.
+2. **Connection string** — click **Connect** (top of the dashboard) →
+   **Transaction pooler** (port 6543) → copy it. Put your database password in
+   place of `[YOUR-PASSWORD]`. This is `DATABASE_URL`.
+3. **Project URL and key** — **Project Settings → API** (or **API Keys**): copy
+   the **Project URL** (`SUPABASE_URL`) and the **anon / publishable** key
+   (`SUPABASE_KEY`). Never use the `service_role` / secret key here.
+4. **Email sign-in** — **Authentication → Sign In / Providers → Email**: make
+   sure Email is enabled. For today's run, switch **"Confirm email" OFF** so you
+   can sign in right after signing up. (Switch it back ON before real clients;
+   the app already handles "check your email". Supabase's built-in email
+   sender is rate-limited, so add your own SMTP under Authentication → Emails
+   before launch.)
+
+## Step 2 — Your `.env` file
+
+In the project folder: copy `.env.example` to `.env` and fill in:
+
+| Setting | What to put |
+|---|---|
+| `DATABASE_URL` | the connection string from Step 1.2 |
+| `JWT_SECRET_KEY` | run `python -c "import secrets; print(secrets.token_urlsafe(48))"` and paste the result |
+| `SUPABASE_URL`, `SUPABASE_KEY` | from Step 1.3 |
+| `CONSULTANT_EMAILS` | **your** email (the first one listed is the default consultant) |
+| `CONSULTANT_ACCESS_CODE` | a long secret phrase you'll type when signing in as consultant |
+| `BOOKING_URL` | your Cal.com **free** 30-minute consultation link |
+| `PAID_BOOKING_URL` | your Cal.com **paid** session link (Step 8) — can wait |
+| `CALCOM_WEBHOOK_SECRET` | leave empty for now (Step 8) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | **leave empty** = test mode: packages switch on without charging |
+
+And for the website: copy `web/.env.example` to `web/.env.local` (the defaults
+point at `http://localhost:8000`; set `NEXT_PUBLIC_BOOKING_URL` to your free link).
+
+## Step 3 — Create the tables
+
+```bash
+.venv\Scripts\activate                 # Windows (source .venv/bin/activate on Mac)
+pip install -r requirements.txt
+python scripts/setup_database.py
+```
+
+It runs `db/schema.sql` (platform tables) and `db/warehouse.sql` (the client
+data warehouse), then lists every table with its row count. You should see
+`ok` next to all 13 platform tables and 8 warehouse tables; `dim_date` already
+has 14,976 rows (the calendar) and `dim_event_type` 13. Safe to re-run anytime.
+
+## Step 4 — Start both servers
+
+```bash
+uvicorn api.main:app --reload          # terminal 1 -> http://localhost:8000
+cd web && npm install && npm run dev   # terminal 2 -> http://localhost:3000
+```
+
+Open <http://localhost:8000/health>. You want:
+`{"status": "ok", "database": "connected", "auth": "supabase"}`.
+(`in-memory` means DATABASE_URL isn't being read; `local` means the Supabase
+settings are empty.)
+
+## Step 5 — Create YOUR consultant account (before anything else)
+
+1. Go to <http://localhost:3000/signin?mode=signup>.
+2. Fill in your name, **the email from `CONSULTANT_EMAILS`**, and a password
+   (8+ characters, typed twice).
+3. Click **"I'm a consultant"** and enter your `CONSULTANT_ACCESS_CODE`.
+4. **Create account** → you land in the workspace with a lavender **Consultant** badge.
+
+Check it worked: `python scripts/setup_database.py --check` ends with
+`Consultants: you@... (default)`. In Supabase → Table Editor → `accounts`, your
+row has `auth_user_id` filled and `password_hash` empty (Supabase holds the
+password, not us).
+
+Next time: **Sign in** with email + password + access code.
+
+## Step 6 — Make test clients
+
+- **A "done for you" client** — in the workspace's **Working on** picker, choose
+  **Add a client** (e.g. business "Sunrise Bakery", a made-up email). Pick it in
+  **Working on**: you're now in their workspace.
+- **A do-it-yourself client** (to see what a paying client sees) — open a
+  private browser window, sign up with another email of yours (Gmail's
+  `you+client1@gmail.com` works), *without* ticking "I'd like ... to do this for
+  me". You'll see only Data Cleaning open, the rest grayed out with prices, and
+  "Book a free 30-minute call". Packages switch on free in test mode
+  (Plan & billing → Subscribe (test mode)).
+
+A client you added has no password yet: the password typed at their **first**
+sign-in becomes theirs.
+
+## Step 7 — Walk through all seven services
+
+Work in Sunrise Bakery's workspace (or your own). Each page starts with
+**Choose files**; use the files in `samples/`. Use the **Skill** menu at the top
+of each page to try the others.
+
+| # | Service (left pane) | File | Try | Check |
+|---|---|---|---|---|
+| 1 | 🧹 Data Cleaning | `sales.csv` | the cleaning report, missing values, rename a column, **Download CSV** | the download lands; Supabase `usage_events` gets a row |
+| 2 | Data Strategy & Discovery | `sales.csv` + `customers.csv` | Data-source inventory & roadmap; "Is there enough data?" | a written brief |
+| 3 | Data Exploration & Analysis | `sales.csv` | Dataset profiling; Key trends; Hypothesis testing | tables and findings |
+| 4 | 📊 Dashboard (Visualization) | `sales.csv` | the time dashboard; Charts from your data | KPI cards, ranges |
+| 5 | Data Engineering | `sales.csv`, then `expenses.csv`, `feedback.csv` | **Load into database (preview first)** — see below; ER diagrams; Data dictionaries | rows in `warehouse.*` |
+| 6 | Data Science & ML | `sales.csv` | Forecasts & predictive models | model results in plain English |
+| 7 | AI — **Preview** | `sales.csv` | Ask: `total amount by store`, `top 5 product by amount in 2025`, `how many orders by payment_method` | answers with the calculation shown |
+
+AI shows a **Preview** badge: only consultants see it open; clients see it as
+"Early access". It answers with the built-in plain-English parser today; a
+language model comes later.
+
+### The Data Engineering load (preview → accept)
+
+1. Data Engineering opens on **Load into database (preview first)**.
+2. Read the card top to bottom:
+   - **What are these rows?** — guessed (sales → "Sales / income"; expenses →
+     "Expenses"; feedback → "CSAT scores"). Change it if wrong.
+   - **Which column is which?** — the date, amount, customer, product... columns
+     we guessed. Change any; the preview updates.
+   - **How your data will be transformed, and why** — e.g. "Move customers into
+     their own table... *Why:* customer details are stored ONCE...".
+   - **How it will look in the database** — the first rows of `fact_event`,
+     `dim_customer`, `dim_product`, and what's skipped and why.
+3. Tick **Store this data for Sunrise Bakery...** (consent, saved once) →
+   **Accept and load**. Or **Don't load**: nothing is stored.
+4. The **Stored for ...** card shows the counts. Press Accept again: "0 new
+   rows — already stored" (reloads never duplicate).
+5. In Supabase: `load_runs` and `storage_consents` have rows. Warehouse tables
+   are protected by Row Level Security, so to look at them in the SQL Editor
+   set the client first (the client id = the account id from `accounts`):
+
+   ```sql
+   select set_config('app.client_id', '<account id>', false);
+   select count(*) from warehouse.fact_event;
+   ```
+
+## Step 8 — Consultations: free first, then paid (Cal.com)
+
+**How it works.** Booking happens on Cal.com, so the app can't see it on its
+own. Two ways in, one rule:
+
+- **Automatic:** Cal.com's webhook tells the app when a consultation is booked,
+  rescheduled, canceled, or has ended.
+- **Manual:** you confirm it in the client's workspace.
+- **The rule:** the free consultation counts as *used* only when **you** press
+  **Confirm it happened** (Cal.com saying "ended" isn't enough — only you know
+  it really happened). From then on every booking link that client sees is the
+  **paid** one. No-show and canceled keep the free call available.
+
+**Set up Cal.com (once):**
+
+1. Keep your free event (30 minutes) → `BOOKING_URL`.
+2. Create a second event type, e.g. "Consulting session" (60 minutes) →
+   `PAID_BOOKING_URL`. To collect the $80 at booking with no Stripe work in
+   this app, install Cal.com's **Stripe** app and set the event's price there.
+   (Later, when this app's Stripe is on, clients can also prepay hours in Plan
+   & billing.)
+3. Webhook: Cal.com → **Settings → Developer → Webhooks → New**:
+   - Subscriber URL: `https://<your Render API>/api/consultations/calcom-webhook`
+   - Triggers: Booking Created, Booking Rescheduled, Booking Cancelled, Booking
+     Rejected, Meeting Ended (and Booking No-show Updated if offered)
+   - Secret: a long random string → put the same value in `CALCOM_WEBHOOK_SECRET`.
+   - Cal.com can't reach `localhost`, so the webhook works once the API is on
+     Render. Locally, use **Add a call by hand**.
+
+**Test it:**
+
+1. As the do-it-yourself client: click **Book a free 30-minute call** — Cal.com
+   opens with the name and email already filled (the link also carries the
+   account id, so the booking is matched to the right account).
+2. As you, working on that client: the **Consultations** card shows the booking
+   (with the webhook) → after the meeting, **Ended — please confirm** →
+   **Confirm it happened**. (Without the webhook: **Add a call by hand → Free
+   consultation done**.)
+3. As the client again (refresh): the button now reads **Book a consulting
+   session ($80/hour)** and opens `PAID_BOOKING_URL`.
+
+Made a mistake? The card's **History** has **undo** on a confirmed free call.
+
+## Step 9 — Is the database right?
+
+```bash
+python scripts/setup_database.py --check
+```
+
+…lists every table and its row count. After this run-through expect rows in
+`accounts`, `teams` (business clients), `consultants` (you), `consultations`,
+`storage_consents`, `load_runs`, `usage_events`, and the warehouse tables. In
+Supabase → **Authentication → Users** you'll see the same people (Supabase's
+side of the passwords). If someone forgets a password, send a reset from there
+until "Forgot password" is built.
+
+---
+
+## Gaps to close (so clients really have a consultant at hand)
+
+**Before real clients use it**
+- **Forgot password** page, and Supabase **Confirm email** back on (with your own SMTP).
+- **Invite emails** for colleagues and consultant-added clients (today the first
+  sign-in with their email sets the password — sign them in promptly).
+- **Privacy policy and storage terms** page (the consent box should link to it),
+  and **Withdraw consent → delete stored data**.
+- On Render: set `JWT_SECRET_KEY`, all the settings above, and move off the free
+  plan (it sleeps after 15 minutes). Supabase backups: daily backups come with
+  the Pro plan.
+- Stripe, when you're ready to charge (`python scripts/sync_stripe.py`, PAYMENTS.md).
+
+**Consultant workflow**
+- **Sharing your work with the client.** Results (reports, dashboards,
+  forecasts) aren't saved for the client to open later — today you'd download
+  and send them. Next: saved reports/dashboards (definitions, or warehouse data).
+- Hours used vs. bought (deduct confirmed paid sessions), notes per client,
+  reassigning clients, a list of Cal.com bookings from people without an account.
+- Notifications (email when a booking arrives, when a load finishes).
+
+**Product**
+- QuickBooks connector (next — CONNECTORS.md), then dashboards and skills that
+  read from the warehouse, and scheduled reloads.
+- AI with a language model and usage caps (ROADMAP.md §7).
+- Admin page (signups, plans, usage, hours) and intake analytics.
+- Error monitoring (e.g. Sentry) and uptime alerts.

@@ -16,7 +16,12 @@ import type {
   AuthResponse,
   IntakeOptions,
   CleaningInput,
+  ConsultationStatus,
+  ConsultationSummary,
+  LoadPlan,
+  LoadResult,
   Location,
+  WarehouseSummary,
   MyServices,
   Quote,
   SignupInput,
@@ -120,9 +125,9 @@ export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
 
 export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
 
-/** Sign in by email; consultants also send their access code. */
-export const signin = (email: string, accessCode?: string) =>
-  postJson<AuthResponse>("/api/accounts/signin", { email, ...(accessCode ? { access_code: accessCode } : {}) });
+/** Sign in with email + password; consultants also send their access code. */
+export const signin = (email: string, password: string, accessCode?: string) =>
+  postJson<AuthResponse>("/api/accounts/signin", { email, password, ...(accessCode ? { access_code: accessCode } : {}) });
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
 
@@ -168,6 +173,77 @@ export async function addClient(token: string, input: SignupInput): Promise<Cons
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(input),
   });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+// ── Consultations (api/routers/consultations.py) ──────────────────────────────
+
+/** The client's consultations and which booking link to show (free or paid). */
+export async function getConsultations(token: string): Promise<ConsultationSummary> {
+  const res = await apiFetch(`${API_URL}/api/consultations`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/**
+ * Consultants (working on a client): mark a consultation — "completed" uses up
+ * the free call. Without consultationId a consultation is added by hand.
+ */
+export const markConsultation = (
+  token: string,
+  body: { status: ConsultationStatus; consultation_id?: string; kind?: "free" | "paid"; note?: string },
+) => postJson<ConsultationSummary>("/api/consultations", body, token);
+
+// ── Warehouse loads (Data Engineering; api/routers/warehouse.py) ──────────────
+// Same files and cleaning choices as the cleaning report, so the load uses the
+// data the client already checked. Nothing is stored until loadToWarehouse.
+
+/** Warehouse field changes and event type picked in the preview. */
+export interface LoadChoices {
+  groupId: number;
+  mapping: Record<string, string>; // role -> column ("" = not used)
+  eventType: string; // "" = let the server guess
+}
+
+const loadFields = (input: CleaningInput, c: LoadChoices) => ({
+  group_id: String(c.groupId),
+  mapping: JSON.stringify(c.mapping),
+  event_type: c.eventType,
+  ...choiceFields(input),
+});
+
+/** How the data will be transformed to fit the warehouse, why, and a preview. Stores nothing. */
+export async function previewLoad(token: string, input: CleaningInput, c: LoadChoices): Promise<LoadPlan> {
+  const res = await apiFetch(`${API_URL}/api/warehouse/preview`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: filesForm(input.files, loadFields(input, c)),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Accept the preview (its fingerprint) and load it. `consent` = "store my data" ticked. */
+export async function loadToWarehouse(
+  token: string,
+  input: CleaningInput,
+  c: LoadChoices,
+  fingerprint: string,
+  consent: boolean,
+): Promise<LoadResult> {
+  const res = await apiFetch(`${API_URL}/api/warehouse/load`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: filesForm(input.files, { ...loadFields(input, c), fingerprint, consent: String(consent) }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** What this client has stored in the warehouse, and recent loads. */
+export async function getWarehouseSummary(token: string): Promise<WarehouseSummary> {
+  const res = await apiFetch(`${API_URL}/api/warehouse/summary`, { headers: authHeaders(token) });
   await raiseForStatus(res);
   return res.json();
 }

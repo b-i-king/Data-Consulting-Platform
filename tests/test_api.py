@@ -75,7 +75,7 @@ def test_guest_analyze_then_signup_then_download():
 
     # 3. Business signup with one team member.
     res = client.post("/api/accounts/signup", json={
-        "account_type": "business", "first_name": "Dana", "last_name": "Lee",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Dana", "last_name": "Lee",
         "email": "dana@example.com", "company_name": "Lee Bakery",
         "team_members": [{"first_name": "Sam", "last_name": "Fox", "email": "sam@example.com"}],
     })
@@ -104,7 +104,7 @@ def test_guest_analyze_then_signup_then_download():
 def test_individual_cannot_add_team_members():
     """Check that an individual (not business) signup with team members is rejected with 422."""
     res = client.post("/api/accounts/signup", json={
-        "account_type": "individual", "first_name": "A", "last_name": "B",
+        "password": "Correct-horse-9", "account_type": "individual", "first_name": "A", "last_name": "B",
         "email": "solo@example.com",
         "team_members": [{"first_name": "C", "last_name": "D", "email": "c@example.com"}],
     })
@@ -275,7 +275,7 @@ def test_excel_download_lists_rows_removed_for_a_missing_id():
     "cleaned_data" sheet and lists them on a separate "rows_missing_id" sheet.
     """
     token = client.post("/api/accounts/signup", json={
-        "account_type": "individual", "first_name": "Ida", "last_name": "Ng", "email": "ida@example.com",
+        "password": "Correct-horse-9", "account_type": "individual", "first_name": "Ida", "last_name": "Ng", "email": "ida@example.com",
     }).json()["access_token"]
     rows = "".join(f"{'' if i % 10 == 0 else i},{i}\n" for i in range(40))   # 4 blank IDs
     csv = f"Order ID,Total Amount\n{rows}".encode()

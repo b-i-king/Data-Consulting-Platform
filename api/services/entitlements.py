@@ -21,6 +21,8 @@ EVERY SERVICE AT ONCE
 Two kinds of accounts get every available service (not "early access" ones):
   * consultants (they work on any service for their clients, and test the app)
   * clients assigned to a consultant ("I'd like a consultant to do this for me")
+A consultant LOOKING (own workspace or a client's) also sees the early-access
+services (AI) as a preview, so every one of the seven services can be tested.
 
 SUBSCRIPTIONS
 -------------
@@ -78,6 +80,27 @@ async def plan_holder_id(account: dict) -> str:
     return str(account["id"])
 
 
+async def plan_holder(account: dict) -> dict:
+    """
+    Return the plan holder's accounts ROW (see `plan_holder_id`).
+
+    Args:
+        account: dict, an accounts row.
+
+    Returns:
+        dict: the team owner's row for a business colleague, else `account`
+        itself (also when the owner's row can no longer be found).
+
+    Example:
+        >>> (await plan_holder(colleague))["team_role"]
+        'owner'
+    """
+    holder_id = await plan_holder_id(account)
+    if holder_id == str(account["id"]):
+        return account
+    return await account_store.get_account(holder_id) or account
+
+
 async def gets_everything(account: dict) -> bool:
     """
     Tell whether an account gets every available service at once.
@@ -106,10 +129,13 @@ async def gets_everything(account: dict) -> bool:
     return bool(holder.get("consultant_id"))
 
 
-async def active_services(account: dict) -> list[str]:
+async def active_services(account: dict, *, preview_all: bool = False) -> list[str]:
     """
     List the service ids this account can use, in catalog order (Data Cleaning always included).
 
+    - `preview_all` (a CONSULTANT is looking, in their own workspace or a
+      client's): every service, INCLUDING ones not launched yet (AI), so the
+      consultant can test the whole product. Clients never get this.
     - Consultants and consultant-managed clients get every available service.
     - Everyone else gets the services unlocked by the plan holder's live
       subscriptions, plus Data Cleaning.
@@ -117,6 +143,7 @@ async def active_services(account: dict) -> list[str]:
 
     Args:
         account: dict, an accounts row.
+        preview_all: bool, True when the person looking is a consultant.
 
     Returns:
         list[str]: service ids in the order of pricing.SERVICES.
@@ -124,7 +151,11 @@ async def active_services(account: dict) -> list[str]:
     Example:
         >>> await active_services(new_client)   # no subscription yet
         ['data_cleaning']
+        >>> len(await active_services(new_client, preview_all=True))   # a consultant looking
+        7
     """
+    if preview_all:
+        return [s.id for s in SERVICES]
     if await gets_everything(account):
         return [s.id for s in SERVICES if s.available]
     holder = await plan_holder_id(account)

@@ -45,8 +45,12 @@ doesn't match the site's address exactly. Render's logs warn at startup when
 ## 1. Database — Supabase
 
 1. Create a project (choose a US region, e.g. `us-east-1`).
-2. SQL Editor → run `db/schema.sql`.
+2. SQL Editor → run `db/schema.sql`, then `db/warehouse.sql` (or run
+   `python scripts/setup_database.py` from your computer with `DATABASE_URL` in `.env`).
 3. Copy the **Transaction pooler** connection string (port 6543).
+4. Passwords: Authentication → Sign In / Providers → Email on. Copy the Project
+   URL and anon / publishable key into Render as `SUPABASE_URL` / `SUPABASE_KEY`.
+   Step by step, including Cal.com: [RUN_THROUGH.md](RUN_THROUGH.md).
 
 ## 2. API — Render
 
@@ -125,16 +129,17 @@ ever use Render's Blueprint option instead).
 
 After setting `CONSULTANT_EMAILS` and `CONSULTANT_ACCESS_CODE` on Render (and
 redeploying), open the site → **Sign in** → **Create an account** with your
-consultant email → click **I'm a consultant** and enter the access code. The
+consultant email and a password → click **I'm a consultant** and enter the access code. The
 header shows a lavender **Consultant** badge, and the workspace has a
 **Working on** picker. On a free test server without a database, sign up again
 after each restart (accounts live in memory).
 
 ## Checklist before real clients
 
-- [ ] Replace email-only sign-in with verified sign-in (see ROADMAP → Security) —
-      including consultants, who can open every assigned client.
-- [ ] Run the latest `db/schema.sql` in Supabase (consultants, plans, subscriptions, consulting hours).
+- [ ] Passwords: set `SUPABASE_URL` / `SUPABASE_KEY`, turn Supabase "Confirm email"
+      on with your own SMTP, and build "Forgot password" + invite emails (ROADMAP → Security).
+- [ ] Run the latest `db/schema.sql` and `db/warehouse.sql` in Supabase (`python scripts/setup_database.py`).
+- [ ] Cal.com: `BOOKING_URL` (free), `PAID_BOOKING_URL` (paid), webhook + `CALCOM_WEBHOOK_SECRET` ([RUN_THROUGH.md](RUN_THROUGH.md) step 8).
 - [ ] Payments: set real prices, run `scripts/sync_stripe.py`, add the Stripe webhook and keys ([PAYMENTS.md](PAYMENTS.md)).
 - [ ] Set real prices in `api/services/pricing.py` (plans, packages) and env vars.
 - [ ] Set `BOOKING_URL`.

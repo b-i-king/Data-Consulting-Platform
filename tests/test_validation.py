@@ -62,20 +62,20 @@ def test_emails_are_checked_and_lowercased():
 
 def test_signup_rejects_bad_names_and_a_missing_business_name():
     """Check signup returns 422 for a bad name, a bad email, or a business with no company name."""
-    base = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee", "email": "v1@example.com"}
+    base = {"password": "Correct-horse-9", "account_type": "individual", "first_name": "Ana", "last_name": "Lee", "email": "v1@example.com"}
     assert client.post("/api/accounts/signup", json={**base, "first_name": "ana"}).status_code == 422
     assert client.post("/api/accounts/signup", json={**base, "email": "not-an-email"}).status_code == 422
-    assert client.post("/api/accounts/signup", json={**base, "account_type": "business"}).status_code == 422
+    assert client.post("/api/accounts/signup", json={**base, "password": "Correct-horse-9", "account_type": "business"}).status_code == 422
 
 
 def test_one_email_per_account_case_insensitive_and_no_half_signups():
     """Check an email can be used only once (any case), and a failed team signup creates nothing."""
-    base = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee"}
+    base = {"password": "Correct-horse-9", "account_type": "individual", "first_name": "Ana", "last_name": "Lee"}
     assert client.post("/api/accounts/signup", json={**base, "email": "once@example.com"}).status_code == 201
     again = client.post("/api/accounts/signup", json={**base, "email": "ONCE@Example.com"})
     assert again.status_code == 409 and "only be used once" in again.json()["detail"]
     # Same email twice in one form.
-    biz = {"account_type": "business", "first_name": "Bo", "last_name": "Kim", "company_name": "Kim Co"}
+    biz = {"password": "Correct-horse-9", "account_type": "business", "first_name": "Bo", "last_name": "Kim", "company_name": "Kim Co"}
     dup = client.post("/api/accounts/signup", json={**biz, "email": "bo@example.com",
                       "team_members": [{"first_name": "Al", "last_name": "Ray", "email": "BO@example.com"}]})
     assert dup.status_code == 422 and "more than once" in dup.text
@@ -95,10 +95,10 @@ def test_location_search_and_signup():
     assert locations.search("paris, tex")[0]["label"] == "Paris, Texas, United States"
     assert locations.search("a") == []                                        # 2 letters minimum
     res = client.post("/api/accounts/signup", json={
-        "account_type": "individual", "first_name": "Lu", "last_name": "Mo", "email": "loc@example.com",
+        "password": "Correct-horse-9", "account_type": "individual", "first_name": "Lu", "last_name": "Mo", "email": "loc@example.com",
         "location_id": hits[0]["id"]})
     assert res.status_code == 201 and res.json()["account"]["location"] == "Atlanta, Georgia, United States"
     bad = client.post("/api/accounts/signup", json={
-        "account_type": "individual", "first_name": "Lu", "last_name": "Mo", "email": "loc2@example.com",
+        "password": "Correct-horse-9", "account_type": "individual", "first_name": "Lu", "last_name": "Mo", "email": "loc2@example.com",
         "location_id": 1})
     assert bad.status_code == 422

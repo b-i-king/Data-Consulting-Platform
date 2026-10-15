@@ -4,9 +4,16 @@ One Supabase (PostgreSQL) database, in two layers:
 
 | Layer | File | Holds | Status |
 |---|---|---|---|
-| **Platform** (`public`) | [`db/schema.sql`](../db/schema.sql) | Who signed up, teams, consultants, plans, subscriptions, consulting hours, usage | ✅ Live (used by the API) |
-| **Client data** (`warehouse`) | [`db/warehouse.sql`](../db/warehouse.sql) | Clients' own business data, for Data Engineering clients who opt in to managed storage | 🟡 Designed and tested, not loaded yet ([DATA_MODEL.md](DATA_MODEL.md)) |
-| **Planned** | (this page) | QuickBooks connections and syncs, AI usage caps, storage consent | 📝 Proposed below |
+| **Platform** (`public`) | [`db/schema.sql`](../db/schema.sql) | Who signed up, teams, consultants, plans, subscriptions, consulting hours, consultations, storage consent, load runs, usage | ✅ Live (used by the API) |
+| **Client data** (`warehouse`) | [`db/warehouse.sql`](../db/warehouse.sql) | Clients' own business data, for Data Engineering clients who opt in to managed storage | ✅ Live: loaded by Data Engineering → "Load into database" after a preview the client accepts ([DATA_MODEL.md](DATA_MODEL.md)) |
+| **Planned** | (this page) | QuickBooks connections and syncs, AI usage caps | 📝 Proposed below |
+
+**Set it up in one command** (or paste both files into Supabase → SQL Editor):
+
+```bash
+python scripts/setup_database.py            # runs schema.sql + warehouse.sql, then lists every table and its row count
+python scripts/setup_database.py --check    # only lists (changes nothing)
+```
 
 Rule of thumb: **the platform layer never holds client data** (uploaded files
 are processed in memory). Client data lives only in the warehouse layer, only
@@ -31,6 +38,10 @@ erDiagram
     accounts ||--o{ usage_events : "downloads"
     consultants |o--o{ usage_events : "done on the client's behalf"
     accounts |o--o{ intake_responses : "optional"
+    accounts |o--o{ consultations : "free call, paid sessions"
+    consultants |o--o{ consultations : "confirmed by"
+    accounts ||--o{ storage_consents : "store my data"
+    accounts ||--o{ load_runs : "loads into warehouse"
 
     accounts {
         uuid id PK
@@ -49,8 +60,42 @@ erDiagram
         bool wants_consultant
         uuid consultant_id FK "NULL unless wants_consultant"
         text stripe_customer_id UK
+        uuid auth_user_id UK "Supabase Auth user"
+        text password_hash "local mode only"
         timestamptz created_at
         timestamptz last_login_at
+    }
+    consultations {
+        uuid id PK
+        uuid account_id FK "plan holder; NULL until matched"
+        text attendee_email
+        text kind "free | paid"
+        text status "booked | canceled | ended | completed | no_show"
+        text source "calcom | manual"
+        text calcom_booking_uid UK
+        timestamptz starts_at
+        uuid confirmed_by FK
+        timestamptz confirmed_at
+    }
+    storage_consents {
+        bigint id PK
+        uuid account_id FK
+        timestamptz consented_at
+        timestamptz withdrawn_at
+        text terms_version
+        uuid consented_by FK
+    }
+    load_runs {
+        bigint id PK
+        uuid account_id FK "= warehouse client_id"
+        text source_name
+        text event_type
+        int rows_in
+        int rows_loaded
+        int rows_skipped
+        text plan_fingerprint
+        text status "running | succeeded | failed"
+        uuid started_by FK
     }
     teams {
         uuid id PK
@@ -139,6 +184,14 @@ erDiagram
 | `consulting_purchases` | paid Checkout for consulting hours | Stripe webhook | The free 30-minute first call isn't a purchase; it's booked through `BOOKING_URL`. |
 | `usage_events` | cleaned-file download | download endpoint | Metadata only (name, row count, runtime, amount) — never the data. `consultant_id` set when a consultant downloaded for the client. Amount is $0 when a plan includes Data Cleaning. |
 | `intake_responses` | guest questionnaire | (not used yet) | Analytics: which sources and services people ask for. |
+| `consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to `PAID_BOOKING_URL`. `ended` = Cal.com says the slot passed, waiting for the consultant. Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |
+| `storage_consents` | client's "store my data" | first warehouse load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. `consented_by` = the client, or the consultant acting for them. |
+| `load_runs` | load into the warehouse | warehouse load | Metadata only: rows in / loaded / skipped, the accepted preview's fingerprint, status and error. |
+
+**Accounts and passwords:** `auth_user_id` links an account to its Supabase
+Auth user (Supabase keeps the password); `password_hash` is used only in local
+mode (no Supabase configured). Both are NULL for an account made *for* someone
+(a colleague, or a client a consultant added) until their first sign-in sets a password.
 
 **Who can see what** is enforced by the API (`get_acting_context`, see
 ARCHITECTURE.md → Consultants): a client sees their own rows; a consultant sees
@@ -164,38 +217,23 @@ Designed in [`db/warehouse.sql`](../db/warehouse.sql) and explained in
 [DATA_MODEL.md](DATA_MODEL.md): one shared star schema (`dim_client`,
 `dim_date`, `dim_source`, `dim_customer`, `dim_employee`, `dim_product`,
 `fact_event`), every row tagged with `client_id`, and Row Level Security so one
-client can never see another's rows. Not loaded yet — storing client data is a
-deliberate design change, gated by the consent table below.
+client can never see another's rows. Storing client data is a deliberate,
+opt-in design change (ARCHITECTURE.md → "Managed storage"), gated by
+`storage_consents` and a preview the client accepts.
+
+**How a load works** (`api/services/warehouse_loader.py` plans it,
+`warehouse_store.py` writes it): the cleaned table is mapped to warehouse
+fields (date, amount, customer, product, ...), and the client sees each
+transformation step with its *why* plus the first rows of every table. On
+"Accept and load", one transaction sets `app.client_id` (RLS), creates the
+`dim_client` row on the first load (its `client_id` is the plan holder's account
+id), one `dim_source` row per file name, upserts customers and products, and
+inserts events with `ON CONFLICT DO NOTHING` so a reload never duplicates.
 
 ## Planned tables (proposed — not in schema.sql yet)
 
 Add each one to `db/schema.sql` (and `api/services/account_store.py`) when its
 feature is built. Proposed shapes:
-
-### Managed storage consent (Data Engineering)
-
-```sql
--- A client's explicit "yes, store my data" (and when they withdrew it).
-CREATE TABLE storage_consents (
-    id            BIGSERIAL PRIMARY KEY,
-    account_id    UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,   -- plan holder
-    consented_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    withdrawn_at  TIMESTAMPTZ,              -- set -> delete their warehouse rows within 30 days
-    terms_version TEXT NOT NULL,            -- which storage terms they agreed to
-    consented_by  UUID REFERENCES accounts (id)   -- who clicked (owner, or consultant acting)
-);
--- One row per load into the warehouse (cleaned upload or connector sync).
-CREATE TABLE load_runs (
-    id            BIGSERIAL PRIMARY KEY,
-    client_id     UUID NOT NULL,            -- warehouse.dim_client
-    source        TEXT NOT NULL,            -- 'upload', 'quickbooks', ...
-    rows_loaded   INTEGER NOT NULL DEFAULT 0,
-    status        TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
-    error         TEXT,
-    started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    finished_at   TIMESTAMPTZ
-);
-```
 
 ### QuickBooks (and later other connectors)
 

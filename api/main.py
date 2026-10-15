@@ -30,7 +30,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from api.core import database
 from api.core.config import get_settings
-from api.routers import accounts, billing, consultants, files, intake, skills
+from api.routers import accounts, billing, consultants, consultations, files, intake, skills, warehouse
+from api.services import auth
 
 logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
 
@@ -96,6 +97,8 @@ app.include_router(accounts.router, prefix="/api", tags=["accounts"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(consultants.router, prefix="/api", tags=["consultants"])
 app.include_router(billing.router, prefix="/api", tags=["billing"])
+app.include_router(consultations.router, prefix="/api", tags=["consultations"])
+app.include_router(warehouse.router, prefix="/api", tags=["warehouse"])
 
 
 @app.get("/health", tags=["health"])
@@ -104,13 +107,15 @@ async def health():
     Used by Render's health check and the frontend's warm-up ping.
 
     Needs no sign-in and touches no data. Also reports whether the database
-    pool is open, which is a quick way to see if DATABASE_URL works.
+    pool is open (a quick way to see if DATABASE_URL works) and which password
+    checker is on (Supabase Auth, or local hashes when SUPABASE_URL is empty).
 
     Returns:
-        dict: {"status": "ok", "database": "connected" or "in-memory"}.
+        dict: {"status": "ok", "database": "connected" or "in-memory",
+        "auth": "supabase" or "local"}.
 
     Example:
         GET /health
-        -> 200 {"status": "ok", "database": "in-memory"}
+        -> 200 {"status": "ok", "database": "in-memory", "auth": "local"}
     """
-    return {"status": "ok", "database": "connected" if database.pool else "in-memory"}
+    return {"status": "ok", "database": "connected" if database.pool else "in-memory", "auth": auth.mode()}

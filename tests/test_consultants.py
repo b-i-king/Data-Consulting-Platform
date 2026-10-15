@@ -58,7 +58,7 @@ def _signup(email, first="Dana", **extra):
         >>> _signup("ana@example.com", "Ana", wants_consultant=True).status_code
         201
     """
-    body = {"account_type": "individual", "first_name": first, "last_name": "Lee", "email": email, **extra}
+    body = {"password": "Correct-horse-9", "account_type": "individual", "first_name": first, "last_name": "Lee", "email": email, **extra}
     return client.post("/api/accounts/signup", json=body)
 
 
@@ -113,8 +113,8 @@ def test_consultant_sign_in_needs_the_access_code():
     assert _signup("brandon@example.com", "Brandon", access_code="nope").status_code == 403
     res = _signup("brandon@example.com", "Brandon", access_code=CODE)
     assert res.status_code == 201 and res.json()["account"]["role"] == "consultant"
-    assert client.post("/api/accounts/signin", json={"email": "brandon@example.com"}).status_code == 403
-    ok = client.post("/api/accounts/signin", json={"email": "brandon@example.com", "access_code": CODE})
+    assert client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9"}).status_code == 403
+    ok = client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9", "access_code": CODE})
     assert ok.status_code == 200 and ok.json()["account"]["role"] == "consultant"
 
 
@@ -154,6 +154,22 @@ def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
     assert plan["active"] == ["data_cleaning"]
 
 
+def test_consultants_see_all_seven_services_including_ai_preview():
+    """
+    Check that a consultant sees every service, including AI (not launched yet), in their own
+    workspace AND in a client's, while the client themselves still sees only launched services.
+    """
+    token = _consultant()
+    every = [s["id"] for s in client.get("/api/accounts/services", headers=_auth(token)).json()["services"]]
+    mine = client.get("/api/accounts/services", headers=_auth(token)).json()
+    assert mine["active"] == every and "ai" in mine["active"] and len(every) == 7
+    ana = _signup("ana@example.com", "Ana", wants_consultant=True).json()
+    acting = client.get("/api/accounts/services", headers=_auth(token, ana["account"]["id"])).json()
+    assert "ai" in acting["active"]
+    own = client.get("/api/accounts/services", headers=_auth(ana["access_token"])).json()
+    assert "ai" not in own["active"]
+
+
 def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
     """
     Check that a client who asked for a consultant before any existed is assigned to the first
@@ -176,7 +192,7 @@ def test_the_access_rule():
     other = _consultant("second@example.com", "Avery")
     mine = _signup("ana@example.com", "Ana", wants_consultant=True).json()
     theirs_id = client.post("/api/consultant/clients", headers=_auth(other), json={
-        "account_type": "business", "first_name": "Kai", "last_name": "Ono", "email": "kai@example.com",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Kai", "last_name": "Ono", "email": "kai@example.com",
         "company_name": "Ono Coffee"}).json()["id"]
     mine_id = mine["account"]["id"]
 
@@ -216,15 +232,15 @@ def test_other_industry_is_saved_and_empty_means_nothing():
     "Other" and a NAICS sector is rejected (422).
     """
     res = client.post("/api/accounts/signup", json={
-        "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",
         "company_name": "Lu Kitchen", "industry_other": "  Food   truck "})
     assert res.status_code == 201 and res.json()["account"]["industry_other"] == "Food truck"
     blank = client.post("/api/accounts/signup", json={
-        "account_type": "business", "first_name": "Jo", "last_name": "Ma", "email": "jo@example.com",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Jo", "last_name": "Ma", "email": "jo@example.com",
         "company_name": "Jo Co", "industry_other": "   "}).json()["account"]
     assert blank["industry_other"] is None and blank["naics_sector"] is None
     both = client.post("/api/accounts/signup", json={
-        "account_type": "business", "first_name": "Al", "last_name": "Ma", "email": "al@example.com",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Al", "last_name": "Ma", "email": "al@example.com",
         "company_name": "Al Co", "industry_other": "x", "industry_supersector": "service_providing",
         "naics_sector": "44-45"})
     assert both.status_code == 422

@@ -87,7 +87,14 @@ services the client chose are offered; the rest are badges from
 |---|---|---|
 | `api/core/config.py` | Settings from env vars | Adding a new setting |
 | `api/core/database.py` | Connection pool | Changing DB connection behavior |
-| `api/core/security.py` | JWT create/verify | Switching to Supabase Auth |
+| `api/core/security.py` | JWT create/verify | Changing login tokens |
+| `api/services/auth.py` | Passwords: Supabase Auth, or local scrypt hashes | Sign-in rules, Google/Apple later |
+| `api/services/consultations.py` + `api/routers/consultations.py` | Free consultation → paid link; Cal.com webhook; consultant confirmation | Booking / consultation rules |
+| `api/services/warehouse_loader.py` | Plans a load: mapping, steps with "why", previews, fingerprint (pandas only) | Changing how files fit the warehouse |
+| `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
+| `scripts/setup_database.py` | Runs schema.sql + warehouse.sql, lists every table and row count | After pulling schema changes |
+| `web/components/explore/WarehouseLoad.tsx` | Data Engineering "Load into database": preview, why, accept | Changing the load screen |
+| `web/components/workspace/ConsultationPanel.tsx` | Consultant's Consultations card (confirm the free call) | Changing consultation tracking |
 | `api/models/accounts.py` | Validates signup/quote JSON | Adding signup fields |
 | `api/routers/*.py` | HTTP endpoints (thin) | Adding an endpoint |
 | `api/services/file_reader.py` | Read uploads (format registry) | Supporting a new file type: add one `FileFormat` + a test sample |

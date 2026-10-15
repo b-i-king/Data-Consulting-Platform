@@ -106,17 +106,47 @@ jobs (ML training). At that point, add temporary storage (Supabase Storage with 
 24-hour auto-delete) and a background job queue. Pricing would then add a
 storage component — see [PRICING.md](PRICING.md).
 
-**Opt-in exception: Data Engineering.** Clients who buy Data Engineering can
-choose to have their data stored in the warehouse schema (`db/warehouse.sql`,
-explained in [DATA_MODEL.md](DATA_MODEL.md)): one shared star schema for all
-clients, `client_id` on every row, Row Level Security for isolation. The free
-cleaning flow never writes to it.
+**Managed storage (opt-in exception): Data Engineering.** ✅ Built. Clients with
+Data Engineering (or their consultant, working for them) can have their cleaned
+data stored in the warehouse schema (`db/warehouse.sql`, explained in
+[DATA_MODEL.md](DATA_MODEL.md)): one shared star schema for all clients,
+`client_id` on every row, Row Level Security for isolation. The free cleaning
+flow never writes to it. The design change, and its safeguards:
+
+1. **Preview first.** A spreadsheet doesn't fit the warehouse as-is (one sales
+   file becomes customers, products and events). `POST /api/warehouse/preview`
+   (`api/services/warehouse_loader.py`) shows every transformation step with
+   *why* it's needed, the first rows of each table as they will be stored, and
+   which rows are skipped and why. **Nothing is stored by a preview.**
+2. **Explicit acceptance.** Only "Accept and load" (`POST /api/warehouse/load`)
+   writes, and only if the plan rebuilt from the upload has the same
+   *fingerprint* as the preview the person accepted — a changed file or choice
+   is refused (409), so what's stored is exactly what they saw.
+3. **Consent on record.** The first load needs the "store my data" box ticked,
+   saved in `storage_consents` (with the terms version and who clicked).
+   Withdrawing consent means deleting the client's warehouse rows within 30 days
+   (manual for now — see ROADMAP.md).
+4. **Audit trail.** Each load writes a `load_runs` row (rows in / loaded /
+   skipped, status, error, who started it) — metadata only.
+5. **No duplicates.** Every event row has a stable ID (the client's row ID, or a
+   fingerprint of the row), so reloading the same file stores nothing new.
+6. **Isolation.** Each load runs in one transaction that first sets
+   `app.client_id`; the RLS policies then only let it touch that client's rows.
 
 ### 2. Guest first, account only at download
 
 Every step up to the preview works without an account. Signup asks only for
-what's needed: first name, last name, email (plus company name and optional
-team members for businesses). This keeps the funnel short.
+what's needed: first name, last name, email, password (plus company name and
+optional team members for businesses). This keeps the funnel short.
+
+**Passwords** (`api/services/auth.py`): email + password, in-house to start.
+With `SUPABASE_URL` / `SUPABASE_KEY` set, Supabase Auth stores and checks the
+password (`sign_up`, `sign_in_with_password` from Supabase's Python guide) and
+`accounts.auth_user_id` links the account to the Supabase user. Without them
+(local development, tests) the API keeps a one-way scrypt hash in
+`accounts.password_hash`. Either way the API then issues its own login token,
+as before. Google / Apple sign-in can be added later through Supabase Auth with
+no table changes.
 
 ### 3. The backend owns the questionnaire
 
@@ -161,7 +191,18 @@ their subscription package (Data Cleaning is always open). Projects picked on
 "Your needs" are interest the consultant sees, not unlocks.
 Downloads a consultant makes are billed to the client (`usage_events.consultant_id`
 records who did it). **Client data is still never stored** — the consultant
-works on files the client shares, in the same in-memory way.
+works on files the client shares, in the same in-memory way (unless the client
+opts in to managed storage, above).
+
+Consultants also see services that aren't launched yet (AI) as a **preview**,
+so all seven services can be tested; clients still see them as "Early access".
+
+**Consultations** (`api/services/consultations.py`): the first 30-minute call is
+free, then $80/hour. Booking happens on Cal.com, so the app learns about
+bookings from Cal.com's signed webhook (`consultations` table: booked,
+rescheduled, canceled, ended) and the consultant confirms the call happened.
+Only that confirmation uses up the free call; from then on the client's
+booking links point to `PAID_BOOKING_URL`.
 
 ### 6. Payments through Stripe, decided by the webhook
 

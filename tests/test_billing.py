@@ -66,7 +66,7 @@ def _signup(email="pat@example.com", **extra):
         >>> client.get("/api/accounts/services", headers=_h(token)).status_code
         200
     """
-    res = client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": "Pat",
+    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "account_type": "individual", "first_name": "Pat",
                                                     "last_name": "Lee", "email": email, **extra})
     body = res.json()
     return body["access_token"], body["account"]["id"]
@@ -197,7 +197,9 @@ def test_consulting_hours_in_test_mode_and_limits():
     res = client.post("/api/billing/consulting-hours", headers=_h(token), json={"hours": 2, "service_id": "data_engineering"})
     assert res.json()["activated"]
     consulting = client.get("/api/accounts/services", headers=_h(token)).json()["consulting"]
-    assert consulting == {"rate_per_hour_usd": 80.0, "free_minutes": 30, "hours_bought": 2.0}
+    assert {k: consulting[k] for k in ("rate_per_hour_usd", "free_minutes", "hours_bought")} == \
+        {"rate_per_hour_usd": 80.0, "free_minutes": 30, "hours_bought": 2.0}
+    assert consulting["free_used"] is False   # buying hours doesn't use up the free consultation
     assert client.post("/api/billing/consulting-hours", headers=_h(token), json={"hours": 0}).status_code == 422
     assert client.post("/api/billing/portal", headers=_h(token)).status_code == 400   # no portal in test mode
 
@@ -208,10 +210,10 @@ def test_team_members_cant_change_billing():
     member still shares the owner's active plan.
     """
     owner = client.post("/api/accounts/signup", json={
-        "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
+        "password": "Correct-horse-9", "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
         "company_name": "Ko Co", "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}],
     }).json()["access_token"]
-    member = client.post("/api/accounts/signin", json={"email": "bo@example.com"}).json()["access_token"]
+    member = client.post("/api/accounts/signin", json={"email": "bo@example.com", "password": "Correct-horse-9"}).json()["access_token"]
     assert client.post("/api/billing/checkout", headers=_h(member), json={"plan_ids": ["all_tools"], "interval": "month"}).status_code == 403
     assert client.post("/api/billing/checkout", headers=_h(owner), json={"plan_ids": ["all_tools"], "interval": "month"}).status_code == 200
     # ...but they share the owner's plan.
