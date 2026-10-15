@@ -28,16 +28,81 @@ class TeamMemberIn(BaseModel):
     @field_validator("first_name")
     @classmethod
     def _first(cls, v: str) -> str:
+        """
+        Validate and tidy the first name (Pydantic field validator).
+
+        Runs automatically when the JSON body is parsed. Delegates to
+        `validation.clean_person_name`: spaces are collapsed, and only letters
+        (any alphabet), single spaces, hyphens, apostrophes and periods are
+        allowed, starting with a capital letter.
+
+        Args:
+            v: str, the first name as sent by the browser.
+
+        Returns:
+            str: the tidied first name.
+
+        Raises:
+            ValueError: with a message safe to show the person (e.g. "First name must
+                start with a capital letter..."); FastAPI turns it into a 422 reply.
+
+        Example:
+            >>> TeamMemberIn(first_name="  Ana ", last_name="O'Brien-Smith", email="a@example.com").first_name
+            'Ana'
+        """
         return validation.clean_person_name(v, "First name")
 
     @field_validator("last_name")
     @classmethod
     def _last(cls, v: str) -> str:
+        """
+        Validate and tidy the last name (Pydantic field validator).
+
+        Runs automatically when the JSON body is parsed. Delegates to
+        `validation.clean_person_name`: spaces are collapsed, and only letters
+        (any alphabet), single spaces, hyphens, apostrophes and periods are
+        allowed, starting with a capital letter.
+
+        Args:
+            v: str, the last name as sent by the browser.
+
+        Returns:
+            str: the tidied last name.
+
+        Raises:
+            ValueError: with a message safe to show the person (e.g. "Last name must
+                start with a capital letter..."); FastAPI turns it into a 422 reply.
+
+        Example:
+            >>> TeamMemberIn(first_name="  Ana ", last_name="O'Brien-Smith", email="a@example.com").last_name
+            "O'Brien-Smith"
+        """
         return validation.clean_person_name(v, "Last name")
 
     @field_validator("email", mode="before")
     @classmethod
     def _email(cls, v: str) -> str:
+        """
+        Validate the email format and store it in lowercase (Pydantic field validator).
+
+        `mode="before"` means this runs on the raw value BEFORE Pydantic's own
+        EmailStr check, so spaces are trimmed and the address lowercased first
+        (Ana@Example.com and ana@example.com are the same account).
+
+        Args:
+            v: str, the email address as sent by the browser.
+
+        Returns:
+            str: the normalized, lowercase email address.
+
+        Raises:
+            ValueError: "Email address is required." or "Enter a valid email
+                address, like name@example.com (...)"; FastAPI replies 422.
+
+        Example:
+            >>> TeamMemberIn(first_name="Ana", last_name="Lee", email="  Ana@Example.COM ").email
+            'ana@example.com'
+        """
         return validation.clean_email(v)
 
 
@@ -81,38 +146,194 @@ class SignupIn(BaseModel):
     @field_validator("first_name")
     @classmethod
     def _first(cls, v: str) -> str:
+        """
+        Validate and tidy the account holder's first name (Pydantic field validator).
+
+        Same rules as `TeamMemberIn._first`, via `validation.clean_person_name`:
+        letters from any alphabet plus single spaces, hyphens, apostrophes and
+        periods, starting with a capital letter.
+
+        Args:
+            v: str, the first name as sent by the browser.
+
+        Returns:
+            str: the tidied first name (extra spaces collapsed).
+
+        Raises:
+            ValueError: e.g. "First name must start with a capital letter...";
+                FastAPI turns it into a 422 reply.
+
+        Example:
+            >>> SignupIn(account_type="individual", first_name=" Ana ", last_name="Lee",
+            ...          email="a@example.com").first_name
+            'Ana'
+        """
         return validation.clean_person_name(v, "First name")
 
     @field_validator("last_name")
     @classmethod
     def _last(cls, v: str) -> str:
+        """
+        Validate and tidy the account holder's last name (Pydantic field validator).
+
+        Same rules as `_first`, via `validation.clean_person_name`.
+
+        Args:
+            v: str, the last name as sent by the browser.
+
+        Returns:
+            str: the tidied last name.
+
+        Raises:
+            ValueError: e.g. "Last name can only use letters..."; FastAPI replies 422.
+
+        Example:
+            >>> SignupIn(account_type="individual", first_name="Ana", last_name="O'Brien-Smith",
+            ...          email="a@example.com").last_name
+            "O'Brien-Smith"
+        """
         return validation.clean_person_name(v, "Last name")
 
     @field_validator("email", mode="before")
     @classmethod
     def _email(cls, v: str) -> str:
+        """
+        Validate the sign-up email format and store it in lowercase (Pydantic field validator).
+
+        `mode="before"` runs this on the raw value before Pydantic's EmailStr
+        check. Lowercasing matters because each address may belong to only one
+        account, and Ana@Example.com and ana@example.com are the same address.
+
+        Args:
+            v: str, the email address as sent by the browser.
+
+        Returns:
+            str: the normalized, lowercase email address.
+
+        Raises:
+            ValueError: "Email address is required." or "Enter a valid email
+                address, like name@example.com (...)"; FastAPI replies 422.
+
+        Example:
+            >>> SignupIn(account_type="individual", first_name="Ana", last_name="Lee",
+            ...          email=" Ana@Example.COM ").email
+            'ana@example.com'
+        """
         return validation.clean_email(v)
 
     @field_validator("industry_other")
     @classmethod
     def _industry_other(cls, v: str | None) -> str | None:
+        """
+        Tidy the free-text "Other" industry; blank becomes None (Pydantic field validator).
+
+        Trims the ends and collapses runs of spaces to one. An empty or
+        all-spaces answer is turned into None so nothing is saved.
+
+        Args:
+            v: str | None, what the person typed under "Other", or None.
+
+        Returns:
+            str | None: the tidied text, or None when nothing meaningful was typed.
+
+        Example:
+            >>> base = dict(account_type="business", first_name="Ana", last_name="Lee",
+            ...             email="a@example.com", company_name="Rise Bakery")
+            >>> SignupIn(**base, industry_other="  Home   bakery ").industry_other
+            'Home bakery'
+            >>> SignupIn(**base, industry_other="   ").industry_other is None
+            True
+        """
         v = " ".join((v or "").split())     # trim and collapse spaces
         return v or None
 
     @field_validator("company_name")
     @classmethod
     def _company(cls, v: str | None) -> str | None:
+        """
+        Validate and tidy the business name; blank becomes None (Pydantic field validator).
+
+        A missing or all-spaces name becomes None (whether it is REQUIRED is
+        checked later in `_business_rules`). Otherwise
+        `validation.clean_company_name` applies: 2–200 characters, letters,
+        digits, spaces and common company punctuation (& ' . , - ( ) / + ! # @ : ;),
+        starting with a letter or digit.
+
+        Args:
+            v: str | None, the business name as sent by the browser, or None.
+
+        Returns:
+            str | None: the tidied business name, or None when left empty.
+
+        Raises:
+            ValueError: e.g. "Business name must be at least 2 characters.";
+                FastAPI replies 422.
+
+        Example:
+            >>> SignupIn(account_type="business", first_name="Ana", last_name="Lee",
+            ...          email="a@example.com", company_name="  Ben &  Jerry's, LLC ").company_name
+            "Ben & Jerry's, LLC"
+        """
         return validation.clean_company_name(v) if v and v.strip() else None
 
     @field_validator("location_id")
     @classmethod
     def _location(cls, v: int | None) -> int | None:
+        """
+        Check that the chosen location id is a real city in our list (Pydantic field validator).
+
+        Only the GeoNames city id is trusted from the browser; the city, state
+        and country names are looked up on the server (api/services/locations.py).
+
+        Args:
+            v: int | None, the GeoNames city id picked in the form, or None.
+
+        Returns:
+            int | None: the same id when it exists, or None when no location was given.
+
+        Raises:
+            ValueError: "Choose your city from the list." for an unknown id;
+                FastAPI replies 422.
+
+        Example:
+            >>> SignupIn(account_type="individual", first_name="Ana", last_name="Lee",
+            ...          email="a@example.com").location_id is None
+            True
+        """
         if v is not None and locations.get(v) is None:
             raise ValueError("Choose your city from the list.")
         return v
 
     @model_validator(mode="after")
     def _business_rules(self) -> "SignupIn":
+        """
+        Cross-field checks that need the whole form (Pydantic model validator).
+
+        `mode="after"` runs once every single field has passed its own checks.
+        Rules, in order:
+        - Individual accounts may not have team members, an industry (NAICS or
+          "Other") or a company size.
+        - "Other" industry and a NAICS sector are mutually exclusive.
+        - company_size must be one of the LinkedIn codes "A"–"I".
+        - Business accounts must have a company name.
+        - The industry answers must be consistent (`intake.validate_industry`:
+          supersector -> sector -> subsector, each requiring the one before).
+        - The same email may not appear twice (owner plus team members).
+
+        Returns:
+            SignupIn: the validated model itself, unchanged.
+
+        Raises:
+            ValueError: with the first rule broken, e.g. "Business name is
+                required for a business account."; FastAPI replies 422.
+
+        Example:
+            >>> SignupIn(account_type="individual", first_name="Ana", last_name="Lee",
+            ...          email="a@example.com", company_size="C")
+            Traceback (most recent call last):
+            ...
+            pydantic_core.ValidationError: ... Company size applies to business accounts only. ...
+        """
         # Only businesses have teams and an industry.
         if self.account_type == "individual":
             if self.team_members:
@@ -147,6 +368,26 @@ class SigninIn(BaseModel):
     @field_validator("email", mode="before")
     @classmethod
     def _email(cls, v: str) -> str:
+        """
+        Validate the sign-in email format and lowercase it (Pydantic field validator).
+
+        Lowercasing makes sign-in match the address stored at sign-up, however
+        the person capitalizes it today.
+
+        Args:
+            v: str, the email address as sent by the browser.
+
+        Returns:
+            str: the normalized, lowercase email address.
+
+        Raises:
+            ValueError: "Email address is required." or "Enter a valid email
+                address, like name@example.com (...)"; FastAPI replies 422.
+
+        Example:
+            >>> SigninIn(email="  Ana@Example.COM ").email
+            'ana@example.com'
+        """
         return validation.clean_email(v)
 
 

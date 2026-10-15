@@ -44,6 +44,24 @@ ALLOWED_OPS = {"=", "!=", ">", ">=", "<", "<=", "in"}
 
 
 def _match_col(word: str, df: pd.DataFrame) -> str | None:
+    """
+    Find the column a word from the question refers to, forgiving plurals and spaces.
+
+    Matches (case-insensitive) when the column name equals the word, equals it with
+    a trailing "s" removed on both sides ("stores" -> store), or equals it with
+    underscores read as spaces ("payment method" -> payment_method).
+
+    Args:
+        word: a word or phrase from the question.
+        df: the table whose columns are searched.
+
+    Returns:
+        str | None: the matching column name, or None if nothing matches.
+
+    Example:
+        >>> _match_col("stores", pd.DataFrame(columns=["store", "amount"]))
+        'store'
+    """
     w = word.strip().lower().rstrip("s")
     for c in df.columns:
         n = str(c).lower()
@@ -53,7 +71,34 @@ def _match_col(word: str, df: pd.DataFrame) -> str | None:
 
 
 def parse(question: str, df: pd.DataFrame) -> dict:
-    """Very small rule-based parser -> plan dict. Raises SkillInputError if unsure."""
+    """
+    Very small rule-based parser -> plan dict. Raises SkillInputError if unsure.
+
+    Understood shapes (lowercased, trailing "?" ignored):
+    - "... in 2025" -> {"year": 2025}
+    - "... for <column> <value>" -> a filter <column> = <value> (value matched to the data's spelling)
+    - "top N <group> by <metric>" -> sum of metric by group, limited to N
+    - "<agg word> [of|the] <metric> [by <group>]", where the agg word is one of
+      AGG_WORDS (total, average, median, max, min, how many, count, ...); for counts
+      the metric may be "rows", "records", "orders" or empty
+
+    Args:
+        question: the plain-English question.
+        df: the table, used to match words to column names and filter values.
+
+    Returns:
+        dict: a plan with "filters" (list of {column, op, value}) plus any of "metric",
+        "agg", "group_by", "limit", "year" — the format `execute` runs.
+
+    Raises:
+        SkillInputError: the question doesn't start with a known shape, or names a
+            metric or group column that doesn't exist.
+
+    Example:
+        >>> df = pd.DataFrame({"store": ["Midtown"], "amount": [5.0]})
+        >>> parse("total amount by store", df)
+        {'filters': [], 'agg': 'sum', 'metric': 'amount', 'group_by': 'store'}
+    """
     q = question.lower().strip().rstrip("?")
     plan: dict = {"filters": []}
     if m := re.search(r"\bin (19|20)(\d\d)\b", q):
@@ -88,7 +133,33 @@ def parse(question: str, df: pd.DataFrame) -> dict:
 
 
 def execute(df: pd.DataFrame, plan: dict) -> tuple[pd.DataFrame | float, str, int]:
-    """Run a plan with a fixed set of pandas operations. Returns (answer, explanation, rows used)."""
+    """
+    Run a plan with a fixed set of pandas operations. Returns (answer, explanation, rows used).
+
+    Nothing is `eval`-ed: only the aggregations in ALLOWED_AGG and filter operators in
+    ALLOWED_OPS are accepted. Order: filters -> year (on the plan's date_column or the
+    first date column) -> group and aggregate (largest first, `limit` rows) or a
+    single aggregate. With no metric, rows are counted.
+
+    Args:
+        df: the table to answer from.
+        plan: dict with optional keys "metric", "agg" (default "sum"), "group_by",
+            "filters" ([{column, op, value}], op default "="), "year", "date_column", "limit".
+
+    Returns:
+        tuple: (answer, explanation, rows used) — the answer is a DataFrame
+        (<group>, value) when grouped, else a float; the explanation describes the
+        calculation in words; rows used is the number of rows after filtering.
+
+    Raises:
+        SkillInputError: unknown aggregation, operator or column, or a year was asked
+            for but there is no date column.
+
+    Example:
+        >>> df = pd.DataFrame({"store": ["A", "A", "B"], "amount": [1.0, 2.0, 5.0]})
+        >>> execute(df, {"metric": "amount", "agg": "sum"})
+        (8.0, 'sum of `amount` (3 rows)', 3)
+    """
     agg = plan.get("agg", "sum")
     if agg not in ALLOWED_AGG:
         raise SkillInputError(f"Aggregation must be one of {sorted(ALLOWED_AGG)}.")
@@ -125,6 +196,32 @@ def execute(df: pd.DataFrame, plan: dict) -> tuple[pd.DataFrame | float, str, in
 
 
 def run(df, question=None, plan=None) -> SkillResult:
+    """
+    Answer a plain-English question (or a structured plan) from the data, showing how.
+
+    A given `plan` is used as is; otherwise `question` is turned into a plan by
+    `parse`. The answer always comes with a "How:" finding describing the calculation,
+    plus a caution when fewer than 30 rows were used.
+
+    Args:
+        df: the table to answer from.
+        question: e.g. "top 5 product by amount in 2025".
+        plan: structured plan, e.g. {"metric": "amount", "agg": "sum", "group_by": "store"}
+            (what a language model will produce once the AI service launches).
+
+    Returns:
+        SkillResult: for grouped answers, a summary naming the leaders and table
+        "answer"; for single numbers, "The answer is ..." with data["answer"]; data["plan"]
+        always holds the plan that ran. No matching rows gives "No rows match that question."
+
+    Raises:
+        SkillInputError: neither a question nor a plan was given, or the question/plan
+            can't be answered (see `parse` and `execute`).
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv"), question="total amount by store").summary
+        # 'Midtown leads with ..., followed by Decatur (...).'
+    """
     if not plan and not question:
         raise SkillInputError("Ask a question (e.g. 'total amount by store') or give a plan.")
     plan = plan or parse(question, df)

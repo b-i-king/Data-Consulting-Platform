@@ -97,21 +97,73 @@ _KEY_HINTS = ("id", "_key", "key", "number", "num", "code", "email", "sku")
 
 
 def normalize_column(name: str) -> str:
-    """'Customer ID ' -> 'customer_id'. Used only for comparing, never shown."""
+    """
+    Normalize a column name for comparing: 'Customer ID ' -> 'customer_id'.
+
+    Trims and lowercases the name, turns runs of spaces, dashes, dots and slashes
+    into one underscore, collapses repeated underscores and strips them from the
+    ends. Used only for comparing, never shown to the user.
+
+    Args:
+        name: str: the column name as it appears in the file.
+
+    Returns:
+        str: the normalized name.
+
+    Example:
+        >>> normalize_column("Customer ID ")
+        'customer_id'
+        >>> normalize_column("Order-Date/Time")
+        'order_date_time'
+    """
     name = name.strip().lower()
     name = re.sub(r"[\s\-./]+", "_", name)
     return re.sub(r"_+", "_", name).strip("_")
 
 
 def jaccard(a: set[str], b: set[str]) -> float:
-    """Share of columns two sets have in common (0.0 = none, 1.0 = identical)."""
+    """
+    Share of columns two sets have in common (0.0 = none, 1.0 = identical).
+
+    Jaccard similarity = shared columns / all distinct columns. Two empty sets
+    count as identical (1.0) so the division never fails. Compared against
+    `SCHEMA_MATCH_THRESHOLD` (0.8) to decide whether two files have the "same structure".
+
+    Args:
+        a: set[str]: normalized column names of the first dataset.
+        b: set[str]: normalized column names of the second dataset.
+
+    Returns:
+        float: similarity between 0.0 and 1.0.
+
+    Example:
+        >>> jaccard({"date", "amount"}, {"date", "amount", "store"})
+        0.6666666666666666
+    """
     if not a and not b:
         return 1.0
     return len(a & b) / len(a | b)
 
 
 def years_in_filename(name: str) -> list[int]:
-    """'sales_2023_Q1.csv' -> [2023]."""
+    """
+    Find the four-digit years (1990–2099) in a file name: 'sales_2023_Q1.csv' -> [2023].
+
+    A year must not be part of a longer number (so "20231" is ignored). Each
+    year is returned once, sorted.
+
+    Args:
+        name: str: the file or dataset name.
+
+    Returns:
+        list[int]: distinct years found, ascending; [] if none.
+
+    Example:
+        >>> years_in_filename("sales_2023_Q1.csv")
+        [2023]
+        >>> years_in_filename("orders_2022_to_2024.xlsx")
+        [2022, 2024]
+    """
     return sorted({int(y) for y in _YEAR_RE.findall(name)})
 
 
@@ -120,8 +172,23 @@ def years_in_data(df: pd.DataFrame, max_cols: int = 5) -> list[int]:
     Look for date-like columns and return the distinct years they cover.
 
     We only test columns whose NAME suggests a date (date, time, created,
-    month, year, period...) to keep this fast on wide files, and we only use
-    a column if most of its values parse as dates.
+    updated, month, year, period, day) to keep this fast on wide files, and
+    at most `max_cols` of them. For each:
+    - a NUMERIC column whose name contains "year": values between 1990 and 2099
+      are taken as years (up to 50 distinct values);
+    - otherwise the first 2,000 non-missing values are parsed as dates, and the
+      column is used only if at least 80% of them parse.
+
+    Args:
+        df: pd.DataFrame: the dataset to inspect.
+        max_cols: int: the most date-like columns to test (default 5).
+
+    Returns:
+        list[int]: distinct years, ascending; [] if no column looks like dates.
+
+    Example:
+        >>> years_in_data(pd.DataFrame({"order_date": ["2023-01-05", "2024-02-01"]}))
+        [2023, 2024]
     """
     candidates = [c for c in df.columns if re.search(r"date|time|created|updated|month|year|period|day", str(c), re.I)]
     years: set[int] = set()
@@ -143,8 +210,24 @@ def classify_entity(columns: list[str]) -> tuple[str, dict[str, int]]:
     """
     Score each entity type by keyword hits in column names.
 
-    Returns (best_entity, all_scores). If nothing matches, the entity is
-    "general" — the user can rename it in the UI.
+    Each normalized column name earns one point for every keyword in
+    `ENTITY_KEYWORDS[entity]` that it CONTAINS (so "order_total" scores two
+    points for "transactions": "order" and "total"). The entity with the highest
+    score wins; on a tie, the one listed first in `ENTITY_KEYWORDS` wins. If
+    nothing matches, the entity is "general" — the user can rename it in the UI.
+
+    Args:
+        columns: list[str]: the dataset's column names (any spelling).
+
+    Returns:
+        tuple[str, dict[str, int]]: (best_entity, all_scores), where all_scores maps
+        every entity in `ENTITY_KEYWORDS` to its point total.
+
+    Example:
+        >>> classify_entity(["Order ID", "Amount", "Tax"])[0]
+        'transactions'
+        >>> classify_entity(["foo", "bar"])[0]
+        'general'
     """
     norm = [normalize_column(c) for c in columns]
     scores = {
@@ -156,7 +239,25 @@ def classify_entity(columns: list[str]) -> tuple[str, dict[str, int]]:
 
 
 def looks_like_key(col: str) -> bool:
-    """True for names such as 'customer_id', 'order_number', 'email', 'sku'."""
+    """
+    Say whether a column name looks like an identifier usable as a join key.
+
+    True when the normalized name ENDS with one of `_KEY_HINTS` ("id", "_key",
+    "key", "number", "num", "code", "email", "sku"), e.g. 'customer_id',
+    'order_number', 'email', 'sku'. Only the name is checked, not the values.
+
+    Args:
+        col: str: the column name (any spelling; it is normalized first).
+
+    Returns:
+        bool: True if the column could link two tables.
+
+    Example:
+        >>> looks_like_key("Customer ID")
+        True
+        >>> looks_like_key("city")
+        False
+    """
     return normalize_column(col).endswith(_KEY_HINTS)
 
 
@@ -209,7 +310,37 @@ class CategorizationResult:
 # ── Main entry point ─────────────────────────────────────────────────────────
 
 def categorize(datasets: list[LoadedDataset]) -> CategorizationResult:
-    """Run steps 1–6 described at the top of this file."""
+    """
+    Work out how several uploaded datasets relate (steps 1–6 at the top of this file).
+
+    1. Fingerprint each dataset: entity guess, years in its name and dates.
+    2. Group datasets whose normalized column sets have Jaccard similarity >=
+       `SCHEMA_MATCH_THRESHOLD` with the group's FIRST member (greedy, in upload order).
+    3. Label each group "single", "same_schema" or "partitioned_by_year" (members
+       carry different years, from file names first, else from date columns).
+    4. Give each group the most common entity of its members.
+    5. Between every pair of groups, suggest a "key" relationship on shared
+       ID-like columns, or else a "fuzzy" one on email / phone / name.
+    6. Write an overall next step.
+    With a single dataset, steps 2–6 are skipped: mode is "single_file" and the
+    advice is to go straight to cleaning.
+
+    Args:
+        datasets: list[LoadedDataset]: the tables read from the upload by
+            `file_reader.py` (one per CSV, or per sheet of a workbook).
+
+    Returns:
+        CategorizationResult: mode ("single_file" | "multiple_files"), one
+        DatasetSummary per dataset (with its group_id), the groups, suggested
+        relationships, and a plain-English next_step.
+
+    Example:
+        Two files "sales_2023.csv" and "sales_2024.csv", both with Order Date, Amount and Tax columns:
+            result = categorize(datasets)
+            result.mode                  # "multiple_files"
+            result.groups[0].structure   # "partitioned_by_year"
+            result.groups[0].label       # "Transactions (partitioned by year)"
+    """
 
     # Step 1 — fingerprint every dataset.
     summaries: list[DatasetSummary] = []
@@ -361,7 +492,25 @@ def categorize(datasets: list[LoadedDataset]) -> CategorizationResult:
 
 
 def _fuzzy_link_fields(datasets: list[LoadedDataset], i: int, j: int) -> list[str]:
-    """Which of email / phone / name both datasets have (for fuzzy linking)."""
+    """
+    List which of email / phone / name BOTH datasets have (for fuzzy linking).
+
+    Uses `detect_match_columns` on each dataset. A "name" counts when the
+    dataset has a single name column or both first and last name columns.
+
+    Args:
+        datasets: list[LoadedDataset]: all uploaded datasets.
+        i: int: position in `datasets` of the first dataset (a group's first member).
+        j: int: position in `datasets` of the second dataset.
+
+    Returns:
+        list[str]: some of "email", "phone", "name", in that order; [] if the two
+        datasets share none, so no fuzzy relationship is suggested.
+
+    Example:
+        If dataset 0 has "Email" and "Customer Name" and dataset 1 has "email" and "company":
+            _fuzzy_link_fields(datasets, 0, 1)   # ["email", "name"]
+    """
     a, b = detect_match_columns(datasets[i].df), detect_match_columns(datasets[j].df)
     fields = []
     if a.email and b.email:
@@ -378,10 +527,27 @@ def combine_group(datasets: list[LoadedDataset], member_names: list[str]) -> pd.
     """
     Stack (append) the datasets of one group into a single DataFrame.
 
-    A `source_file` column is added so every row remembers where it came
-    from (and therefore which year, for year-partitioned groups). Columns are
-    matched on their normalized name so "Customer ID" and "customer_id" line
-    up; the first file's spelling wins.
+    A `source_file` column is added (as the first column) so every row remembers
+    where it came from (and therefore which year, for year-partitioned groups).
+    Columns are matched on their normalized name so "Customer ID" and
+    "customer_id" line up; the first file's spelling wins. Columns only some
+    files have are kept, with blanks for the other files' rows. A group with
+    ONE member is returned as a copy without `source_file`.
+
+    Args:
+        datasets: list[LoadedDataset]: all uploaded datasets.
+        member_names: list[str]: the `name` of each dataset to stack, in the order
+            to stack them (usually `DatasetGroup.members`).
+
+    Returns:
+        pd.DataFrame: the stacked rows with a fresh 0..n-1 index.
+
+    Raises:
+        KeyError: if a name in `member_names` is not one of the datasets.
+
+    Example:
+        combine_group(datasets, ["sales_2023.csv", "sales_2024.csv"])
+        # -> columns: source_file, Order Date, Amount, ... (rows of 2023, then 2024)
     """
     by_name = {d.name: d for d in datasets}
     frames = []
@@ -402,7 +568,24 @@ def combine_group(datasets: list[LoadedDataset], member_names: list[str]) -> pd.
 
 
 def _entity_label(entity: str) -> str:
-    """'employees_payroll' -> 'Employees / Payroll'."""
+    """
+    Turn an entity id into a display label: 'employees_payroll' -> 'Employees / Payroll'.
+
+    Known entities use a fixed label; any other id has underscores replaced by
+    spaces and is title-cased.
+
+    Args:
+        entity: str: an entity id from `classify_entity` (or one the user typed).
+
+    Returns:
+        str: the label shown in the UI.
+
+    Example:
+        >>> _entity_label("employees_payroll")
+        'Employees / Payroll'
+        >>> _entity_label("web_traffic")
+        'Web Traffic'
+    """
     return {
         "transactions": "Transactions",
         "customers": "Customers",

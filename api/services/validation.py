@@ -48,17 +48,78 @@ COMPANY_PUNCTUATION = set("&'’.,-()/+!#@:; ")
 
 
 def _tidy(value: str) -> str:
-    """Unicode-normalize (é typed two ways becomes one) and collapse spaces."""
+    """
+    Unicode-normalize (é typed two ways becomes one) and collapse spaces.
+
+    NFC normalization joins a letter and a separate accent mark into one
+    character, so the same name always compares equal. Runs of whitespace
+    (spaces, tabs, newlines) become a single space, and the ends are trimmed.
+
+    Args:
+        value: the raw text from the form; None is treated as "".
+
+    Returns:
+        str: the tidied text.
+
+    Example:
+        >>> _tidy("  José    María ")
+        'José María'
+    """
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", value or "")).strip()
 
 
 def _is_letter(ch: str) -> bool:
     # Letters (L*) and accent marks that combine with them (M*), in any alphabet.
+    """
+    True for a letter, or an accent mark that combines with a letter, in any alphabet.
+
+    Uses the Unicode category: "L..." (letters) and "M..." (combining marks).
+    Digits, spaces, punctuation and emoji are not letters.
+
+    Args:
+        ch: a single character.
+
+    Returns:
+        bool: True if `ch` counts as a letter for name validation.
+
+    Example:
+        >>> _is_letter("ñ"), _is_letter("中"), _is_letter("7"), _is_letter("-")
+        (True, True, False, False)
+    """
     return unicodedata.category(ch)[0] in ("L", "M")
 
 
 def clean_person_name(value: str, field: str = "Name") -> str:
-    """Validate a first or last name; returns the tidied name."""
+    """
+    Validate a first or last name; returns the tidied name.
+
+    Rules, checked in order after tidying (see _tidy):
+    - required, and at most 100 characters
+    - only letters (any alphabet, accents fine) and the separators
+      space, hyphen, apostrophe (' or ’) and period
+    - must start with a letter, and with a capital letter when the alphabet
+      has capitals (Chinese, for example, has none, so it is not checked)
+    - no two separators in a row ("--", "''"); "J. R." is allowed
+    - cannot end with a space, hyphen or apostrophe (a period is fine: "Jr.")
+
+    Args:
+        value: the raw text from the form.
+        field: the field's name used in error messages (default "Name"),
+            e.g. "First name".
+
+    Returns:
+        str: the tidied, valid name.
+
+    Raises:
+        ValueError: with a message that is safe to show the person.
+
+    Example:
+        >>> clean_person_name("O'Brien-Smith")
+        "O'Brien-Smith"
+        >>> clean_person_name("ana", field="First name")
+        Traceback (most recent call last):
+        ValueError: First name must start with a capital letter (for example, Ana — not ana).
+    """
     name = _tidy(value)
     if not name:
         raise ValueError(f"{field} is required.")
@@ -82,7 +143,30 @@ def clean_person_name(value: str, field: str = "Name") -> str:
 
 
 def clean_company_name(value: str) -> str:
-    """Validate a business name; returns the tidied name."""
+    """
+    Validate a business name; returns the tidied name.
+
+    Rules, checked in order after tidying (see _tidy):
+    - 2 to 200 characters
+    - only letters (any alphabet), digits, spaces and & ' ’ . , - ( ) / + ! # @ : ;
+    - must start with a letter or a digit
+
+    Args:
+        value: the raw text from the form.
+
+    Returns:
+        str: the tidied, valid business name.
+
+    Raises:
+        ValueError: with a message that is safe to show the person.
+
+    Example:
+        >>> clean_company_name("Ben & Jerry's, LLC")
+        "Ben & Jerry's, LLC"
+        >>> clean_company_name("<Acme>")
+        Traceback (most recent call last):
+        ValueError: Business name can use letters, numbers, spaces and & ' . , - ( ) / + ! # @ : ; — remove: < >
+    """
     name = _tidy(value)
     if len(name) < 2:
         raise ValueError("Business name must be at least 2 characters.")
@@ -98,7 +182,27 @@ def clean_company_name(value: str) -> str:
 
 
 def clean_email(value: str) -> str:
-    """Validate an email address's format; returns it in lowercase."""
+    """
+    Validate an email address's format; returns it in lowercase.
+
+    Uses the `email-validator` library with check_deliverability=False, so
+    only the format is checked (no DNS lookup during signup). The address is
+    returned in lowercase so each address maps to exactly one account.
+
+    Args:
+        value: the raw text from the form; surrounding spaces are ignored.
+
+    Returns:
+        str: the normalized, lowercase address.
+
+    Raises:
+        ValueError: if the address is empty or not a valid format (the message
+            is safe to show the person).
+
+    Example:
+        >>> clean_email("  Ana@Example.COM ")
+        'ana@example.com'
+    """
     email = (value or "").strip()
     if not email:
         raise ValueError("Email address is required.")

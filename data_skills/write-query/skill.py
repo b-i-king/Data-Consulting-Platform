@@ -40,16 +40,71 @@ OPS = {"=", "!=", ">", ">=", "<", "<=", "in", "like"}
 
 
 def quote(name: str, dialect: str) -> str:
+    """
+    Quote a table or column name for the dialect so spaces and odd characters are safe.
+
+    BigQuery uses backticks; Postgres and Snowflake use double quotes, with any embedded
+    double quote doubled.
+
+    Args:
+        name: str, the identifier.
+        dialect: str, "postgres", "bigquery", or "snowflake".
+
+    Returns:
+        str: the quoted identifier.
+
+    Example:
+        >>> quote("store", "postgres")
+        '"store"'
+        >>> quote("store", "bigquery")
+        '`store`'
+    """
     return f"`{name}`" if dialect == "bigquery" else '"' + name.replace('"', '""') + '"'
 
 
 def literal(v) -> str:
+    """
+    Write a Python value as a SQL literal.
+
+    Ints and floats are written as-is (bools are not treated as numbers); everything else
+    becomes a single-quoted string with embedded single quotes doubled, which prevents
+    the value from breaking out of the string.
+
+    Args:
+        v: Any, the filter value.
+
+    Returns:
+        str: the SQL literal.
+
+    Example:
+        >>> literal(5)
+        '5'
+        >>> literal("O'Brien")
+        "'O''Brien'"
+    """
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         return str(v)
     return "'" + str(v).replace("'", "''") + "'"
 
 
 def date_trunc(col: str, period: str, dialect: str) -> str:
+    """
+    Build the dialect's expression that truncates a date to the start of a period.
+
+    BigQuery: DATE_TRUNC(col, MONTH). Postgres and Snowflake: DATE_TRUNC('month', col).
+
+    Args:
+        col: str, the already-quoted date column.
+        period: str, "day", "week", "month", "quarter", or "year".
+        dialect: str, "postgres", "bigquery", or "snowflake".
+
+    Returns:
+        str: the SQL expression.
+
+    Example:
+        >>> print(date_trunc('"order_date"', "month", "postgres"))
+        DATE_TRUNC('month', "order_date")
+    """
     if dialect == "bigquery":
         return f"DATE_TRUNC({col}, {period.upper()})"
     return f"DATE_TRUNC('{period}', {col})"
@@ -57,6 +112,47 @@ def date_trunc(col: str, period: str, dialect: str) -> str:
 
 def run(df, table_name="my_table", metric=None, agg="sum", group_by=None, date_column=None, period="month",
         filters=None, dialect="postgres", limit=100) -> SkillResult:
+    """
+    Build a readable, dialect-correct SQL query from a structured request and preview it in pandas.
+
+    Every referenced column is validated against the table first. The query selects the
+    optional date bucket (date_trunc) and group-by columns, then agg(metric) or COUNT(*),
+    applies filters (operators =, !=, >, >=, <, <=, in, like) as WHERE ... AND ..., groups,
+    orders (by date ascending, else by the value descending), and limits. The same logic is
+    then run in pandas (LIKE becomes a case-insensitive "contains" with % stripped) so you can
+    see the expected result.
+
+    Args:
+        df: pd.DataFrame, the table (used for validation and the preview).
+        table_name: str, table name in the database (default "my_table").
+        metric: str | None, column to aggregate; None means count rows.
+        agg: str, "sum" (default), "avg", "count", "min", or "max".
+        group_by: list[str] | None, columns to group by.
+        date_column: str | None, date column to bucket by period.
+        period: str, "day", "week", "month" (default), "quarter", or "year".
+        filters: list[dict] | None, e.g. [{"column": "store", "op": "=", "value": "Midtown"}];
+            "in" expects a list value.
+        dialect: str, "postgres" (default), "bigquery", or "snowflake".
+        limit: int, maximum rows (default 100).
+
+    Returns:
+        SkillResult: summary with the dialect and preview row count; a finding on how to use it;
+        table "preview" (pandas result); artifact "sql_query".
+
+    Raises:
+        SkillInputError: if a column is not in the table or a filter operator is unsupported.
+
+    Example:
+        >>> res = run(df, table_name="sales", metric="amount", group_by=["store"])
+        >>> print(res.artifacts["sql_query"])
+        SELECT
+            "store",
+            SUM("amount") AS "sum_amount"
+        FROM "sales"
+        GROUP BY "store"
+        ORDER BY "sum_amount" DESC
+        LIMIT 100;
+    """
     group_by = group_by or []
     filters = filters or []
     for c in [metric, date_column, *group_by, *(f.get("column") for f in filters)]:

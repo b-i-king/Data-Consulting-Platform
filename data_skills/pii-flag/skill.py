@@ -48,6 +48,25 @@ SKILL = SkillSpec(
 
 
 def luhn_ok(number: str) -> bool:
+    """
+    Check whether a digit string passes the Luhn checksum used by credit-card numbers.
+
+    Non-digits (spaces, dashes) are ignored. Only 13-19 digit numbers can pass. From the
+    right, every second digit is doubled (subtracting 9 if it exceeds 9); the total must
+    be divisible by 10. This keeps random 16-digit IDs from being flagged as cards.
+
+    Args:
+        number: str, the candidate card number, e.g. "4111 1111 1111 1111".
+
+    Returns:
+        bool: True if the length is valid and the checksum passes.
+
+    Example:
+        >>> luhn_ok("4111 1111 1111 1111")
+        True
+        >>> luhn_ok("1234567812345678")
+        False
+    """
     digits = [int(c) for c in number if c.isdigit()]
     if not 13 <= len(digits) <= 19:
         return False
@@ -60,7 +79,27 @@ def luhn_ok(number: str) -> bool:
 
 
 def mask(value: str) -> str:
-    """'ana.diaz@example.com' -> 'a***@example.com'; '4045551234' -> '******1234'."""
+    """
+    Hide a personal value so the report can show an example without exposing it.
+
+    Emails keep the first character of the user name and the full domain; anything else
+    keeps only its last 4 characters, with the rest replaced by "*" (values of 4 characters
+    or fewer are shown unchanged).
+
+    'ana.diaz@example.com' -> 'a***@example.com'; '4045551234' -> '******1234'.
+
+    Args:
+        value: str, the value to mask (converted with str() first).
+
+    Returns:
+        str: the masked value.
+
+    Example:
+        >>> mask("ana.diaz@example.com")
+        'a***@example.com'
+        >>> mask("4045551234")
+        '******1234'
+    """
     v = str(value)
     if "@" in v:
         user, _, domain = v.partition("@")
@@ -69,6 +108,30 @@ def mask(value: str) -> str:
 
 
 def run(df: pd.DataFrame) -> SkillResult:
+    """
+    Flag columns that hold personal information (PII), with a risk level for each.
+
+    Each column is checked two ways:
+    - by NAME: the lower-cased, underscored name contains a hint (ssn, dob/birth, email,
+      phone, address, first_name, city, zip, ...)
+    - by VALUE: on the first 500 non-empty values, a pattern (email, US phone, SSN, card
+      number that passes luhn_ok, IP address, ZIP) must match at least 50% of them
+    The column's risk is the highest of its hits (high > medium > low). Only a masked
+    example is reported, never the raw values.
+
+    Args:
+        df: pd.DataFrame, the table to scan.
+
+    Returns:
+        SkillResult: summary with the number of PII columns (calling out HIGH-risk ones);
+        findings per column plus advice before sharing; table "pii_columns" (column, pii_type,
+        risk, detected_by, masked_example), sorted high risk first.
+
+    Example:
+        >>> res = run(pd.DataFrame({"email": ["ana@example.com", "ben@example.com"]}))
+        >>> res.tables["pii_columns"][0]["risk"]
+        'medium'
+    """
     found = []
     for col in df.columns:
         norm = re.sub(r"[\s\-.]+", "_", str(col).strip().lower())

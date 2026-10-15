@@ -32,6 +32,30 @@ SKILL = SkillSpec(
 
 
 def meaning(col: str, s: pd.Series, is_date: bool) -> str:
+    """
+    Guess what a column means from its name and values.
+
+    Rules, first match wins (the name is lowercased; spaces, hyphens and dots become "_"):
+    date (if `is_date`) -> identifier (id, *_id, *number, *_no, sku, *code) -> email ->
+    phone (phone, mobile) -> currency amount (USD) (amount, price, cost, revenue... AND
+    numeric) -> quantity (qty, quantity, count, units) -> percentage / rate (pct,
+    percent, rate) -> flag (yes/no) (bool, or only yes/no/true/false/y/n values) ->
+    measure (other numbers) -> category (50 or fewer distinct values) -> free text.
+
+    Args:
+        col: the column name.
+        s: the column's values.
+        is_date: True if the column was detected as a date column.
+
+    Returns:
+        str: one of the meanings listed above.
+
+    Example:
+        >>> meaning("order_id", pd.Series([1, 2]), False)
+        'identifier'
+        >>> meaning("amount", pd.Series([4.5, 12.0]), False)
+        'currency amount (USD)'
+    """
     n = re.sub(r"[\s\-.]+", "_", col.lower())
     if is_date:
         return "date"
@@ -55,6 +79,28 @@ def meaning(col: str, s: pd.Series, is_date: bool) -> str:
 
 
 def run(df: pd.DataFrame, table_name="table", descriptions=None) -> SkillResult:
+    """
+    Document every column: type, meaning, nullability, allowed values, range and an example.
+
+    For each column: storage dtype, `meaning()` guess, the client's description (if
+    given), whether it has gaps and the % missing, distinct count, allowed values
+    (categories and flags with 12 or fewer values), range (min -> max for numbers
+    and dates) and the first non-empty value as an example.
+
+    Args:
+        df: the table to document.
+        table_name: name used in the title (default "table").
+        descriptions: your own column descriptions, e.g. {"amount": "Order total in USD"}.
+
+    Returns:
+        SkillResult: summary; a finding listing columns that still need a description;
+        table "dictionary" (one row per column); artifacts["markdown_dictionary"], a
+        Markdown table ready for a README or Notion.
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv"), table_name="sales").summary
+        'Dictionary for 13 columns of sales.'
+    """
     descriptions = descriptions or {}
     dates = set(date_columns(df))
     rows = []

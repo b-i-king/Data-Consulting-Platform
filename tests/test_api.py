@@ -18,14 +18,32 @@ CSV = b"customer,amount\nAnn,10\nAnn,10\nBob,\n"
 
 
 def _files(*pairs):
+    """
+    Build the multipart "files" field TestClient sends, as a browser upload would.
+
+    Args:
+        *pairs: (file_name, file_bytes) tuples, e.g. ("sales.csv", b"customer,amount\\nAnn,10\\n").
+
+    Returns:
+        list[tuple]: One ("files", (name, BytesIO, "text/csv")) entry per pair, ready to pass
+        as `files=` to client.post(...).
+
+    Example:
+        >>> client.post("/api/files/analyze", files=_files(("sales.csv", CSV)))
+    """
     return [("files", (name, io.BytesIO(data), "text/csv")) for name, data in pairs]
 
 
 def test_health():
+    """Check that GET /health answers {"status": "ok"} (the uptime check Render uses)."""
     assert client.get("/health").json()["status"] == "ok"
 
 
 def test_intake_options_lists_questions():
+    """
+    Check that GET /api/intake/options returns the signup questions: both account types,
+    "flat_files" as the first data location, and Data Cleaning among the services.
+    """
     body = client.get("/api/intake/options").json()
     assert {a["id"] for a in body["account_types"]} == {"individual", "business"}
     assert body["data_locations"][0]["id"] == "flat_files"
@@ -33,6 +51,11 @@ def test_intake_options_lists_questions():
 
 
 def test_guest_analyze_then_signup_then_download():
+    """
+    Walk the guest path end to end: analyze without an account (duplicates removed, runtime
+    estimate), download refused with 401, business signup with a team member, then a
+    successful CSV download whose charge never exceeds the amount the client confirmed.
+    """
     # 1. Guest analysis — no token needed.
     res = client.post("/api/files/analyze", files=_files(("sales.csv", CSV)))
     assert res.status_code == 200, res.text
@@ -79,6 +102,7 @@ def test_guest_analyze_then_signup_then_download():
 
 
 def test_individual_cannot_add_team_members():
+    """Check that an individual (not business) signup with team members is rejected with 422."""
     res = client.post("/api/accounts/signup", json={
         "account_type": "individual", "first_name": "A", "last_name": "B",
         "email": "solo@example.com",
@@ -88,12 +112,14 @@ def test_individual_cannot_add_team_members():
 
 
 def test_unsupported_file_returns_friendly_400():
+    """Check that uploading an unsupported file type (a .png) gives a 400 with a plain-English message."""
     res = client.post("/api/files/analyze", files=[("files", ("x.png", io.BytesIO(b"x"), "image/png"))])
     assert res.status_code == 400
     assert "not a supported file type" in res.json()["detail"]
 
 
 def test_large_responses_are_gzip_compressed():
+    """Check that a large analyze response is gzip-compressed when the client accepts gzip."""
     rows = "\n".join(f"Customer {i},{i}.50" for i in range(2000))
     csv = f"customer,amount\n{rows}\n".encode()
     res = client.post("/api/files/analyze", files=_files(("big.csv", csv)),
@@ -108,12 +134,17 @@ SALES = (__import__("pathlib").Path(__file__).resolve().parents[1] / "samples" /
 
 
 def test_list_skills():
+    """Check that GET /api/skills lists all 30 skills, spread across the service categories."""
     skills = client.get("/api/skills").json()
     assert len(skills) == 30
     assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
 
 
 def test_run_dashboard_skill_on_upload():
+    """
+    Check that running build-dashboard on the sample sales upload returns every date range
+    (last week through all time) and an HTML dashboard artifact.
+    """
     res = client.post("/api/skills/build-dashboard/run", files=_files(("sales.csv", SALES)),
                       data={"params": '{"value_columns": ["amount"]}'})
     assert res.status_code == 200, res.text
@@ -123,6 +154,10 @@ def test_run_dashboard_skill_on_upload():
 
 
 def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not():
+    """
+    Check that a raw-data skill (data-cleaning) sees the sample's duplicate rows, while a
+    skill that runs on cleaned data (validate-data) finds none.
+    """
     raw = client.post("/api/skills/data-cleaning/run", files=_files(("sales.csv", SALES))).json()
     assert raw["data"]["report"]["duplicate_rows_removed"] > 0
     cleaned = client.post("/api/skills/validate-data/run", files=_files(("sales.csv", SALES)),
@@ -136,6 +171,10 @@ BIG = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(40))
 
 
 def test_skill_errors_are_friendly():
+    """
+    Check skill run errors: an unknown skill is 404, a missing required option is 400 naming
+    it, and a command-line-only option (db_path) sent through the API is 400.
+    """
     assert client.post("/api/skills/nope/run", files=_files(("s.csv", BIG))).status_code == 404
     res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", BIG)), data={"params": "{}"})
     assert res.status_code == 400 and "outcome" in res.json()["detail"]
@@ -149,6 +188,10 @@ GAPS = b"order_date,qty,city,notes\n2026-01-01,1,A,\n2026-01-02,2,A,\n2026-01-03
 
 
 def test_analyze_applies_column_actions_and_previews_first_rows():
+    """
+    Check that per-column actions (fill qty with the median, drop notes) are applied by
+    /api/files/analyze, and that the preview shows only the first 5 of 32 rows.
+    """
     actions = '{"0": {"qty": "median", "notes": "drop"}}'
     res = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)), data={"column_actions": actions})
     assert res.status_code == 200, res.text
@@ -162,6 +205,7 @@ def test_analyze_applies_column_actions_and_previews_first_rows():
 
 
 def test_bad_column_actions_are_friendly_errors():
+    """Check that invalid column_actions JSON or an unknown fill method gives a 400 that names the problem."""
     bad_json = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)), data={"column_actions": "nope"})
     bad_method = client.post("/api/files/analyze", files=_files(("gaps.csv", GAPS)),
                              data={"column_actions": '{"0": {"qty": "average"}}'})
@@ -170,6 +214,7 @@ def test_bad_column_actions_are_friendly_errors():
 
 
 def test_skills_see_the_same_cleaning_choices():
+    """Check that skills apply the same column actions as analyze (a dropped column is not in the output)."""
     res = client.post("/api/skills/explore-data/run", files=_files(("gaps.csv", GAPS)),
                       data={"column_actions": '{"0": {"notes": "drop"}}'})
     assert res.status_code == 200, res.text
@@ -177,6 +222,10 @@ def test_skills_see_the_same_cleaning_choices():
 
 
 def test_analysis_needs_30_rows_before_and_after_cleaning():
+    """
+    Check the 30-row minimum for analysis: 3 rows can be cleaned but not analyzed; 35 rows with
+    10 duplicates (25 after cleaning) are still refused; 40 rows are ready.
+    """
     # 3 rows: cleaning works, analysis is refused with a clear reason.
     small = client.post("/api/files/analyze", files=_files(("s.csv", CSV))).json()["groups"][0]["report"]
     assert small["analysis_ready"] is False and "at least 30" in small["analysis_note"]
@@ -195,6 +244,13 @@ def test_analysis_needs_30_rows_before_and_after_cleaning():
 
 
 def test_settings_tolerate_pasted_urls_and_preview_origins(monkeypatch):
+    """
+    Check that ALLOWED_ORIGINS tolerates trailing slashes and spaces, and that the default JWT
+    secret is detected (and a real 40-character secret is not).
+
+    Args:
+        monkeypatch: pytest fixture (requested but not used by this test).
+    """
     from api.core.config import Settings
     s = Settings(ALLOWED_ORIGINS="https://site.vercel.app/, http://localhost:3000")
     assert s.origins_list == ["https://site.vercel.app", "http://localhost:3000"]
@@ -202,6 +258,10 @@ def test_settings_tolerate_pasted_urls_and_preview_origins(monkeypatch):
 
 
 def test_a_forgotten_account_signs_out_with_a_clear_message():
+    """
+    Check that a valid token for an account the server no longer has gets a 401 asking the user
+    to create their account again.
+    """
     # A valid token for an account the (database-less) server no longer has.
     from api.core.security import create_access_token
     token = create_access_token("00000000-0000-0000-0000-000000000000", "gone@example.com", "individual")
@@ -210,6 +270,10 @@ def test_a_forgotten_account_signs_out_with_a_clear_message():
 
 
 def test_excel_download_lists_rows_removed_for_a_missing_id():
+    """
+    Check that dropping rows with a blank ID removes them from the Excel download's
+    "cleaned_data" sheet and lists them on a separate "rows_missing_id" sheet.
+    """
     token = client.post("/api/accounts/signup", json={
         "account_type": "individual", "first_name": "Ida", "last_name": "Ng", "email": "ida@example.com",
     }).json()["access_token"]
@@ -229,6 +293,10 @@ def test_excel_download_lists_rows_removed_for_a_missing_id():
 
 
 def test_client_column_names_apply_to_analyze_and_skills():
+    """
+    Check that duplicate and unnamed columns are reported, that client-chosen column names fix
+    them in analyze and skills, and that renaming two columns to the same name gives a 400.
+    """
     rows = "".join(f"{i},{i * 2},{i * 3},\n" for i in range(40))
     csv = f"order_id,amount,amount,\n{rows}".encode()
     body = client.post("/api/files/analyze", files=_files(("o.csv", csv))).json()
@@ -255,6 +323,10 @@ def test_client_column_names_apply_to_analyze_and_skills():
 
 
 def test_transform_steps_apply_to_analyze_and_skills():
+    """
+    Check that a transform step (cap duration outliers at 120) is applied by analyze and skills,
+    and that an unknown step gives a 400.
+    """
     rows = "".join(f"{i},{60 if i != 7 else 450}\n" for i in range(40))
     csv = f"order_id,duration\n{rows}".encode()
     body = client.post("/api/files/analyze", files=_files(("w.csv", csv))).json()

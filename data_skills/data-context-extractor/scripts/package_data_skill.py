@@ -16,7 +16,25 @@ from pathlib import Path
 
 
 def validate_skill(skill_path: Path) -> tuple[bool, str]:
-    """Basic validation of skill structure."""
+    """
+    Basic validation of skill structure.
+
+    Checks, in order, and stops at the first problem:
+    - SKILL.md exists in the folder
+    - it starts with YAML frontmatter ("---")
+    - "name:" appears in the first 500 characters and "description:" in the first 1,000
+    - no unfilled placeholders such as "[PLACEHOLDER]" or "[COMPANY]" remain
+
+    Args:
+        skill_path: the skill folder to check.
+
+    Returns:
+        tuple[bool, str]: (True, "Validation passed") or (False, a message naming the problem).
+
+    Example:
+        >>> validate_skill(Path("/home/claude/acme-data-analyst"))
+        (True, 'Validation passed')
+    """
 
     # Check SKILL.md exists
     skill_md = skill_path / "SKILL.md"
@@ -45,12 +63,23 @@ def package_skill(skill_path: str, output_dir: str = None) -> Path | None:
     """
     Package a skill folder into a .skill file.
 
+    The folder is validated first (`validate_skill`), then every file in it is
+    zipped, skipping hidden files/folders (names starting with ".") and common junk
+    (__pycache__, .DS_Store, Thumbs.db). Paths inside the zip start with the folder
+    name. Progress and errors are printed rather than raised. Note: the file written
+    has a .zip extension, named after the folder.
+
     Args:
         skill_path: Path to the skill folder
-        output_dir: Optional output directory
+        output_dir: Optional output directory (default: the current working directory;
+            created if missing)
 
     Returns:
         Path to the created .skill file, or None if error
+
+    Example:
+        >>> package_skill("/home/claude/acme-data-analyst", "/tmp/outputs")
+        PosixPath('/tmp/outputs/acme-data-analyst.zip')
     """
     skill_path = Path(skill_path).resolve()
 
@@ -106,6 +135,19 @@ def package_skill(skill_path: str, output_dir: str = None) -> Path | None:
 
 
 def main():
+    """
+    Command-line entry point: package the skill folder named in sys.argv.
+
+    Usage: package_data_skill.py <path/to/skill-folder> [output-directory]. With no
+    arguments it prints the usage text (the module docstring).
+
+    Returns:
+        None. Always ends the program with SystemExit: exit code 0 if the package was
+        created, 1 on missing arguments or any error.
+
+    Example:
+        python package_data_skill.py /home/claude/acme-data-analyst /tmp/outputs
+    """
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)

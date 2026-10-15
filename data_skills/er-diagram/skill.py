@@ -30,7 +30,27 @@ SKILL = SkillSpec(
 
 
 def entity_name(table: str) -> str:
-    """'quickbooks_customers.csv' -> 'QuickbooksCustomer'."""
+    """
+    Turn a table (file) name into a singular PascalCase entity name for the diagram.
+
+    Rules, in order:
+    - Keep only the part after the last "›" (sheet/folder separator) and drop a file extension
+    - Split on anything that isn't a letter or digit and capitalize each word
+    - Drop one trailing "s" to make it singular, unless the name ends in "ss" (Address stays Address)
+    - Fall back to "Table" when nothing usable is left
+
+    Args:
+        table: str, the table's name as uploaded, e.g. "quickbooks_customers.csv" or "Sales › orders.xlsx".
+
+    Returns:
+        str: the entity name, e.g. "QuickbooksCustomer".
+
+    Example:
+        >>> entity_name("quickbooks_customers.csv")
+        'QuickbooksCustomer'
+        >>> entity_name("Sales › orders.xlsx")
+        'Order'
+    """
     base = re.sub(r"\.[a-z0-9]+$", "", table.split("›")[-1].strip(), flags=re.I)
     words = re.split(r"[^A-Za-z0-9]+", base)
     name = "".join(w[:1].upper() + w[1:].lower() for w in words if w) or "Table"
@@ -38,6 +58,24 @@ def entity_name(table: str) -> str:
 
 
 def mermaid_type(s: pd.Series) -> str:
+    """
+    Map a pandas column's dtype to the type word shown in the Mermaid diagram.
+
+    Checks booleans first (so True/False isn't reported as int), then integers, floats,
+    and datetimes; everything else (text, mixed, categories) is "string".
+
+    Args:
+        s: pd.Series, one column of a table.
+
+    Returns:
+        str: one of "boolean", "int", "float", "date", or "string".
+
+    Example:
+        >>> mermaid_type(pd.Series([1, 2]))
+        'int'
+        >>> mermaid_type(pd.Series(["a", "b"]))
+        'string'
+    """
     if pd.api.types.is_bool_dtype(s):
         return "boolean"
     if pd.api.types.is_integer_dtype(s):
@@ -50,12 +88,62 @@ def mermaid_type(s: pd.Series) -> str:
 
 
 def primary_key(df: pd.DataFrame) -> str | None:
+    """
+    Pick the column most likely to be the table's primary key.
+
+    A candidate must be unique AND never empty. Among candidates, names that end in
+    "id" (after normalize_column, so "Customer ID" counts) come first, then shorter
+    names win ties.
+
+    Args:
+        df: pd.DataFrame, one table.
+
+    Returns:
+        str | None: the chosen column name, or None when no column is unique and complete
+        (the table then needs a surrogate id).
+
+    Example:
+        >>> primary_key(pd.DataFrame({"name": ["a", "b"], "customer_id": [1, 2]}))
+        'customer_id'
+        >>> primary_key(pd.DataFrame({"x": [1, 1]})) is None
+        True
+    """
     cands = [c for c in df.columns if df[c].notna().all() and df[c].is_unique]
     cands.sort(key=lambda c: (not normalize_column(c).endswith("id"), len(str(c))))
     return str(cands[0]) if cands else None
 
 
 def run(tables: dict[str, pd.DataFrame]) -> SkillResult:
+    """
+    Find keys and relationships across several tables and draw a Mermaid ER diagram.
+
+    Steps:
+    - Name each table as an entity (entity_name) and choose its primary key (primary_key)
+    - Foreign keys: a column in a child table whose normalized name matches another table's
+      primary key (and is not the child's own key)
+    - Coverage: the share of the child's non-empty values found in the parent key;
+      below 95% the link is marked unreliable (wrong match or missing parent rows)
+    - Cardinality: one-to-many when the child column repeats, otherwise one-to-one
+    - Writes an `erDiagram` block with PK/FK tags on the columns
+
+    Args:
+        tables: dict[str, pd.DataFrame], table name -> its data (two or more tables to find links).
+
+    Returns:
+        SkillResult: summary with entity and relationship counts; findings per key and link;
+        tables "keys" (every column with unique/null %/primary-key flags) and "relationships"
+        (child, parent, cardinality, coverage_pct, reliable); artifact "mermaid_erd" with the
+        diagram text to paste into GitHub, Notion, or mermaid.live.
+
+    Example:
+        >>> customers = pd.DataFrame({"customer_id": [1, 2], "name": ["Ana", "Ben"]})
+        >>> orders = pd.DataFrame({"order_id": [10, 11, 12], "customer_id": [1, 1, 2]})
+        >>> res = run({"customers.csv": customers, "orders.csv": orders})
+        >>> res.summary
+        '2 entities, 1 verified relationship(s).'
+        >>> res.tables["relationships"][0]["cardinality"]
+        'one-to-many'
+    """
     ents = {name: entity_name(name) for name in tables}
     pks = {name: primary_key(df) for name, df in tables.items()}
     keys_table, links = [], []

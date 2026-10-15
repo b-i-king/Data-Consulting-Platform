@@ -163,12 +163,46 @@ FREE_CONSULTATION_MINUTES = 30      # the first call, for every service except "
 
 
 def consulting_rate() -> float:
-    """US dollars per hour of consulting after the free first call (CONSULTING_RATE_PER_HOUR_USD)."""
+    """
+    Return the hourly consulting rate in US dollars.
+
+    This is the rate charged after the free first call (or from the first hour for
+    "hourly" services such as Data Strategy & Discovery). It is read from the
+    CONSULTING_RATE_PER_HOUR_USD environment variable (default $80.00).
+
+    Returns:
+        float: US dollars per hour of consulting.
+
+    Example:
+        >>> consulting_rate()   # with the default settings
+        80.0
+    """
     return get_settings().consulting_rate_per_hour_usd
 
 
 def consultation_terms(service: Service) -> dict:
-    """How talking to a consultant works for one service (shown on its card)."""
+    """
+    Describe how talking to a consultant works for one service (shown on its card).
+
+    Rules, by the service's pricing model:
+    - "hourly": no free minutes; paid consulting from the first hour.
+    - "early_access": no free minutes and no text (the service is not sold yet).
+    - anything else: a free FREE_CONSULTATION_MINUTES (30) minute call, then the
+      hourly rate.
+
+    Args:
+        service: Service, the catalog entry to describe.
+
+    Returns:
+        dict: {"free_minutes": int, "rate_per_hour_usd": float, "text": str}, where
+            "text" is the plain-English line for the UI ("" for early access).
+
+    Example:
+        >>> consultation_terms(SERVICES_BY_ID["data_cleaning"])   # default $80/hour
+        {'free_minutes': 30, 'rate_per_hour_usd': 80.0, 'text': 'Free 30-minute consultation, then $80/hour'}
+        >>> consultation_terms(SERVICES_BY_ID["data_strategy_discovery"])["text"]
+        'Paid consulting from $80/hour'
+    """
     rate = consulting_rate()
     if service.pricing_model == "hourly":
         return {"free_minutes": 0, "rate_per_hour_usd": rate,
@@ -261,7 +295,29 @@ BASE = "data_cleaning"
 
 
 def plan_services(plan_id: str) -> list[str]:
-    """Service ids an item unlocks (the bundle = every service, AI included once it's available)."""
+    """
+    List the service ids a subscription item unlocks.
+
+    A tool unlocks its own `service_ids`. The "All tools" bundle (empty
+    `service_ids`) unlocks every service that is currently available, so AI is
+    added automatically once its `available` flag is switched on. An unknown plan
+    id unlocks nothing.
+
+    Args:
+        plan_id: str, a Subscription id such as "data_visualization" or "all_tools".
+
+    Returns:
+        list[str]: service ids in catalog order; [] for an unknown plan id.
+
+    Example:
+        >>> plan_services("data_visualization")
+        ['data_visualization']
+        >>> plan_services("all_tools")   # AI is left out while it is "early access"
+        ['data_cleaning', 'data_strategy_discovery', 'data_exploration_analysis',
+         'data_visualization', 'data_engineering', 'data_science_ml']
+        >>> plan_services("nope")
+        []
+    """
     plan = SUBSCRIPTIONS_BY_ID.get(plan_id)
     if plan is None:
         return []
@@ -269,16 +325,61 @@ def plan_services(plan_id: str) -> list[str]:
 
 
 def billable(plan_id: str) -> bool:
-    """Charged today? An item whose service isn't available yet (AI) is free until it launches."""
+    """
+    Tell whether a subscription item is charged today.
+
+    The bundle is always billable. A tool is billable only when every service it
+    unlocks is available; an item whose service is not launched yet (AI) is free
+    until it launches.
+
+    Args:
+        plan_id: str, a Subscription id (must exist in SUBSCRIPTIONS_BY_ID).
+
+    Returns:
+        bool: True if the item should be charged now.
+
+    Raises:
+        KeyError: if `plan_id` is not a known Subscription id.
+
+    Example:
+        >>> billable("data_cleaning")
+        True
+        >>> billable("ai")   # while AI is early access
+        False
+    """
     plan = SUBSCRIPTIONS_BY_ID[plan_id]
     return plan.kind == "bundle" or all(SERVICES_BY_ID[s].available for s in plan.service_ids)
 
 
 def normalize_selection(plan_ids: list[str]) -> list[str]:
     """
-    Check a "build your own" selection and return it in catalog order:
-    the bundle replaces everything else; Data Cleaning is always added; an
-    item's requirements must be picked too. Raises ValueError (plain English).
+    Check a "build your own" selection and return it in catalog order.
+
+    Rules:
+    - every id must be a known Subscription id;
+    - the bundle replaces everything else (the result is just ["all_tools"]);
+    - Data Cleaning (the base) is always added;
+    - an item's requirements must be picked too (AI needs Data Engineering).
+    Duplicates are removed.
+
+    Args:
+        plan_ids: list[str], the Subscription ids the client ticked.
+
+    Returns:
+        list[str]: the cleaned selection, in the order of SUBSCRIPTIONS.
+
+    Raises:
+        ValueError: with a plain-English message for an unknown id or a missing
+            requirement.
+
+    Example:
+        >>> normalize_selection(["data_visualization"])
+        ['data_cleaning', 'data_visualization']
+        >>> normalize_selection(["data_visualization", "all_tools"])
+        ['all_tools']
+        >>> normalize_selection(["ai"])
+        Traceback (most recent call last):
+        ValueError: AI needs Data Engineering.
     """
     unknown = [p for p in plan_ids if p not in SUBSCRIPTIONS_BY_ID]
     if unknown:
@@ -296,8 +397,30 @@ def normalize_selection(plan_ids: list[str]) -> list[str]:
 
 def selection_price(plan_ids: list[str], interval: str) -> dict:
     """
-    The total for a selection: each tool's fixed price added together (items not
-    billable yet count $0). Also says whether the bundle would be cheaper.
+    Work out the total price for a selection on one billing interval.
+
+    Each tool's fixed price is added together; items not billable yet (AI before
+    launch) count as $0.00 with the note "Free until it launches". The result also
+    says whether the All tools bundle would be cheaper than this selection.
+
+    Args:
+        plan_ids: list[str], the Subscription ids the client ticked (normalized with
+            normalize_selection, so Data Cleaning is added automatically).
+        interval: str, "month" or "year".
+
+    Returns:
+        dict: {"interval", "plan_ids" (normalized list), "lines" (one
+            {"id", "name", "amount_usd", "note"} per item), "total_usd",
+            "bundle_usd" (bundle price on this interval), "bundle_cheaper" (bool)}.
+
+    Raises:
+        ValueError: if `interval` is not "month" or "year", or the selection is
+            invalid (see normalize_selection).
+
+    Example:
+        >>> p = selection_price(["data_visualization"], "month")
+        >>> p["plan_ids"], p["total_usd"], p["bundle_usd"], p["bundle_cheaper"]
+        (['data_cleaning', 'data_visualization'], 38.0, 99.0, False)
     """
     if interval not in INTERVALS:
         raise ValueError("Choose monthly or yearly billing.")
@@ -319,12 +442,47 @@ CONSULTING_LOOKUP_KEY = "dcp_consulting_hour"   # Stripe price for one consultin
 
 
 def lookup_key(plan_id: str, interval: str) -> str:
-    """The Stripe price lookup key, e.g. "dcp_all_tools_year" (see scripts/sync_stripe.py)."""
+    """
+    Build the Stripe price lookup key for an item and interval.
+
+    Stripe prices are found by lookup key, not by id, so scripts/sync_stripe.py
+    creates each price with a key of the form "dcp_<plan_id>_<interval>".
+
+    Args:
+        plan_id: str, a Subscription id, e.g. "all_tools".
+        interval: str, "month" or "year".
+
+    Returns:
+        str: the lookup key.
+
+    Example:
+        >>> lookup_key("all_tools", "year")
+        'dcp_all_tools_year'
+    """
     return f"dcp_{plan_id}_{interval}"
 
 
 def plan_from_lookup_key(key: str) -> tuple[str, str] | None:
-    """"dcp_data_visualization_month" -> ("data_visualization", "month"), or None."""
+    """
+    Turn a Stripe price lookup key back into (plan id, interval).
+
+    The reverse of lookup_key. The key is split on its LAST underscore, so plan
+    ids that contain underscores still work. Anything that is not a known plan on
+    a known interval (for example the consulting-hour price) gives None.
+
+    Args:
+        key: str, a Stripe price lookup key such as "dcp_data_visualization_month".
+
+    Returns:
+        tuple[str, str] | None: (plan_id, interval), or None if the key is not one
+            of our subscription prices.
+
+    Example:
+        >>> plan_from_lookup_key("dcp_data_visualization_month")
+        ('data_visualization', 'month')
+        >>> plan_from_lookup_key("dcp_consulting_hour") is None
+        True
+    """
     if not key.startswith("dcp_") or "_" not in key[4:]:
         return None
     plan_id, interval = key[4:].rsplit("_", 1)
@@ -332,7 +490,26 @@ def plan_from_lookup_key(key: str) -> tuple[str, str] | None:
 
 
 def subscription_catalog() -> list[dict]:
-    """Every priced item as a plain dict, with the yearly saving worked out for the UI."""
+    """
+    List every priced item as a plain dict, with the yearly saving worked out for the UI.
+
+    Each dict is the Subscription's fields plus:
+    - "service_ids": what it unlocks (plan_services; the bundle lists every
+      available service);
+    - "billable": whether it is charged today;
+    - "annual_per_month_usd": the annual price divided by 12;
+    - "annual_savings_usd" / "annual_savings_pct": annual vs. 12 x monthly;
+    - "bundle_savings_month_usd": bundle only, how much less per month than
+      picking every tool separately (0 for tools).
+
+    Returns:
+        list[dict]: one dict per item, in the order of SUBSCRIPTIONS (bundle first).
+
+    Example:
+        >>> dc = next(s for s in subscription_catalog() if s["id"] == "data_cleaning")
+        >>> dc["annual_per_month_usd"], dc["annual_savings_usd"], dc["annual_savings_pct"]
+        (15.83, 38.0, 17)
+    """
     out = []
     all_tools_month = sum(s.monthly_usd for s in SUBSCRIPTIONS if s.kind == "tool")
     for s in SUBSCRIPTIONS:
@@ -354,9 +531,25 @@ def runtime_cost(runtime_seconds: float) -> dict:
     """
     Convert processing time into a price.
 
+    Runtime is rounded UP to the next whole billing increment (zero runtime still
+    costs one increment, because the server did the work), converted to minutes,
+    multiplied by the per-minute rate, rounded to cents, and raised to the minimum
+    charge if it is lower.
+
     Example with the defaults ($0.50 per minute, 60-second increments):
         12 seconds  -> 1 billable minute  -> $0.50
         61 seconds  -> 2 billable minutes -> $1.00
+
+    Args:
+        runtime_seconds: float, measured processing time in seconds.
+
+    Returns:
+        dict: {"runtime_seconds" (rounded to 3 places), "billing_increment_seconds",
+            "billable_minutes", "rate_per_minute_usd", "amount_usd"}.
+
+    Example:
+        >>> runtime_cost(61)["billable_minutes"], runtime_cost(61)["amount_usd"]
+        (2.0, 1.0)
     """
     settings = get_settings()
     increment = max(settings.billing_increment_seconds, 1)
@@ -397,6 +590,21 @@ def download_estimate(runtime_seconds: float, rows: int, columns: int) -> dict:
     confirm. Example: 18,210 rows × 13 fields = 236,730 cells
         CSV:   0.2 s cleaning + 0.8 s writing + 3 s overhead ≈ 4 seconds
         Excel: 0.2 s cleaning + 11.8 s writing + 3 s overhead ≈ 15 seconds
+
+    Args:
+        runtime_seconds: float, how long the cleaning took when it was analyzed.
+        rows: int, number of rows in the cleaned table (negative counts as 0).
+        columns: int, number of fields in the cleaned table (negative counts as 0).
+
+    Returns:
+        dict: {"rows", "columns", "cells", "amount_usd", "billable_minutes",
+            "formats"}, where "formats" maps "csv" and "xlsx" to
+            {"estimated_seconds", "label" (wait_label text), "under_five_minutes"}.
+
+    Example:
+        >>> est = download_estimate(0.2, 18210, 13)   # default settings
+        >>> est["cells"], est["amount_usd"], est["formats"]["csv"]["estimated_seconds"]
+        (236730, 0.5, 4.0)
     """
     cells = max(int(rows), 0) * max(int(columns), 0)
     cost = runtime_cost(runtime_seconds)
@@ -419,7 +627,22 @@ def download_estimate(runtime_seconds: float, rows: int, columns: int) -> dict:
 
 
 def wait_label(seconds: float) -> str:
-    """Plain-English wait time: 'under 10 seconds', 'about 40 seconds', 'about 3 minutes'."""
+    """
+    Turn a number of seconds into a plain-English wait time.
+
+    Under 10 seconds -> "under 10 seconds"; under a minute -> rounded UP to the
+    next 10 seconds; otherwise rounded UP to whole minutes ("minute" when it is 1).
+
+    Args:
+        seconds: float, the estimated wait.
+
+    Returns:
+        str: e.g. 'under 10 seconds', 'about 40 seconds', 'about 3 minutes'.
+
+    Example:
+        >>> wait_label(4.2), wait_label(37), wait_label(60), wait_label(150)
+        ('under 10 seconds', 'about 40 seconds', 'about 1 minute', 'about 3 minutes')
+    """
     if seconds < 10:
         return "under 10 seconds"
     if seconds < 60:
@@ -434,6 +657,31 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
 
     Data cleaning is ALWAYS included (it is the automatic first step), even
     if the client did not tick it.
+
+    Each line is priced by its pricing model:
+    - "runtime": runtime_cost(runtime_seconds) (no runtime yet -> one increment);
+    - "package": the starting price;
+    - "early_access": $0.00;
+    - "hourly": one hour at the consulting rate;
+    - "consultation": $0.00 (the free consultation comes first).
+    If any selected service requires a consultant, the booking link is included.
+
+    Args:
+        service_ids: list[str], the service ids the client ticked.
+        runtime_seconds: float | None, measured cleaning runtime, if known.
+
+    Returns:
+        dict: {"lines" (one {"service_id", "name", "pricing_model", "amount_usd",
+            "note"} per service), "estimated_total_usd", "currency" ("USD"),
+            "requires_consultant" (bool), "booking_url" (str or None)}.
+
+    Raises:
+        ValueError: if any service id is unknown.
+
+    Example:
+        >>> q = build_quote(["data_visualization"])   # default settings
+        >>> [l["service_id"] for l in q["lines"]], q["estimated_total_usd"], q["booking_url"]
+        (['data_cleaning', 'data_visualization'], 500.5, None)
     """
     settings = get_settings()
     ids = ["data_cleaning", *[s for s in service_ids if s != "data_cleaning"]]
@@ -478,7 +726,24 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
 
 
 def catalog() -> list[dict]:
-    """All services as plain dicts (for the API), with their skill capabilities."""
+    """
+    List all services as plain dicts (for the API), with their skill capabilities.
+
+    Each dict is the Service's fields plus:
+    - "capabilities": client-friendly skill labels from data_skills/catalog.json;
+    - "consultation": consultation_terms for the service;
+    - "tool_monthly_usd" / "tool_annual_usd": the do-it-yourself subscription
+      price when the service is also a tool (None otherwise, e.g. Data Strategy);
+    - "tool_requires": tools that must be picked with it (AI -> Data Engineering).
+
+    Returns:
+        list[dict]: one dict per service, in the order of SERVICES.
+
+    Example:
+        >>> dv = next(s for s in catalog() if s["id"] == "data_visualization")
+        >>> dv["tool_monthly_usd"], dv["tool_annual_usd"], dv["tool_requires"]
+        (19.0, 190.0, [])
+    """
     out = []
     for s in SERVICES:
         tool = SUBSCRIPTIONS_BY_ID.get(s.id)   # the tool you can subscribe to, if any

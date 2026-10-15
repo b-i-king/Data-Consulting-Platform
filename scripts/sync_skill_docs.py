@@ -33,6 +33,25 @@ ALWAYS_INCLUDED = "data_cleaning"   # the service every client gets
 
 
 def _default(p: dict) -> str:
+    """
+    Format a skill option's default value for the README options table.
+
+    Rules:
+    - None (the skill picks a value itself) is shown as "auto".
+    - True / False are shown as "yes" / "no".
+    - Anything else is shown with str().
+
+    Args:
+        p: One option's description from data_skills.registry.describe(...)["params"];
+            only its "default" key is used.
+
+    Returns:
+        str: The text for the table's "Default" column.
+
+    Example:
+        >>> _default({"default": None}), _default({"default": True}), _default({"default": 10})
+        ('auto', 'yes', '10')
+    """
     d = p["default"]
     if d is None:
         return "auto"
@@ -42,7 +61,32 @@ def _default(p: dict) -> str:
 
 
 def run_section(skill_id: str) -> str:
-    """The generated Markdown for one skill."""
+    """
+    The generated Markdown for one skill.
+
+    Builds the "## Run it (platform implementation)" section from the skill's own
+    code (data_skills.registry.describe), so it always matches skill.py:
+    - a command-line example (two sample files when the skill takes several tables,
+      plus "--param KEY=VALUE" when it has options),
+    - where to find it on the web and the API route, and whether it is always included
+      (Data Cleaning) or unlocked by choosing its service category,
+    - the input it expects (and a note when it runs on the raw, uncleaned upload),
+    - an options table (name, type, default, help) when the skill has options. Options
+      the API refuses get "(command line only)" unless their help already says so.
+
+    Args:
+        skill_id: The skill's folder name, e.g. "build-dashboard".
+
+    Returns:
+        str: The Markdown section, starting with MARKER and ending with a newline.
+
+    Raises:
+        SkillInputError: If `skill_id` is not a registered skill (raised by describe).
+
+    Example:
+        >>> print(run_section("build-dashboard").splitlines()[0])
+        ## Run it (platform implementation)
+    """
     info = describe(skill_id)
     params = {k: v for k, v in info["params"].items()}
     many = info["input"] == "tables"
@@ -76,7 +120,25 @@ def run_section(skill_id: str) -> str:
 
 
 def sync(check: bool) -> list[str]:
-    """Rewrite (or just compare) every README.md; return the ones that changed."""
+    """
+    Rewrite (or just compare) every README.md; return the ones that changed.
+
+    For each skill, everything above MARKER in its README.md is kept exactly as is,
+    and the section from MARKER down is replaced with run_section(skill_id). A README
+    without the marker gets the section appended.
+
+    Args:
+        check: If True, only compare and write nothing (used by `--check` and pytest);
+            if False, write the updated README.md files.
+
+    Returns:
+        list[str]: Skill ids whose README.md was (or, with check=True, would be) changed;
+        empty when every README is up to date.
+
+    Example:
+        >>> sync(check=True)
+        []
+    """
     changed = []
     for skill_id in skill_ids():
         path = ROOT / "data_skills" / skill_id / "README.md"

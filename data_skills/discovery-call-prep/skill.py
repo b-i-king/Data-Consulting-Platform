@@ -53,6 +53,33 @@ SKILL = SkillSpec(
 
 
 def run(tables: dict[str, pd.DataFrame], client_name="Client", services=None, data_location=None, industry=None) -> SkillResult:
+    """
+    Write a one-page Markdown brief to prepare for a client discovery call.
+
+    Each raw table is cleaned (to report duplicates and missing values), its entity
+    guessed from the column names (classify_entity) and checked against standard
+    sample sizes. The brief has five parts: data-source inventory, readiness,
+    draft objectives from the selected services, the three scoping questions, and a
+    roadmap draft (Foundation always; other phases when their service is selected).
+    Sources with more than 10% missing cells get a finding.
+
+    Args:
+        tables: {table name: raw DataFrame} (this skill sets wants_raw=True).
+        client_name: business name for the brief (default "Client").
+        services: selected service ids, e.g. ["data_visualization", "data_science_ml"].
+        data_location: where they said their data lives (e.g. "quickbooks").
+        industry: NAICS sector or subsector, if known.
+
+    Returns:
+        SkillResult: summary with source and row counts; findings (missing-data
+        warnings, or "Data looks ready..."); tables "inventory" and "readiness";
+        artifacts["markdown_brief"].
+
+    Example:
+        >>> r = run({"sales": raw_sales}, client_name="Sweet Rise Bakery", services=["data_visualization"])
+        >>> r.artifacts["markdown_brief"].splitlines()[0]
+        '# Discovery brief — Sweet Rise Bakery'
+    """
     services = services or []
     inventory, readiness, findings = [], [], []
     for name, raw in tables.items():

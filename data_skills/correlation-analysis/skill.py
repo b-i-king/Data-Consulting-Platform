@@ -36,11 +36,52 @@ _TEST = {"pearson": stats.pearsonr, "spearman": stats.spearmanr, "kendall": stat
 
 
 def strength(r: float) -> str:
+    """
+    Describe a correlation coefficient in words.
+
+    Uses the absolute value: 0.7 or more strong, 0.4 or more moderate, 0.2 or more
+    weak, else negligible.
+
+    Args:
+        r: correlation coefficient between -1 and 1.
+
+    Returns:
+        str: "strong", "moderate", "weak" or "negligible".
+
+    Example:
+        >>> strength(-0.75), strength(0.3)
+        ('strong', 'weak')
+    """
     a = abs(r)
     return "strong" if a >= 0.7 else "moderate" if a >= 0.4 else "weak" if a >= 0.2 else "negligible"
 
 
 def run(df, method="spearman", columns=None) -> SkillResult:
+    """
+    Measure which number columns move together and report the strongest pairs.
+
+    Computes the full correlation matrix, then tests every pair of columns on the
+    rows where both have values (pairs with fewer than 5 rows or a constant column
+    are skipped) and sorts pairs by |r|. A pair is "significant" when p < 0.05.
+
+    Args:
+        df: the table.
+        method: "spearman" (default, rank-based and robust), "pearson" (straight-line)
+            or "kendall" (small samples with ties).
+        columns: number columns to include (default: all number columns, excluding IDs).
+
+    Returns:
+        SkillResult: summary naming the strongest pair; findings for the top 6 pairs
+        plus a "correlation is not causation" reminder; tables "pairs" (column_a,
+        column_b, r, p_value, n, strength) and "matrix".
+
+    Raises:
+        SkillInputError: fewer than two number columns.
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv")).summary
+        # 'Strongest relationship: quantity and amount (r = +0.77, strong).'
+    """
     cols = columns or numeric_columns(df)
     if len(cols) < 2:
         raise SkillInputError("Correlation needs at least two number columns.")

@@ -106,17 +106,79 @@ FILTER_GROUPS = (
 
 
 def _label(col: str) -> str:
-    """'unit_price' -> 'Unit Price'; 'csat' -> 'CSAT'."""
+    """
+    Turn a column name into a display label: 'unit_price' -> 'Unit Price'; 'csat' -> 'CSAT'.
+
+    Underscores become spaces, each word is capitalized, and words in ACRONYMS
+    (csat, nps, sku, id, roi, usd, kpi, aov, ltv) are written in capitals.
+
+    Args:
+        col: the column name.
+
+    Returns:
+        str: the label.
+
+    Example:
+        >>> _label("avg_csat")
+        'Avg CSAT'
+    """
     return " ".join(w.upper() if w.lower() in ACRONYMS else w.capitalize() for w in str(col).replace("_", " ").split())
 
 
 def _is_demographic(col: str) -> bool:
+    """
+    Tell whether a column name describes WHO the customer is or WHERE (a filter column).
+
+    True when the name matches any FILTER_GROUPS pattern: customer groupings
+    (customer, segment, tier...), demographics (gender, age group, income...) or
+    place (region, state, store, channel...).
+
+    Args:
+        col: the column name.
+
+    Returns:
+        bool: True if the name looks like a customer, demographic or place column.
+
+    Example:
+        >>> _is_demographic("customer_type"), _is_demographic("order_type")
+        (True, False)
+    """
     return any(g.search(str(col)) for g in FILTER_GROUPS)
 
 
 def find_kpi_column(df: pd.DataFrame, exclude: set[str]) -> str | None:
-    """The column whose values are record TYPES (2–50 distinct values), or None."""
+    """
+    Find the column whose values are record TYPES (2–50 distinct values), or None.
+
+    Search order, first usable column wins:
+    1. exact names in KPI_EXACT (event_type, transaction_type, type, ...), any case
+    2. names ending in _type, _kind, _class or _category that are NOT customer,
+       demographic or place columns (customer_type is a filter, order_type is a KPI)
+    3. plain names category, kind or class
+    A column is usable when it is not in `exclude`, is not numeric, and has 2–50
+    distinct values.
+
+    Args:
+        df: the table.
+        exclude: column names that can't be the KPI column (e.g. the date column).
+
+    Returns:
+        str | None: the KPI column name, or None if the data has no type column.
+
+    Example:
+        >>> find_kpi_column(pd.read_csv("samples/sales.csv"), exclude={"order_date"})
+        'order_type'
+    """
     def ok(c):
+        """
+        Check whether a column can serve as the KPI (type) column.
+
+        Args:
+            c: the column name.
+
+        Returns:
+            bool: True if `c` is not excluded, is not numeric, and has 2–50 distinct values.
+        """
         n = df[c].nunique(dropna=True)
         return c not in exclude and not pd.api.types.is_numeric_dtype(df[c]) and 2 <= n <= 50
     cols = [str(c) for c in df.columns]
@@ -134,7 +196,23 @@ def find_kpi_column(df: pd.DataFrame, exclude: set[str]) -> str | None:
 
 
 def find_filter_columns(df: pd.DataFrame, exclude: set[str]) -> list[str]:
-    """Customer / demographic / place columns with 2–30 values, best groups first."""
+    """
+    Find customer / demographic / place columns with 2–30 values, best groups first.
+
+    Candidates come from `categorical_columns(max_unique=30)`; customer groupings are
+    listed first, then demographics, then place, and at most MAX_FILTERS (9) are kept.
+
+    Args:
+        df: the table.
+        exclude: columns that can't be filters (e.g. the date and KPI columns).
+
+    Returns:
+        list[str]: filter column names, best first.
+
+    Example:
+        >>> find_filter_columns(pd.read_csv("samples/sales.csv"), exclude={"order_date", "order_type"})
+        ['customer_type', 'age_group', 'store']
+    """
     cats = [c for c in categorical_columns(df, max_unique=30) if c not in exclude]
     out: list[str] = []
     for group in FILTER_GROUPS:
@@ -150,6 +228,17 @@ def default_metrics(df: pd.DataFrame, agg: str) -> list[str]:
       3. other numbers
     When adding up (agg="sum"), per-unit or rate columns are skipped — the
     sum of unit prices, ratings, or percentages means nothing.
+
+    Args:
+        df: the table.
+        agg: how values will be combined ("sum", "mean" or "count").
+
+    Returns:
+        list[str]: up to 3 number column names (may be empty).
+
+    Example:
+        >>> default_metrics(pd.read_csv("samples/sales.csv"), "sum")
+        ['amount', 'quantity']
     """
     money = re.compile(r"amount|revenue|sales|total|cost|spend|balance|income|expense|pay", re.I)
     count = re.compile(r"qty|quantity|units|count|orders|visits", re.I)
@@ -160,7 +249,30 @@ def default_metrics(df: pd.DataFrame, agg: str) -> list[str]:
 
 
 def _apply_filters(data: pd.DataFrame, filters: dict | None) -> tuple[pd.DataFrame, dict[str, list[str]]]:
-    """Keep rows matching every filter. Values are compared as text."""
+    """
+    Keep rows matching every filter. Values are compared as text.
+
+    Each filter is {column: value} or {column: [values]}; a row must match one of the
+    values in every column given. Empty values (None or "") are ignored.
+
+    Args:
+        data: the table.
+        filters: e.g. {"customer_type": "Wholesale"} or {"age_group": ["25–34", "35–44"]};
+            None or {} keeps every row.
+
+    Returns:
+        tuple[pd.DataFrame, dict[str, list[str]]]: the matching rows, and the filters
+        actually applied as {column: [values as text]}.
+
+    Raises:
+        SkillInputError: `filters` is not a dict, names a column that doesn't exist,
+            or no rows match.
+
+    Example:
+        >>> rows, applied = _apply_filters(df, {"customer_type": "Wholesale"})
+        >>> applied
+        {'customer_type': ['Wholesale']}
+    """
     applied: dict[str, list[str]] = {}
     if not filters:
         return data, applied
@@ -184,6 +296,55 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         filter_columns=None, value_columns=None, dimension_column=None, agg="sum",
         range="last_3_months", comparison="auto", as_of=None, title="Dashboard",
         include_html=True) -> SkillResult:
+    """
+    Build the KPI dashboard: cards per top transaction type, time ranges, comparisons and filters.
+
+    Steps:
+    1. Parse the date column and drop rows without a date.
+    2. Choose roles: the value column (given, else the best money/count column; scores
+       such as CSAT are averaged), the KPI (type) column, and the filter columns.
+    3. Rank the top `top_kpis` types on ALL rows, then apply `filters`, so the cards
+       stay the same when a filter is chosen. With no type column, number columns
+       (`value_columns` or auto-picked) become the KPIs.
+    4. Add "Transactions" (row count) and, in type mode, the overall total.
+    5. For every range in _time.RANGES, compute KPI numbers vs. the previous window,
+       chart series for each supported comparison (day over day is skipped on windows
+       longer than MAX_DAILY_POINTS days) and a breakdown of `dimension_column`.
+    6. Pick the default range/comparison from what the data supports, write the
+       summary and findings, and (if `include_html`) fill dashboard_template.html.
+
+    Args:
+        df: the transaction table.
+        date_column: date column (default: auto-detected).
+        kpi_column: column whose most common values become the KPIs (default: auto-detected).
+        value_column: number to total for each KPI (default: the money column; none = count transactions).
+        top_kpis: how many KPI types to show, clamped to 1–6 (default 4).
+        filters: only use matching rows, e.g. {"customer_type": "Wholesale"}.
+        filter_columns: columns offered as filters, up to 9 (default: auto-detected).
+        value_columns: KPIs when there is no type column (default: up to 3 detected).
+        dimension_column: category column for the breakdown (default: first other category column).
+        agg: "sum" (default), "mean" or "count".
+        range: default range shown (default "last_3_months"; falls back if the data is too short).
+        comparison: "auto" (default), "dod", "wow" or "mom".
+        as_of: end date for the ranges, YYYY-MM-DD (default: the latest date in the data).
+        title: dashboard title (default "Dashboard").
+        include_html: also build the self-contained HTML dashboard (default True).
+
+    Returns:
+        SkillResult: summary and findings in plain English; one line chart of
+        transactions over time; table "kpis_<range>"; artifacts["html_dashboard"] when
+        requested; data holding the full payload (kpis, overview, ranges, breakdown,
+        filter_options, available_ranges, available_comparisons, labels, ...).
+
+    Raises:
+        SkillInputError: no usable dates, a named column is missing or not numeric,
+            more than 9 filter columns, bad filters, or no rows match the filters.
+
+    Example:
+        >>> df = pd.read_csv("samples/sales.csv")
+        >>> result = run(df, range="last_1_year", include_html=False)
+        >>> result.data["kpis"]   # e.g. ['__kpi_0__', '__kpi_1__', ...], labeled in data["metric_labels"]
+    """
     date_col = require_column(df, date_column, "date", date_columns(df))
     data = df.copy()
     data[date_col] = as_datetime(data[date_col])
@@ -397,6 +558,25 @@ def _range_series(data, date_col, metric, cmp_key, w, agg) -> list[dict]:
       prior_range  the matching period of the PREVIOUS range, by position
                    (day 1 of the prior 4 weeks under day 1 of these 4 weeks,
                    Jan last year under Jan this year...) -> the comparison line
+
+    Also: change, pct_change, partial, prior_period (the date of the matched prior
+    period) and period as a "YYYY-MM-DD" string. Numbers are rounded (2 decimals;
+    pct_change 4) to keep the JSON small.
+
+    Args:
+        data: the table, with `date_col` parsed as datetimes.
+        date_col: name of the date column.
+        metric: the column to chart.
+        cmp_key: "dod", "wow" or "mom".
+        w: the _time.Window for the selected range.
+        agg: pandas aggregation name for `metric`.
+
+    Returns:
+        list[dict]: one dict per period with the keys described above.
+
+    Example:
+        >>> rows = _range_series(data, "order_date", ROWS, "wow", w, "sum")
+        >>> rows[0]["period"], rows[0]["value"], rows[0]["prior_range"]
     """
     cur = _time.period_series(data, date_col, metric, cmp_key, w.start, w.end, agg)
     cur["prior_range"] = None
@@ -415,7 +595,26 @@ def _range_series(data, date_col, metric, cmp_key, w, agg) -> list[dict]:
 
 
 def _breakdown(data, date_col, dim, value, w, agg) -> list[dict]:
-    """Top 8 categories in the window, with their previous-period value."""
+    """
+    Top 8 categories in the window, with their previous-period value.
+
+    Args:
+        data: the table, with `date_col` parsed as datetimes.
+        date_col: name of the date column.
+        dim: the category column to break down by.
+        value: the number column to combine.
+        w: the _time.Window (inclusive dates).
+        agg: pandas aggregation name ("sum", "mean", ...).
+
+    Returns:
+        list[dict]: up to 8 rows, largest first: {"category", "current", "previous"
+        (None if the category had no value before or there is no previous window),
+        "pct_change" (None when the previous value is missing or 0)}.
+
+    Example:
+        >>> _breakdown(data, "order_date", "product", "amount", w, "sum")[0]["category"]
+        # the top product in the window
+    """
     cur = data[(data[date_col] >= w.start) & (data[date_col] < w.end + pd.Timedelta(days=1))]
     out = cur.groupby(dim, dropna=True)[value].agg(agg).sort_values(ascending=False).head(8)
     prev = pd.Series(dtype=float)

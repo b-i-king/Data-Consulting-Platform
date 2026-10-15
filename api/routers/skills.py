@@ -34,6 +34,21 @@ router = APIRouter(prefix="/skills")
 
 @router.get("")
 async def get_skills():
+    """
+    GET /api/skills — every data skill with its category, description and options.
+
+    No sign-in. Skills are ordered as in data_skills/catalog.json (Cleaning
+    first, AI last).
+
+    Returns:
+        list[dict]: one description per skill ("id", "title", "description",
+        "input", "wants_raw", "category", "category_name", "label", "primary",
+        "params" — the skill's options).
+
+    Example:
+        GET /api/skills
+        -> 200 [{"id": "...", "category": "data_cleaning", "title": "...", ...}, ...]
+    """
     return list_skills()
 
 
@@ -48,6 +63,39 @@ async def run_skill_endpoint(
     column_names: Annotated[str, Form()] = "{}",
     transforms: Annotated[str, Form()] = "{}",
 ):
+    """
+    POST /api/skills/{skill_id}/run — upload files plus options and get the skill's result.
+
+    No sign-in. Takes the same multipart upload and cleaning choices as
+    /api/files/analyze, so the skill sees the same cleaned data the user
+    previewed. Order of checks: skill id, then `params` JSON, then the
+    cleaning choices, then the upload, then the skill itself.
+
+    Args:
+        skill_id: str, the skill folder name from the URL, e.g. "build-dashboard".
+        files: list[UploadFile], one or more data files.
+        params: str, the skill's options as a JSON object, e.g. {"value_column": "amount"};
+            default "{}".
+        group_id: int, which cleaned table to use when the upload has several (default 0).
+        missing_strategy: str, "keep" (default) or "drop_any".
+        column_actions: str, JSON per-column missing-value choices (as for /analyze).
+        column_names: str, JSON column renames (as for /analyze).
+        transforms: str, JSON transform steps (as for /analyze).
+
+    Returns:
+        dict: the skill's result (summary, findings, tables, charts, artifacts,
+        data) plus "runtime_seconds".
+
+    Raises:
+        HTTPException: 404 "Unknown skill '<id>'."; 400 "'params' must be a JSON
+            object."; 400 for bad skill options or too little data
+            (SkillInputError); 400/413 for upload or cleaning-choice problems.
+
+    Example:
+        POST /api/skills/build-dashboard/run   (multipart/form-data)
+        files=@samples/sales.csv  params={}
+        -> 200 {"summary": "...", "findings": [...], "charts": [...], "runtime_seconds": 0.412, ...}
+    """
     if skill_id not in skill_ids():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown skill '{skill_id}'.")
     try:

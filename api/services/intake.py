@@ -113,15 +113,56 @@ _NAICS_PATH = Path(__file__).resolve().parents[1] / "data" / "naics_sectors.json
 
 @lru_cache
 def naics_tree() -> dict:
-    """The supersector → sector → subsector tree (loaded once)."""
+    """
+    The supersector → sector → subsector tree (loaded once).
+
+    Reads api/data/naics_sectors.json (built by scripts/build_naics_reference.py)
+    the first time it is called; @lru_cache keeps the parsed result for the rest
+    of the process, so later calls cost nothing.
+
+    Returns:
+        dict: {"supersectors": [{"id", "label", "description"}, ...],
+        "sectors": [{"code", "name", "supersector", "subsectors": [{"code", "name"}, ...]}, ...]}.
+
+    Raises:
+        FileNotFoundError: if the JSON file is missing from the deployment.
+
+    Example:
+        >>> [s["id"] for s in naics_tree()["supersectors"]]
+        ['goods_producing', 'service_providing']
+    """
     return json.loads(_NAICS_PATH.read_text(encoding="utf-8"))
 
 
 def validate_industry(supersector: str | None, sector: str | None, subsector: str | None) -> str | None:
     """
     Check that the three industry answers are consistent with each other.
+
     Returns an error message, or None when the answers are valid.
     All three are optional, but each one requires the one before it.
+
+    Rules, checked in order:
+    - no supersector: fine only if sector and subsector are also empty
+    - the supersector must be a known id ("goods_producing" / "service_providing")
+    - no sector: fine only if subsector is also empty
+    - the sector must exist AND belong to the chosen supersector
+    - a subsector, if given, must belong to the chosen sector
+
+    Args:
+        supersector: BLS supersector id, e.g. "service_providing", or None.
+        sector: 2-digit NAICS sector code, e.g. "44-45" (Retail Trade), or None.
+        subsector: 3-digit NAICS subsector code, e.g. "445", or None.
+
+    Returns:
+        str | None: a message safe to show the person, or None when valid.
+
+    Example:
+        >>> validate_industry("service_providing", "44-45", "445") is None
+        True
+        >>> validate_industry("goods_producing", "44-45", None)
+        'That sector does not belong to the chosen industry group.'
+        >>> validate_industry(None, "44-45", None)
+        'Choose goods-producing or service-providing first.'
     """
     if not supersector:
         return "Choose goods-producing or service-providing first." if (sector or subsector) else None

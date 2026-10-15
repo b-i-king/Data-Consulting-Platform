@@ -35,6 +35,34 @@ SKILL = SkillSpec(
 
 
 def run(df: pd.DataFrame, z_threshold: float = 3.5) -> SkillResult:
+    """
+    Sweep the table for outliers, impossible values, rare categories and daily spikes.
+
+    Checks (flags only; nothing is changed):
+    - Number columns (10+ values): outliers by robust z-score (0.6745 x distance from the
+      median / MAD) above `z_threshold`, or outside the 1.5 x IQR fences. If more than 5%
+      of values are flagged, it is reported as a "distinct high/low value group" instead
+      (e.g. $4 croissants next to $42 cakes). Negatives in under 5% of rows are flagged
+      as "unexpected negatives".
+    - Date columns: dates more than a day in the future or before 1900; and, with 14+
+      days of data, days whose row count has a robust z-score above 5 (double imports
+      or real events).
+    - Category columns (up to 200 values): 1 to 10 values each under 0.5% of rows
+      (often typos such as "Midtwon").
+
+    Args:
+        df: the table to check.
+        z_threshold: robust z-score above which a value is an outlier (default 3.5).
+
+    Returns:
+        SkillResult: summary with the number of patterns found; one finding per pattern;
+        table "anomalies" (column, check, count, pct, examples); a bar chart of counts
+        per column and check (when anything was found).
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv")).tables["anomalies"][0]["check"]
+        # e.g. 'outliers'
+    """
     rows, findings = [], []
     for col in numeric_columns(df):
         s = df[col].dropna()

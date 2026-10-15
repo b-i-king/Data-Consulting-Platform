@@ -50,11 +50,35 @@ MAX_CONSULTING_HOURS = 40
 
 
 def stripe_enabled() -> bool:
+    """
+    Tell whether real Stripe payments are switched on.
+
+    Payments are live when STRIPE_SECRET_KEY is set; otherwise the app runs in
+    PLACEHOLDER (test) mode, where plans switch on at once with no charge.
+
+    Returns:
+        bool: True if STRIPE_SECRET_KEY is set.
+
+    Example:
+        >>> stripe_enabled()   # local development, no key
+        False
+    """
     return bool(get_settings().stripe_secret_key)
 
 
 def _stripe():
-    """The Stripe library, set up with our secret key (imported only when used)."""
+    """
+    Return the Stripe library, set up with our secret key (imported only when used).
+
+    Importing lazily means the app (and tests) run without the `stripe` package
+    being loaded in placeholder mode.
+
+    Returns:
+        module: the `stripe` module with `stripe.api_key` set.
+
+    Example:
+        >>> _stripe().Price.list(lookup_keys=["dcp_all_tools_month"], limit=1)
+    """
     import stripe
 
     stripe.api_key = get_settings().stripe_secret_key
@@ -62,7 +86,24 @@ def _stripe():
 
 
 def _price_id(lookup_key: str) -> str:
-    """Find a Stripe price by its lookup key (created by scripts/sync_stripe.py)."""
+    """
+    Find a Stripe price by its lookup key (created by scripts/sync_stripe.py).
+
+    Only active prices are searched; the first match is used.
+
+    Args:
+        lookup_key: str, e.g. "dcp_data_cleaning_month" (see pricing.lookup_key).
+
+    Returns:
+        str: the Stripe price id (e.g. "price_1Abc...").
+
+    Raises:
+        HTTPException: 503 if no active price has that lookup key yet.
+
+    Example:
+        >>> _price_id(pricing.lookup_key("all_tools", "year"))
+        'price_1Abc...'
+    """
     prices = _stripe().Price.list(lookup_keys=[lookup_key], active=True, limit=1)
     if not prices.data:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -71,7 +112,23 @@ def _price_id(lookup_key: str) -> str:
 
 
 async def _customer_id(account: dict) -> str:
-    """The account's Stripe customer (created the first time they pay)."""
+    """
+    Return the account's Stripe customer id, creating the customer the first time they pay.
+
+    A new customer is named after the company (or the person's full name), tagged
+    with our account id in its metadata, and its id is saved on the account row
+    (and on the `account` dict passed in) so it is only created once.
+
+    Args:
+        account: dict, the accounts row of the client paying.
+
+    Returns:
+        str: the Stripe customer id (e.g. "cus_...").
+
+    Example:
+        >>> await _customer_id(account)
+        'cus_Q1w2e3...'
+    """
     if account.get("stripe_customer_id"):
         return account["stripe_customer_id"]
     name = account.get("company_name") or f"{account['first_name']} {account['last_name']}"
@@ -83,8 +140,19 @@ async def _customer_id(account: dict) -> str:
 
 
 async def ensure_plans() -> None:
-    """Make sure every item in pricing.py has a subscription_plans row (subscription items point at it).
-    Missing rows are added without Stripe ids; scripts/sync_stripe.py fills those in."""
+    """
+    Make sure every item in pricing.py has a subscription_plans row (subscription items point at it).
+
+    Missing rows are added without Stripe ids; scripts/sync_stripe.py fills those
+    in. Existing rows are left unchanged. The position in pricing.SUBSCRIPTIONS
+    becomes each row's sort order.
+
+    Returns:
+        None. Writes to the subscription_plans table (or the in-memory fallback).
+
+    Example:
+        >>> await ensure_plans()   # safe to call any number of times
+    """
     await account_store.insert_missing_plans([
         {"id": plan.id, "name": plan.name, "description": plan.description, "service_ids": list(plan.service_ids),
          "monthly_price_usd": plan.monthly_usd, "annual_price_usd": plan.annual_usd, "sort_order": order,
@@ -94,7 +162,24 @@ async def ensure_plans() -> None:
 
 
 def _selection(plan_ids: list[str], interval: str) -> list[str]:
-    """Validate a package (400 with a plain-English message if it doesn't make sense)."""
+    """
+    Validate a package (400 with a plain-English message if it doesn't make sense).
+
+    Args:
+        plan_ids: list[str], the Subscription ids the client picked.
+        interval: str, "month" or "year".
+
+    Returns:
+        list[str]: the normalized selection (see pricing.normalize_selection).
+
+    Raises:
+        HTTPException: 400 if the interval is not "month"/"year", or the selection
+            is invalid (unknown tool, missing requirement).
+
+    Example:
+        >>> _selection(["data_visualization"], "month")
+        ['data_cleaning', 'data_visualization']
+    """
     if interval not in pricing.INTERVALS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Choose monthly or yearly billing.")
     try:
@@ -104,7 +189,19 @@ def _selection(plan_ids: list[str], interval: str) -> list[str]:
 
 
 def _as_dict(obj):
-    """Stripe objects -> plain dicts (newer stripe libraries return non-dict objects)."""
+    """
+    Convert Stripe objects to plain dicts (newer stripe libraries return non-dict objects).
+
+    Args:
+        obj: a Stripe object (anything with `to_dict()`) or an already-plain value.
+
+    Returns:
+        dict | Any: `obj.to_dict()` when available, otherwise `obj` unchanged.
+
+    Example:
+        >>> _as_dict({"id": "sub_1"})
+        {'id': 'sub_1'}
+    """
     return obj.to_dict() if hasattr(obj, "to_dict") else obj
 
 
@@ -117,7 +214,28 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
       * Already subscribed   -> the subscription's tools (and interval) are
         changed in place; Stripe prorates the difference on the next invoice.
 
-    Returns {"url", "activated", "updated", "test_mode"}.
+    When the interval changes, every old item is removed and new prices are
+    added. Items not billable yet (AI before launch) are not sent to Stripe.
+
+    Args:
+        account: dict, the accounts row of the plan holder.
+        plan_ids: list[str], the Subscription ids picked.
+        interval: str, "month" or "year".
+
+    Returns:
+        dict: {"url", "activated", "updated", "test_mode"} — "url" is the Stripe
+            Checkout page to send the client to (None when nothing needs paying
+            there), "activated" is True when the plan switched on at once (test
+            mode), "updated" is True when an existing subscription was changed.
+
+    Raises:
+        HTTPException: 400 for an invalid package or interval; 409 if the package
+            and interval are already the current ones; 503 if a Stripe price is
+            missing.
+
+    Example:
+        >>> await start_checkout(account, ["data_visualization"], "month")   # test mode
+        {'url': None, 'activated': True, 'updated': False, 'test_mode': True}
     """
     picked = _selection(plan_ids, interval)
     billable = [p for p in picked if pricing.billable(p)]   # AI is free until it launches
@@ -165,7 +283,30 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
 
 
 async def buy_consulting_hours(account: dict, hours: int, service_id: str | None = None) -> dict:
-    """Prepay consulting hours at the hourly rate (one-time Stripe Checkout)."""
+    """
+    Prepay consulting hours at the hourly rate (one-time Stripe Checkout).
+
+    In test mode the purchase is recorded at once (hours x rate). With Stripe, a
+    Checkout page is created and the hours are recorded later by the webhook
+    (checkout.session.completed).
+
+    Args:
+        account: dict, the accounts row of the client paying.
+        hours: int, number of hours, 1 to MAX_CONSULTING_HOURS (40).
+        service_id: str | None, the service the hours are for (optional).
+
+    Returns:
+        dict: {"url", "activated", "test_mode"} — "url" is the Checkout page (None
+            in test mode), "activated" is True when the hours were recorded at once.
+
+    Raises:
+        HTTPException: 400 if hours are out of range or the service id is unknown;
+            503 if the consulting price is missing in Stripe.
+
+    Example:
+        >>> await buy_consulting_hours(account, 2, "data_visualization")   # test mode
+        {'url': None, 'activated': True, 'test_mode': True}
+    """
     if not 1 <= hours <= MAX_CONSULTING_HOURS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Choose 1 to {MAX_CONSULTING_HOURS} hours.")
     if service_id is not None and service_id not in pricing.SERVICES_BY_ID:
@@ -191,7 +332,22 @@ async def buy_consulting_hours(account: dict, hours: int, service_id: str | None
 
 
 async def billing_portal(account: dict) -> dict:
-    """Stripe's customer portal: update the card, see invoices, cancel anytime."""
+    """
+    Open Stripe's customer portal: update the card, see invoices, cancel anytime.
+
+    Args:
+        account: dict, the accounts row of the client.
+
+    Returns:
+        dict: {"url": str}, the portal page; it returns to <SITE_URL>/app.
+
+    Raises:
+        HTTPException: 400 in test mode (cancel from the workspace instead).
+
+    Example:
+        >>> await billing_portal(account)
+        {'url': 'https://billing.stripe.com/p/session/...'}
+    """
     if not stripe_enabled():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Test mode: cancel the plan from your workspace.")
     session = _stripe().billing_portal.Session.create(
@@ -200,7 +356,24 @@ async def billing_portal(account: dict) -> dict:
 
 
 async def cancel_placeholder(account: dict) -> None:
-    """Test mode only: switch the subscription off (with Stripe, the portal does this)."""
+    """
+    Switch the subscription off in test mode only (with Stripe, the portal does this).
+
+    Every live subscription of the account is marked "canceled".
+
+    Args:
+        account: dict, the accounts row of the plan holder.
+
+    Returns:
+        None.
+
+    Raises:
+        HTTPException: 400 when Stripe is enabled (use "Manage billing"), or when
+            there is no live subscription to cancel.
+
+    Example:
+        >>> await cancel_placeholder(account)   # test mode, after start_checkout
+    """
     if stripe_enabled():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Use “Manage billing” to cancel.")
     live = await account_store.list_subscriptions(str(account["id"]))
@@ -211,7 +384,24 @@ async def cancel_placeholder(account: dict) -> None:
 
 
 async def live_plan_services(account_id: str) -> tuple[list[str], list[dict]]:
-    """(service ids unlocked by live subscriptions' tools, the live subscriptions)."""
+    """
+    Return the service ids unlocked by live subscriptions' tools, and the live subscriptions.
+
+    Live means status "active", "trialing" or "past_due" (account_store.LIVE_STATUSES).
+    Service ids are de-duplicated, keeping first-seen order.
+
+    Args:
+        account_id: str, the plan holder's account id.
+
+    Returns:
+        tuple[list[str], list[dict]]: (service ids, the live subscription rows,
+            each with its "items").
+
+    Example:
+        >>> services, subs = await live_plan_services(account_id)
+        >>> services
+        ['data_cleaning', 'data_visualization']
+    """
     subs = await account_store.list_subscriptions(account_id)
     services: list[str] = []
     for s in subs:
@@ -224,6 +414,22 @@ async def live_plan_services(account_id: str) -> tuple[list[str], list[dict]]:
 
 def _period_end(sub) -> datetime | None:
     # Newer Stripe API versions keep the period end on each subscription item.
+    """
+    Read when a Stripe subscription's current billing period ends.
+
+    Newer Stripe API versions keep the period end on each subscription item, so
+    the first item is checked when the subscription itself has none.
+
+    Args:
+        sub: dict, a Stripe subscription as a plain dict.
+
+    Returns:
+        datetime | None: the period end in UTC, or None if Stripe did not send one.
+
+    Example:
+        >>> _period_end({"current_period_end": 1767225600})
+        datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)
+    """
     end = sub.get("current_period_end")
     if end is None:
         items = (sub.get("items") or {}).get("data") or []
@@ -232,6 +438,25 @@ def _period_end(sub) -> datetime | None:
 
 
 async def _save_subscription(sub) -> None:
+    """
+    Save a Stripe subscription (and its items) to our subscriptions tables.
+
+    The account is found from the subscription's metadata ("account_id"), or else
+    by its Stripe customer id. Each item's price lookup key says which tool and
+    interval it is (pricing.plan_from_lookup_key); unknown prices are skipped with
+    a warning. A subscription with no matching account or no known tools is
+    ignored (logged, not raised), so a stray webhook never crashes the server.
+
+    Args:
+        sub: dict, a Stripe subscription as a plain dict (from the webhook or
+            Subscription.modify).
+
+    Returns:
+        None. Upserts the subscriptions / subscription_items rows.
+
+    Example:
+        >>> await _save_subscription(event["data"]["object"])
+    """
     meta = sub.get("metadata") or {}
     account_id = meta.get("account_id")
     if not account_id:
@@ -263,7 +488,31 @@ async def _save_subscription(sub) -> None:
 
 
 async def handle_webhook(payload: bytes, signature: str | None) -> str:
-    """Verify Stripe's signature, then apply the event. Returns the event type."""
+    """
+    Verify Stripe's signature, then apply the event. Returns the event type.
+
+    Handled events:
+    - customer.subscription.created / updated / deleted -> save the subscription
+      (this is what switches a paid plan on or off);
+    - checkout.session.completed for consulting hours, when paid -> record the
+      hours (the amount comes from Stripe in cents, converted to dollars).
+    Other event types are accepted and ignored.
+
+    Args:
+        payload: bytes, the raw request body exactly as Stripe sent it.
+        signature: str | None, the `Stripe-Signature` header.
+
+    Returns:
+        str: the Stripe event type, e.g. "customer.subscription.updated".
+
+    Raises:
+        HTTPException: 503 if STRIPE_WEBHOOK_SECRET is not set; 400 if the
+            signature is missing or invalid.
+
+    Example:
+        >>> await handle_webhook(request_body, request.headers.get("stripe-signature"))
+        'checkout.session.completed'
+    """
     secret = get_settings().stripe_webhook_secret
     if not secret:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="STRIPE_WEBHOOK_SECRET is not set.")

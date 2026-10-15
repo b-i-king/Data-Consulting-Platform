@@ -34,7 +34,23 @@ SKILL = SkillSpec(
 
 
 def _kind(v) -> str:
-    """What a single value looks like."""
+    """
+    What a single value looks like.
+
+    Order of checks: real bool -> "bool"; int/float -> "number"; a SENTINELS word such as
+    "N/A" or "TBD" -> "sentinel"; text that parses as a number after removing "$", ",", "%"
+    -> "number"; text of 6+ characters that parses as a date -> "date"; anything else -> "text".
+
+    Args:
+        v: Any, one cell value.
+
+    Returns:
+        str: "bool", "number", "sentinel", "date", or "text".
+
+    Example:
+        >>> [_kind(v) for v in [True, 3, "$1,200", "N/A", "2024-03-01", "hello"]]
+        ['bool', 'number', 'number', 'sentinel', 'date', 'text']
+    """
     if isinstance(v, bool):
         return "bool"
     if isinstance(v, (int, float)):
@@ -50,6 +66,28 @@ def _kind(v) -> str:
 
 
 def sweep(name: str, df: pd.DataFrame) -> list[dict]:
+    """
+    Find type problems in the text columns of one table.
+
+    Numeric and datetime columns are skipped (already typed). For the first 2,000 non-empty
+    values of each other column, each value is classified with _kind and reported as:
+    - "placeholder nulls" when any value is a sentinel word
+    - "boolean stored as text" when all distinct values are yes/no-style words (then stops)
+    - "numbers stored as text" when ≥ 90% look like numbers
+    - "dates stored as text" when ≥ 90% look like dates
+    - "mixed types" when > 10% are numbers and > 10% are text
+
+    Args:
+        name: str, table name (copied into each issue).
+        df: pd.DataFrame, the raw table.
+
+    Returns:
+        list[dict]: one dict per issue with keys table, column, issue, detail, fix.
+
+    Example:
+        >>> sweep("t", pd.DataFrame({"paid": ["yes", "no", "yes"]}))[0]["issue"]
+        'boolean stored as text'
+    """
     issues = []
     for col in df.columns:
         s = df[col].dropna()
@@ -83,6 +121,26 @@ def sweep(name: str, df: pd.DataFrame) -> list[dict]:
 
 
 def run(tables: dict[str, pd.DataFrame]) -> SkillResult:
+    """
+    Find data-type problems in one or more raw tables, including cross-file type drift.
+
+    Runs sweep() on every table. With several tables, also compares each column name
+    (case- and space-insensitive) across files and flags it when its broad type (number,
+    date, text) differs, since such files can't be joined or stacked cleanly. Reports only;
+    nothing is changed.
+
+    Args:
+        tables: dict[str, pd.DataFrame], table name -> its RAW data (wants_raw=True).
+
+    Returns:
+        SkillResult: summary with the issue count; findings for the first 15 issues;
+        table "issues".
+
+    Example:
+        >>> res = run({"a.csv": pd.DataFrame({"id": [1]}), "b.csv": pd.DataFrame({"id": ["x"]})})
+        >>> res.tables["issues"][-1]["issue"]
+        'type differs between files'
+    """
     issues = [i for name, df in tables.items() for i in sweep(name, df)]
 
     # Cross-file drift: same column name, different broad type.

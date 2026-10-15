@@ -51,7 +51,25 @@ class NotPlanOwnerError(PermissionError):
 
 
 async def plan_holder_id(account: dict) -> str:
-    """The account whose plan applies: the team owner for businesses, else the account itself."""
+    """
+    Find the account whose plan applies: the team owner for businesses, else the account itself.
+
+    An individual holds their own plan. A business team member shares the team
+    OWNER's plan, so their services and subscriptions come from the owner. If the
+    account's team cannot be found, the account itself is used.
+
+    Args:
+        account: dict, an accounts row (needs "id"; "team_id" is optional).
+
+    Returns:
+        str: the id of the account that holds the plan.
+
+    Example:
+        >>> await plan_holder_id(colleague)          # colleague on Alice's team
+        '<Alice's account id>'
+        >>> await plan_holder_id(individual) == str(individual["id"])
+        True
+    """
     team_id = account.get("team_id")
     if team_id:
         team = await account_store.get_team(str(team_id))
@@ -61,7 +79,24 @@ async def plan_holder_id(account: dict) -> str:
 
 
 async def gets_everything(account: dict) -> bool:
-    """True for consultants and consultant-managed clients."""
+    """
+    Tell whether an account gets every available service at once.
+
+    True for consultants (they work on any service for their clients) and for
+    consultant-managed clients. For a business, the consultant is set on the team
+    owner, so a colleague of a consultant-managed owner also gets everything.
+
+    Args:
+        account: dict, an accounts row (needs "id"; "team_id" is optional).
+
+    Returns:
+        bool: True for consultants and consultant-managed clients; False otherwise
+            (also when the plan holder's account can no longer be found).
+
+    Example:
+        >>> await gets_everything(consultant_account)
+        True
+    """
     if await account_store.get_consultant_by_account(str(account["id"])):
         return True
     holder_id = await plan_holder_id(account)
@@ -72,7 +107,24 @@ async def gets_everything(account: dict) -> bool:
 
 
 async def active_services(account: dict) -> list[str]:
-    """Service ids this account can use, in catalog order (Data Cleaning always included)."""
+    """
+    List the service ids this account can use, in catalog order (Data Cleaning always included).
+
+    - Consultants and consultant-managed clients get every available service.
+    - Everyone else gets the services unlocked by the plan holder's live
+      subscriptions, plus Data Cleaning.
+    Project interests (account_services) do NOT unlock anything here.
+
+    Args:
+        account: dict, an accounts row.
+
+    Returns:
+        list[str]: service ids in the order of pricing.SERVICES.
+
+    Example:
+        >>> await active_services(new_client)   # no subscription yet
+        ['data_cleaning']
+    """
     if await gets_everything(account):
         return [s.id for s in SERVICES if s.available]
     holder = await plan_holder_id(account)
@@ -82,20 +134,71 @@ async def active_services(account: dict) -> list[str]:
 
 
 async def interests(account: dict) -> list[str]:
-    """Projects the client said they'd like help with (catalog order). Doesn't unlock anything."""
+    """
+    List the projects the client said they would like help with (catalog order).
+
+    These are the "Projects with a consultant" picks stored in account_services
+    for the plan holder. They are shown to the consultant and do not unlock any
+    tools.
+
+    Args:
+        account: dict, an accounts row (a team member sees the owner's interests).
+
+    Returns:
+        list[str]: service ids in the order of pricing.SERVICES.
+
+    Example:
+        >>> await interests(client)
+        ['data_visualization', 'data_science_ml']
+    """
     stored = set(await account_store.list_services(await plan_holder_id(account)))
     return [s.id for s in SERVICES if s.id in stored]
 
 
 async def downloads_included(account: dict) -> bool:
-    """True when a live plan includes Data Cleaning: downloads cost nothing extra."""
+    """
+    Tell whether downloads are free because a live plan includes Data Cleaning.
+
+    The plan holder's live subscriptions are checked (a Data Cleaning tool or the
+    All tools bundle both count). Without one, downloads are charged by runtime.
+
+    Args:
+        account: dict, an accounts row (a team member uses the owner's plan).
+
+    Returns:
+        bool: True when downloads cost nothing extra.
+
+    Example:
+        >>> await downloads_included(subscriber)   # subscribed to All tools
+        True
+    """
     return ALWAYS_INCLUDED in (await billing.live_plan_services(await plan_holder_id(account)))[0]
 
 
 async def add_services(account: dict, service_ids: list[str], source: str = "added") -> list[str]:
     """
     Record project interest in services and return the account's interests.
-    Raises ValueError for unknown ids and NotPlanOwnerError for team members.
+
+    Only the plan holder (an individual, or a business's team owner) may add
+    interests. Duplicate ids are removed and Data Cleaning is skipped (it is
+    always included). This does NOT unlock tools — only a subscription does.
+
+    Args:
+        account: dict, the signed-in (or acted-for) accounts row.
+        service_ids: list[str], service ids from pricing.SERVICES.
+        source: str, where the request came from, saved with each row
+            (default "added").
+
+    Returns:
+        list[str]: the account's interests after the change, in catalog order.
+
+    Raises:
+        ValueError: for unknown service ids.
+        NotPlanOwnerError: when a team member (not the owner) tries to add services.
+
+    Example:
+        >>> await add_services(owner, ["data_visualization", "data_cleaning"])
+        ['data_visualization']
     """
     unknown = [s for s in service_ids if s not in SERVICES_BY_ID]
     if unknown:

@@ -69,10 +69,44 @@ _MONEY = re.compile(r"[$,%\s]")
 # ── Checks ────────────────────────────────────────────────────────────────────
 
 def _is_number(s: pd.Series) -> bool:
+    """
+    Say whether a column holds real numbers (true/false columns do not count).
+
+    pandas treats bool columns as numeric, but averaging or range-checking
+    True/False makes no sense to people, so they are excluded.
+
+    Args:
+        s: pd.Series: the column to test.
+
+    Returns:
+        bool: True for int/float columns, False for bool, text, dates, etc.
+
+    Example:
+        >>> _is_number(pd.Series([1.5, 2.0])), _is_number(pd.Series([True, False]))
+        (True, False)
+    """
     return pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
 
 
 def _fmt(v) -> str:
+    """
+    Format one value for the report text, US style.
+
+    - dates / timestamps -> "YYYY-MM-DD" (the time part is dropped)
+    - floats -> thousands separators, at most 2 decimals, trailing zeros removed
+    - ints -> thousands separators
+    - anything else -> str(value)
+
+    Args:
+        v: the value to show (number, date, Timestamp, or anything else).
+
+    Returns:
+        str: the formatted value.
+
+    Example:
+        >>> _fmt(1234.5), _fmt(1200), _fmt(2.0), _fmt(pd.Timestamp("2024-03-01 10:00"))
+        ('1,234.5', '1,200', '2', '2024-03-01')
+    """
     if isinstance(v, (pd.Timestamp, dt.date)):
         return str(v)[:10]
     if isinstance(v, (float, np.floating)):
@@ -82,8 +116,33 @@ def _fmt(v) -> str:
 
 def outlier_check(series: pd.Series, is_id: bool = False) -> dict | None:
     """
-    "Wrong data": values far outside the usual range, or None when there are none.
-    Returns {kind, count, low, high, min, max, examples} — low/high are the limits.
+    "Wrong data": find values far outside the usual range, or None when there are none.
+
+    Rules:
+    - Skipped (None) for ID columns and columns with fewer than
+      `MIN_VALUES_FOR_OUTLIERS` (10) non-missing values.
+    - Dates: anything before 1900-01-01 or after today is flagged.
+    - Numbers: Tukey's "far out" fences, low = Q1 − 3 × IQR and high = Q3 + 3 × IQR
+      (IQR = Q3 − Q1). If the column has no negatives, low is never below 0. If
+      IQR is 0 (most values identical) nothing is flagged.
+    - Text and true/false columns: None.
+    Nothing is changed; the result only feeds the report and the suggested step.
+
+    Args:
+        series: pd.Series: the column to check (missing values are ignored).
+        is_id: bool: True if the column looks like an ID or code; IDs are never
+            checked because their size carries no meaning.
+
+    Returns:
+        dict | None: None when nothing is unusual, otherwise
+            {kind ("number" | "date"), count, low, high, min, max, examples, note}
+        where low/high are the limits (rounded; whole numbers for integer columns),
+        min/max are formatted text, and examples are up to 3 flagged values, most
+        extreme first.
+
+    Example:
+        >>> outlier_check(pd.Series([10, 12, 11, 13, 12, 11, 10, 14, 12, 13, 450]))["examples"]
+        ['450']
     """
     s = series.dropna()
     if is_id or len(s) < MIN_VALUES_FOR_OUTLIERS:
@@ -123,19 +182,70 @@ def outlier_check(series: pd.Series, is_id: bool = False) -> dict | None:
 
 
 def _to_number(s: pd.Series) -> pd.Series:
-    """'$1,200' -> 1200.0, '15%' -> 15.0; anything else -> NaN."""
+    """
+    Convert text to numbers, ignoring "$", ",", "%" and spaces: '$1,200' -> 1200.0.
+
+    Values that still are not numbers after removing those characters become
+    NaN (missing). Note '15%' becomes 15.0, not 0.15.
+
+    Args:
+        s: pd.Series: the column to convert (any dtype; it is turned into text first).
+
+    Returns:
+        pd.Series: float values, NaN where the value would not convert.
+
+    Example:
+        >>> _to_number(pd.Series(["$1,200", "15%", "abc"])).tolist()
+        [1200.0, 15.0, nan]
+    """
     return pd.to_numeric(s.astype(str).str.replace(_MONEY, "", regex=True), errors="coerce")
 
 
 def _to_date(s: pd.Series) -> pd.Series:
+    """
+    Convert text to dates, accepting mixed formats; unparseable values become NaT.
+
+    Uses `pd.to_datetime(..., format="mixed", errors="coerce")`, so each value is
+    parsed on its own ("2020/12/26", "12/26/2020", "Dec 26 2020" all work).
+
+    Args:
+        s: pd.Series: the column to convert (any dtype; it is turned into text first).
+
+    Returns:
+        pd.Series: datetime64 values, NaT where the value would not convert.
+
+    Example:
+        >>> _to_date(pd.Series(["2020/12/26", "nope"])).tolist()
+        [Timestamp('2020-12-26 00:00:00'), NaT]
+    """
     return pd.to_datetime(s.astype(str), errors="coerce", format="mixed")
 
 
 def format_check(series: pd.Series) -> dict | None:
     """
-    "Wrong format": a text column that is mostly numbers or dates. Returns
-    {to, convertible, failing, examples} (examples = values that won't convert)
-    or None. Works on the distinct values, so big columns stay fast.
+    "Wrong format": spot a text column that is mostly numbers or dates.
+
+    Tries "number" first, then "date". A conversion is suggested when at least
+    `FORMAT_SHARE` (80%) of the non-missing values convert. Details:
+    - Only text (object/string) columns are checked; others return None.
+    - Works on the DISTINCT values (weighted by how often each appears), so big
+      columns stay fast.
+    - "date" is skipped when over half the distinct values are plain numbers
+      (20201226 is a number, not a date, here).
+    - With more than 200 distinct values, a sample of 200 is tried first, and the
+      type is skipped if under 70% of the sample converts.
+
+    Args:
+        series: pd.Series: the column to check.
+
+    Returns:
+        dict | None: {to ("number" | "date"), convertible (rows that convert),
+        failing (rows that would become blank), examples (up to 3 values that
+        won't convert)}, or None when the column is fine.
+
+    Example:
+        >>> format_check(pd.Series(["$1,200", "$15", "$9", "$4", "n/a"]))
+        {'to': 'number', 'convertible': 4, 'failing': 1, 'examples': ['n/a']}
     """
     s = series.dropna()
     if s.empty or not (s.dtype == object or pd.api.types.is_string_dtype(s)):
@@ -161,7 +271,34 @@ def format_check(series: pd.Series) -> dict | None:
 # ── Steps ─────────────────────────────────────────────────────────────────────
 
 def validate_steps(steps) -> list[dict]:
-    """Check the `transforms` list; raise ValueError with a plain-English message."""
+    """
+    Check the `transforms` list; raise ValueError with a plain-English message.
+
+    Each step must be a dict whose "op" is one of `RAW_OPS` + `OPS`, and:
+    - remove_top_rows needs an int "count" of 1 or more
+    - change_type needs "to" in `TYPES` (number, date, text)
+    - outliers needs "method" in `OUTLIER_METHODS` (cap, remove, blank)
+    - pivot's "agg" (default "sum") must be in `AGGS`
+    - unpivot needs a non-empty "columns" list
+    Column names are NOT checked here (they are checked when the step runs).
+
+    Args:
+        steps: the `transforms` value from the request: a list of step dicts, or None.
+
+    Returns:
+        list[dict]: the same list (unchanged), or [] when `steps` is None.
+
+    Raises:
+        ValueError: if `steps` is not a list of dicts, or a step is unknown or
+            missing a required setting. The message names the step number (1-based).
+
+    Example:
+        >>> validate_steps([{"op": "remove_top_rows", "count": 2}])
+        [{'op': 'remove_top_rows', 'count': 2}]
+        >>> validate_steps([{"op": "sort"}])
+        Traceback (most recent call last):
+        ValueError: Step 1: unknown step 'sort'. Use one of: promote_headers, ...
+    """
     if steps is None:
         return []
     if not isinstance(steps, list) or not all(isinstance(s, dict) for s in steps):
@@ -184,7 +321,26 @@ def validate_steps(steps) -> list[dict]:
 
 
 def _retype(df: pd.DataFrame, skip: tuple[str, ...]) -> pd.DataFrame:
-    """After headers move, text columns that are all numbers become numbers again."""
+    """
+    After headers move, turn text columns that are all numbers back into numbers.
+
+    When the first row was the real header, pandas read every column as text
+    (because of that header row). Once it is removed, a text column whose every
+    non-missing value converts with `pd.to_numeric` becomes numeric again.
+    Modifies `df` in place and also returns it.
+
+    Args:
+        df: pd.DataFrame: the table after "Use first row as headers".
+        skip: tuple[str, ...]: column names to leave alone (columns the platform
+            added, e.g. source_file).
+
+    Returns:
+        pd.DataFrame: the same DataFrame with numeric columns restored.
+
+    Example:
+        >>> _retype(pd.DataFrame({"a": ["1", "2"], "b": ["x", "2"]}), ()).dtypes["a"]
+        dtype('int64')
+    """
     for col in df.columns:
         if col in skip or not (df[col].dtype == object or pd.api.types.is_string_dtype(df[col])):
             continue
@@ -196,9 +352,34 @@ def _retype(df: pd.DataFrame, skip: tuple[str, ...]) -> pd.DataFrame:
 
 def apply_raw_steps(df: pd.DataFrame, steps: list[dict], dedupe, keep: tuple[str, ...] = ()) -> tuple[pd.DataFrame, list[dict]]:
     """
-    Steps that change the header row, run BEFORE column names are cleaned.
-    `dedupe` is file_reader's naming rule (blank -> unnamed_column_<n>, repeats
-    -> name_2). `keep` = columns the platform added (e.g. source_file).
+    Run the steps that change the header row, BEFORE column names are cleaned.
+
+    Only "remove_top_rows" and "promote_headers" are run here (other steps are
+    skipped and run later by `apply_steps`), in the order given:
+    - remove_top_rows: drop the first `count` rows (at most all of them).
+    - promote_headers: use the first row as column names (blank -> unnamed, repeats
+      made unique by `dedupe`), drop that row, and turn all-number text columns
+      back into numbers. Columns in `keep` keep their name.
+
+    Args:
+        df: pd.DataFrame: the table as read from the file.
+        steps: list[dict]: the validated steps (see `validate_steps`).
+        dedupe: callable(list[str]) -> list[str]: file_reader's naming rule
+            (blank -> unnamed_column_<n>, repeats -> name_2).
+        keep: tuple[str, ...]: columns the platform added (e.g. source_file).
+
+    Returns:
+        tuple[pd.DataFrame, list[dict]]: the new table, and one entry per step run:
+        {step (1-based position in `steps`), op, text (for the report), count}.
+
+    Raises:
+        ValueError: if "Use first row as headers" runs on a table with no rows left.
+
+    Example:
+        >>> raw = pd.DataFrame({0: ["Date", "2024-01-01"], 1: ["Amount", "5"]})
+        >>> df, done = apply_raw_steps(raw, [{"op": "promote_headers"}], dedupe_column_names)
+        >>> list(df.columns), done[0]["text"]
+        (['Date', 'Amount'], 'Used the first row as column names.')
     """
     done = []
     for i, step in enumerate(steps, start=1):
@@ -222,13 +403,53 @@ def apply_raw_steps(df: pd.DataFrame, steps: list[dict], dedupe, keep: tuple[str
 
 
 def _need(df: pd.DataFrame, col: str, i: int) -> str:
+    """
+    Make sure a step's column exists, and return its name.
+
+    Args:
+        df: pd.DataFrame: the table at this point in the steps.
+        col: str: the column's current name (already resolved from its key).
+        i: int: the step number (1-based), used in the error message.
+
+    Returns:
+        str: `col`, unchanged.
+
+    Raises:
+        ValueError: if `df` has no column called `col` (for example it was renamed
+            or removed by an earlier step).
+
+    Example:
+        >>> _need(pd.DataFrame({"price": [1]}), "price", 1)
+        'price'
+    """
     if col not in df.columns:
         raise ValueError(f"Step {i}: there's no column called '{col}' (was it renamed or removed?).")
     return col
 
 
 def _typed(value: str, series: pd.Series):
-    """Turn the text typed in a box into the column's kind of value ("" = blank)."""
+    """
+    Turn the text typed in a box into the column's kind of value ("" = blank).
+
+    - empty or None -> NaN (a blank)
+    - number column -> a number ("$45" -> 45); an int for whole-number int columns
+    - date column -> a Timestamp
+    - any other column -> the text itself
+
+    Args:
+        value: str: what the client typed (e.g. the "find" or "replace" box).
+        series: pd.Series: the column the value is for (decides the type).
+
+    Returns:
+        The converted value: NaN, int, float, pd.Timestamp or str.
+
+    Raises:
+        ValueError: if the column holds numbers (or dates) and `value` isn't one.
+
+    Example:
+        >>> _typed("45", pd.Series([1, 2])), _typed("x", pd.Series(["a"]))
+        (45, 'x')
+    """
     if value is None or str(value).strip() == "":
         return np.nan
     if _is_number(series):
@@ -246,9 +467,46 @@ def _typed(value: str, series: pd.Series):
 
 def apply_steps(df: pd.DataFrame, steps: list[dict], resolve, clean_names) -> tuple[pd.DataFrame, list[dict]]:
     """
-    The steps that run AFTER column names are cleaned, in order. `resolve`
-    turns a column key into its current name; `clean_names` is Step 0's
-    naming rule (for the new columns unpivot / pivot create).
+    Run the steps that come AFTER column names are cleaned, in order.
+
+    Header steps (`RAW_OPS`) are skipped (they already ran in `apply_raw_steps`).
+    What each op does:
+    - change_type: to number / date / text; values that don't convert become blank
+      (the count is reported).
+    - replace_values: replace cells equal to "find" ("" finds blanks) with
+      "replace" ("" makes them blank); text is compared after trimming spaces.
+    - outliers: values below "low" or above "high" are capped (numbers only),
+      removed (the whole row) or made blank.
+    - unpivot: `df.melt` the chosen columns into attribute + value columns
+      (names from "attribute" / "value", cleaned by `clean_names`).
+    - pivot: group by all other columns and spread "column"'s values into new
+      columns holding `agg` of "values" (at most 100 new columns).
+    An integer column that receives blanks is switched to pandas "Int64".
+
+    Args:
+        df: pd.DataFrame: the table after Step 0 (clean names) and Step 1 (tidy text).
+        steps: list[dict]: the validated steps (see `validate_steps`).
+        resolve: callable(str) -> str: turns a column key (its automatic name)
+            into its current name, so choices survive a rename.
+        clean_names: callable(list[str]) -> list[str]: Step 0's naming rule, used
+            for the new columns unpivot / pivot create.
+
+    Returns:
+        tuple[pd.DataFrame, list[dict]]: the new table, and one entry per step run:
+        {step (1-based), op, text (for the report), count, and "column" for
+        single-column steps}.
+
+    Raises:
+        ValueError: for a missing column, a value of the wrong type, capping dates,
+            unpivot names that already exist, pivoting a column onto itself, or a
+            pivot that would create more than 100 columns.
+
+    Example:
+        >>> df = pd.DataFrame({"store": ["A", "A"], "jan": [1, 2], "feb": [3, 4]})
+        >>> out, done = apply_steps(df, [{"op": "unpivot", "columns": ["jan", "feb"]}],
+        ...                         resolve=lambda c: c, clean_names=clean_column_names)
+        >>> list(out.columns), len(out)
+        (['store', 'attribute', 'value'], 4)
     """
     done = []
     for i, step in enumerate(steps, start=1):

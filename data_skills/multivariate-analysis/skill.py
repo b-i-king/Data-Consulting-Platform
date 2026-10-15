@@ -35,6 +35,34 @@ SKILL = SkillSpec(
 
 
 def run(df, columns=None) -> SkillResult:
+    """
+    Analyze how three or more number columns behave together.
+
+    Steps (on rows complete in every chosen column; constant columns are dropped):
+    - Partial correlations from the pseudo-inverse of the correlation matrix, sorted by how
+      much they differ from the plain correlation; a gap > 0.2 is reported as a relationship
+      that "runs through a third factor"
+    - VIF per column (1 / (1 - R²) regressing it on the others); VIF > 5 flags multicollinearity,
+      and R² ≥ 0.9999 gives VIF = inf
+    - PCA on standardized data: how many components reach 80% of the variance and which
+      three columns load most on the first component
+
+    Args:
+        df: pd.DataFrame, the table.
+        columns: list[str] | None, number columns to use (default: all numeric_columns).
+
+    Returns:
+        SkillResult: summary with column and row counts; findings on partial correlation,
+        multicollinearity, and PCA; tables "partial_correlations", "vif", and "pca"
+        (explained and cumulative %); one bar chart of variance explained per component.
+
+    Raises:
+        SkillInputError: if fewer than 3 varying columns or fewer than 20 complete rows remain.
+
+    Example:
+        >>> res = run(df, columns=["amount", "quantity", "discount", "tip"])
+        >>> res.tables["vif"][0]   # e.g. {"column": "amount", "vif": 3.21}
+    """
     cols = columns or numeric_columns(df)
     data = df[cols].dropna()
     data = data.loc[:, data.std() > 0]

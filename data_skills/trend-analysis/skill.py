@@ -39,6 +39,38 @@ SKILL = SkillSpec(
 
 
 def run(df, date_column=None, value_column=None, segment_column=None, agg="sum") -> SkillResult:
+    """
+    Tell the headline story of a number over time: direction, growth, seasonality, segments.
+
+    Steps:
+    - Monthly series via _time.period_series (partial months are left out); needs 3+ full months
+    - Direction: slope of a straight-line fit through the monthly values, as change per month,
+      % of an average month, and % over the whole span
+    - Latest full month with month-over-month and (with > 12 months) year-over-year change
+    - Best and weakest months
+    - Seasonality by month of year (12+ months) and by day of week, vs. the average
+    - Segment shifts (when segment_column is given): change in each segment's share between
+      the first 6 and last 6 months, in percentage points
+
+    Args:
+        df: pd.DataFrame, the table.
+        date_column: str | None, date column (auto-detected when None).
+        value_column: str | None, number to trend (default: first number column).
+        segment_column: str | None, optional category to check for share shifts.
+        agg: str, how to combine values per period: "sum" (default), "mean", or "count".
+
+    Returns:
+        SkillResult: summary is the direction finding; other findings; tables "monthly" and,
+        with a segment column, "segment_share_shift"; one line chart by month.
+
+    Raises:
+        SkillInputError: if no date/number column is found, no dates parse, fewer than 3 full
+            months exist, or segment_column is not in the table.
+
+    Example:
+        >>> res = run(pd.read_csv("samples/sales.csv"), value_column="amount", segment_column="store")
+        >>> res.summary   # e.g. "Direction: up about 1,234.56 per month (...)"
+    """
     dcol = require_column(df, date_column, "date", date_columns(df))
     vcol = require_column(df, value_column, "number", numeric_columns(df))
     data = df.assign(**{dcol: as_datetime(df[dcol])}).dropna(subset=[dcol])

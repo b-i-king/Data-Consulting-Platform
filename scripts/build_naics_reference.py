@@ -49,6 +49,37 @@ _SUBSECTOR_RE = re.compile(r"^\s*Subsector\s+(\d{3})\s*[-–]\s*(.+?)\s*$")
 
 
 def build(source: Path) -> dict:
+    """
+    Read the SBA size-standards workbook and return the NAICS sector/subsector tree.
+
+    Walks the "table_of_size_standards-all" sheet top to bottom (all cells read as text):
+    - A row whose DESCRIPTION column matches "Sector NN - Name" (or "Sector NN - NN - Name",
+      hyphens or en dashes) starts a new sector, e.g. "44-45 Retail Trade". The sector is
+      tagged "goods_producing" when its code is in GOODS_PRODUCING, else "service_providing".
+    - A row whose CODE column matches "Subsector NNN - Name" is added to the most recent
+      sector (subsector rows follow their sector in the sheet). Subsectors seen before any
+      sector are ignored.
+    - All other rows (the 6-digit industries) are skipped on purpose.
+
+    Args:
+        source: Path to the SBA "Table of Size Standards" .xlsx workbook.
+
+    Returns:
+        dict: {"source": str, "supersectors": [ {id, label, description}, ... ],
+        "sectors": [ {"code", "name", "supersector", "subsectors": [ {"code", "name"} ]} ]},
+        ready to be dumped to api/data/naics_sectors.json.
+
+    Raises:
+        FileNotFoundError: If `source` does not exist.
+        ValueError: If the workbook has no "table_of_size_standards-all" sheet.
+
+    Example:
+        >>> data = build(DEFAULT_SOURCE)
+        >>> data["sectors"][0]["supersector"]
+        'goods_producing'
+        >>> [s["code"] for s in data["sectors"]][:2]
+        ['11', '21']
+    """
     df = pd.read_excel(source, sheet_name="table_of_size_standards-all", header=0, dtype=str)
     code_col, desc_col = df.columns[0], df.columns[1]
 

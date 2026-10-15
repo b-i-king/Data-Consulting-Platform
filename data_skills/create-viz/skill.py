@@ -41,6 +41,35 @@ _RULE = {"day": "D", "week": "W-MON", "month": "MS"}
 
 
 def run(df, chart="auto", x=None, y=None, agg="sum", period="month", top_n=8) -> SkillResult:
+    """
+    Build one chart spec (line, bar or histogram) from chosen columns.
+
+    With chart="auto": a line chart if there is a date column (or `x` is one), else a
+    bar chart if there is a category column, else a histogram.
+    - line: `y` combined with `agg` per day/week/month of the date column `x`
+    - bar: `y` combined per category `x`, largest first; beyond `top_n` bars the rest
+      are folded into "Other" (summed, or averaged when agg="mean")
+    - histogram: `y` split into 5–20 equal-width bins (about the square root of the row count)
+
+    Args:
+        df: the table.
+        chart: "auto" (default), "line", "bar" or "histogram".
+        x: date column (line) or category column (bar); default: auto-detected.
+        y: number column (default: the first number column).
+        agg: "sum" (default), "mean" or "count".
+        period: bucket for line charts: "day", "week" or "month" (default).
+        top_n: bars to show, including "Other" (default 8).
+
+    Returns:
+        SkillResult: a one-line summary and `charts` holding the single chart spec.
+
+    Raises:
+        SkillInputError: a named column doesn't exist, or no suitable column was found.
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv"), chart="bar", x="store", y="amount").summary
+        # 'Bar chart: amount by store, N bars.'  (one bar per store, up to top_n)
+    """
     y = require_column(df, y, "number", numeric_columns(df))
     if chart == "auto":
         chart = "line" if (x in date_columns(df) if x else date_columns(df)) else "bar" if categorical_columns(df) else "histogram"

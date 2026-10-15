@@ -38,11 +38,61 @@ SKILL = SkillSpec(
 
 
 def cohens_d(a: pd.Series, b: pd.Series) -> float:
+    """
+    Compute Cohen's d: the difference in means measured in pooled standard deviations.
+
+    Uses the pooled sample SD of both groups. Rough guide: 0.2 small, 0.5 medium,
+    0.8 large. The sign follows a - b. Returns 0.0 when the pooled SD is 0 (both groups
+    constant) to avoid dividing by zero.
+
+    Args:
+        a: pd.Series, numeric values of the first group.
+        b: pd.Series, numeric values of the second group.
+
+    Returns:
+        float: the standardized mean difference (a minus b).
+
+    Example:
+        >>> cohens_d(pd.Series([1.0, 2.0, 3.0]), pd.Series([2.0, 3.0, 4.0]))
+        -1.0
+    """
     pooled = np.sqrt(((len(a) - 1) * a.var() + (len(b) - 1) * b.var()) / (len(a) + len(b) - 2))
     return float((a.mean() - b.mean()) / pooled) if pooled else 0.0
 
 
 def run(df, outcome=None, group=None, hypothesis=None, alpha=0.05) -> SkillResult:
+    """
+    Pick and run the right significance test for an outcome vs. a grouping column.
+
+    Test choice (rows missing either column are dropped first):
+    - number outcome vs. number "group" with > 10 distinct values -> Spearman correlation
+    - number outcome vs. exactly 2 groups -> Welch t-test + Mann-Whitney U, with Cohen's d
+    - number outcome vs. 3+ groups -> one-way ANOVA + Kruskal-Wallis
+    - category outcome -> chi-square test of independence with Cramér's V, plus Fisher's
+      exact for a 2x2 table with any expected count under 5
+    The verdict uses the rank-based test (last in the list) for number-vs-groups, which
+    is robust to skew; otherwise the first test. "Supported" means p < alpha.
+
+    Args:
+        df: pd.DataFrame, the table.
+        outcome: str | None, column you measure (e.g. "amount", "csat"). Required.
+        group: str | None, column you compare by (e.g. "store"). Required.
+        hypothesis: str | None, the claim in words; quoted in the summary when given.
+        alpha: float, significance level (default 0.05).
+
+    Returns:
+        SkillResult: summary with verdict, test name, p-value, and effect size; findings with
+        group means/medians and a reminder on reading p-values; table "tests" (test, statistic,
+        p_value, effect, significant); data {"verdict": "supported" | "inconclusive"}.
+
+    Raises:
+        SkillInputError: if outcome or group is missing, a column isn't in the table, or the
+            group column has fewer than two groups.
+
+    Example:
+        >>> res = run(df, outcome="amount", group="store", hypothesis="Midtown orders are larger")
+        >>> res.data["verdict"]   # "supported" or "inconclusive"
+    """
     if not outcome or not group:
         raise SkillInputError("Give an 'outcome' column (what you measure) and a 'group' column (what you compare by).")
     for c in (outcome, group):

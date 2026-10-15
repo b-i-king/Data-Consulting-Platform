@@ -58,7 +58,29 @@ ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without
 
 
 def _account_out(acc: dict, role: str = "client", consultant_name: str | None = None) -> AccountOut:
-    """Convert a stored account (dict with UUIDs/dates) to the API shape."""
+    """
+    Convert a stored account (dict with UUIDs/dates) to the API shape.
+
+    The store returns database rows (UUID objects, optional keys). This turns
+    ids into strings, fills safe defaults for missing optional fields
+    (status "active", wants_consultant False) and renames storage columns to
+    API names (location_geoname_id -> location_id, location_label -> location).
+    It does no lookups, so the caller supplies the role and consultant name.
+
+    Args:
+        acc: dict, one account row from api/services/account_store.py.
+        role: str, "client" (default) or "consultant".
+        consultant_name: str | None, the assigned consultant's display name, if any.
+
+    Returns:
+        AccountOut: the account as sent to the browser (see web/lib/types.ts).
+
+    Example:
+        >>> out = _account_out({"id": "a1", "account_type": "individual", "first_name": "Ana",
+        ...                     "last_name": "Lee", "email": "ana@example.com"})
+        >>> out.id, out.status, out.role
+        ('a1', 'active', 'client')
+    """
     return AccountOut(
         id=str(acc["id"]),
         account_type=acc["account_type"],
@@ -83,7 +105,24 @@ def _account_out(acc: dict, role: str = "client", consultant_name: str | None = 
 
 
 async def _full_account_out(acc: dict) -> AccountOut:
-    """_account_out plus the role and the assigned consultant's name (looked up)."""
+    """
+    _account_out plus the role and the assigned consultant's name (looked up).
+
+    The role is "consultant" when the account has a row in the consultants
+    table, otherwise "client". The consultant is stored on the PLAN HOLDER
+    (an individual, or a business's team owner), so for a team member the
+    owner's consultant is shown.
+
+    Args:
+        acc: dict, one account row from the account store.
+
+    Returns:
+        AccountOut: the account with `role` and `consultant_name` filled in.
+
+    Example:
+        out = await _full_account_out(await account_store.get_account(token["sub"]))
+        out.consultant_name   # e.g. "Dana", or None when no consultant is assigned
+    """
     role = "consultant" if await account_store.get_consultant_by_account(str(acc["id"])) else "client"
     holder_id = await entitlements.plan_holder_id(acc)
     holder = acc if holder_id == str(acc["id"]) else await account_store.get_account(holder_id)
@@ -92,6 +131,21 @@ async def _full_account_out(acc: dict) -> AccountOut:
 
 
 async def _auth_response(acc: dict) -> AuthOut:
+    """
+    Build the reply for a successful sign-up or sign-in: a new token plus the account.
+
+    The token's role comes from the looked-up account (so a consultant gets a
+    "consultant" token).
+
+    Args:
+        acc: dict, the account row that just signed up or signed in.
+
+    Returns:
+        AuthOut: {"access_token": "<jwt>", "token_type": "bearer", "account": {...}}.
+
+    Example:
+        return await _auth_response(owner)   # end of signup / signin
+    """
     out = await _full_account_out(acc)
     token = create_access_token(str(acc["id"]), acc["email"], acc["account_type"], out.role)
     return AuthOut(access_token=token, account=out)
@@ -99,6 +153,32 @@ async def _auth_response(acc: dict) -> AuthOut:
 
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(body: SignupIn):
+    """
+    POST /api/accounts/signup — create an individual or business account and sign it in.
+
+    Consultants (emails in CONSULTANT_EMAILS) must also send the right
+    `access_code`; their consultant row is created after the account. Other
+    sign-ups go through `create_client_account` with "default", so ticking
+    "I'd like a consultant" assigns the default consultant.
+
+    Args:
+        body: SignupIn, the validated sign-up form (see api/models/accounts.py).
+
+    Returns:
+        AuthOut: the new login token and the account (HTTP 201).
+
+    Raises:
+        HTTPException: 403 for a consultant email without the right access code;
+            400 for unknown service ids; 409 when an email already has an account.
+            (Malformed fields are rejected with 422 before this runs.)
+
+    Example:
+        POST /api/accounts/signup
+        {"account_type": "individual", "first_name": "Ana", "last_name": "Lee",
+         "email": "ana@example.com"}
+        -> 201 {"access_token": "eyJ...", "token_type": "bearer",
+                "account": {"id": "...", "role": "client", ...}}
+    """
     is_consultant = consultants.is_consultant_email(body.email)
     if is_consultant:
         consultants.check_access_code(body.access_code)   # 403 without the right code
@@ -114,6 +194,31 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
     signup and by a consultant adding a client (api/routers/consultants.py).
     `consultant_id`: "default" = the default consultant if they asked for one;
     a consultant's id = assign to them; None = no consultant.
+
+    Order of work (all checks happen before anything is written, so a failure
+    never leaves a half-created sign-up):
+    1. Every service id must be in the catalog.
+    2. No email (owner or team member) may already have an account.
+    3. The location id is looked up; "wants a consultant" is True when ticked
+       or when a specific consultant is assigning the client to themselves.
+    4. The owner account is created, then each team member as "invited".
+    5. Picked services are recorded as interest (they don't unlock tools).
+
+    Args:
+        body: SignupIn, the validated sign-up form.
+        consultant_id: str | None, "default", a consultant's id, or None (see above).
+
+    Returns:
+        dict: the newly created owner account row.
+
+    Raises:
+        HTTPException: 400 "Unknown service id(s): ..."; 409 when an email is
+            already used (checked up front, and again if the store reports a
+            clash); 409 from `_add_member` if a colleague's email is taken.
+
+    Example:
+        owner = await create_client_account(body, consultant_id="default")
+        owner["email"]   # -> "ana@example.com"
     """
     unknown = [s for s in body.service_ids if s not in {svc["id"] for svc in catalog()}]
     if unknown:
@@ -166,6 +271,29 @@ async def create_client_account(body: SignupIn, consultant_id: str | None) -> di
 
 @router.post("/signin", response_model=AuthOut)
 async def signin(body: SigninIn):
+    """
+    POST /api/accounts/signin — issue a new token for an existing email.
+
+    Sign-in is by email only for now (see the security note at the top).
+    Consultant emails must also send the access code; their consultant row is
+    (re)registered on each sign-in, so the default consultant picks up any
+    clients waiting for one. The last-login time is updated.
+
+    Args:
+        body: SigninIn, the email (and, for consultants, the access code).
+
+    Returns:
+        AuthOut: a fresh login token and the account.
+
+    Raises:
+        HTTPException: 403 for a consultant email without the right code;
+            404 "No account found for that email. Please sign up."
+
+    Example:
+        POST /api/accounts/signin
+        {"email": "ana@example.com"}
+        -> 200 {"access_token": "eyJ...", "token_type": "bearer", "account": {...}}
+    """
     if consultants.is_consultant_email(body.email):
         consultants.check_access_code(body.access_code)   # 403 without the right code
     acc = await account_store.get_account_by_email(body.email)
@@ -179,6 +307,24 @@ async def signin(body: SigninIn):
 
 @router.get("/me", response_model=AccountOut)
 async def me(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/accounts/me — who am I? Returns the signed-in account.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        AccountOut: the caller's account, with role and consultant name.
+
+    Raises:
+        HTTPException: 401 when no/invalid token, or when the account is gone
+            (ACCOUNT_GONE — e.g. an in-memory test server restarted).
+
+    Example:
+        GET /api/accounts/me
+        Authorization: Bearer eyJ...
+        -> 200 {"id": "...", "first_name": "Ana", "role": "client", ...}
+    """
     acc = await account_store.get_account(token["sub"])
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
@@ -187,6 +333,26 @@ async def me(token: Annotated[dict, Depends(get_current_account)]):
 
 @router.get("/team")
 async def my_team(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/accounts/team — list the caller's business team.
+
+    Any team member (owner or colleague) may view the team.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: {"team_id": str, "name": str | None, "members": [AccountOut, ...]}.
+
+    Raises:
+        HTTPException: 401 without a valid token; 404 "This account is not part
+            of a team." for individuals or unknown accounts.
+
+    Example:
+        GET /api/accounts/team
+        Authorization: Bearer eyJ...
+        -> 200 {"team_id": "...", "name": "Rise Bakery", "members": [{...}, {...}]}
+    """
     acc = await account_store.get_account(token["sub"])
     if acc is None or not acc.get("team_id"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="This account is not part of a team.")
@@ -202,6 +368,26 @@ async def my_team(token: Annotated[dict, Depends(get_current_account)]):
 
 @router.post("/team/members", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 async def add_team_member(body: TeamMemberIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/accounts/team/members — add a colleague to the caller's team (owners only).
+
+    Args:
+        body: TeamMemberIn, the colleague's first name, last name and email.
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        AccountOut: the new "invited" colleague account (HTTP 201).
+
+    Raises:
+        HTTPException: 401 without a valid token; 403 "Only the team owner can
+            add members."; 409 when the colleague's email already has an account.
+
+    Example:
+        POST /api/accounts/team/members
+        Authorization: Bearer eyJ...
+        {"first_name": "Bo", "last_name": "Diaz", "email": "bo@example.com"}
+        -> 201 {"id": "...", "team_role": "member", "status": "invited", ...}
+    """
     owner = await account_store.get_account(token["sub"])
     if owner is None or owner.get("team_role") != "owner":
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can add members.")
@@ -209,7 +395,28 @@ async def add_team_member(body: TeamMemberIn, token: Annotated[dict, Depends(get
 
 
 async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
-    """Create an 'invited' business account on the owner's team."""
+    """
+    Create an 'invited' business account on the owner's team.
+
+    The colleague inherits the owner's company name, industry and company
+    size, gets team_role "member" and status "invited".
+
+    Args:
+        owner: dict, the team owner's account row (must have a team_id).
+        member: TeamMemberIn, the colleague's validated name and email.
+
+    Returns:
+        dict: the new colleague's account row.
+
+    Raises:
+        HTTPException: 409 "<email> already has an account. Team transfers are
+            not supported yet."
+
+    Example:
+        bo = await _add_member(owner, TeamMemberIn(first_name="Bo", last_name="Diaz",
+                                                   email="bo@example.com"))
+        bo["status"]   # -> "invited"
+    """
     try:
         return await account_store.create_account(
             account_type="business",
@@ -234,6 +441,28 @@ async def _add_member(owner: dict, member: TeamMemberIn) -> dict:
 
 
 async def _services_out(ctx: dict) -> dict:
+    """
+    Build the workspace's "what's on my plan" reply (shared by GET and POST /services).
+
+    Gathers, for the account the request is FOR (which may be a consultant's
+    client): active services, whether this person may change the plan (only
+    individuals and team owners), the full service catalog flagged active or
+    not, consulting interests, live subscriptions, plans on sale, whether
+    Stripe is on, included downloads and consulting hours/rate.
+
+    Args:
+        ctx: dict, the acting context from `get_acting_context`
+            ({"account", "consultant", "acting"}).
+
+    Returns:
+        dict: keys "active", "can_add", "services", "interests", "account",
+        "acting", "subscriptions", "plans", "billing", "downloads_included",
+        "consulting" (mirrored in web/lib/types.ts).
+
+    Example:
+        data = await _services_out(ctx)
+        data["can_add"], data["billing"]   # -> (True, {"stripe": False})
+    """
     acc = ctx["account"]
     active = await entitlements.active_services(acc)
     holder_id = await entitlements.plan_holder_id(acc)
@@ -262,7 +491,26 @@ async def _services_out(ctx: dict) -> dict:
 
 
 def _subscription_out(s: dict) -> dict:
-    """One subscription: its tools, interval, status and what it costs per period."""
+    """
+    One subscription: its tools, interval, status and what it costs per period.
+
+    Items whose plan id is no longer on sale are ignored. The price is
+    recomputed from today's price list (`pricing.selection_price`), and the
+    period end is sent as an ISO date ("YYYY-MM-DD").
+
+    Args:
+        s: dict, a subscription row with its "items" list, "billing_interval",
+            "status" and optional "current_period_end" (datetime).
+
+    Returns:
+        dict: {"id", "plan_ids", "names", "interval", "status", "total_usd",
+        "cancel_at_period_end", "current_period_end"}.
+
+    Example:
+        _subscription_out(sub)
+        # -> {"id": "...", "plan_ids": ["data_cleaning"], "interval": "month",
+        #     "status": "active", "total_usd": ..., "current_period_end": "2026-11-15", ...}
+    """
     end = s.get("current_period_end")
     plan_ids = [i["plan_id"] for i in s["items"] if i["plan_id"] in pricing.SUBSCRIPTIONS_BY_ID]
     price = pricing.selection_price(plan_ids, s["billing_interval"]) if plan_ids else {"total_usd": 0}
@@ -279,11 +527,54 @@ def _subscription_out(s: dict) -> dict:
 
 @router.get("/services")
 async def my_services(ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    GET /api/accounts/services — services on my plan plus the full catalog.
+
+    A consultant may send `X-Acting-As: <client id>` to see an assigned client's plan.
+
+    Args:
+        ctx: dict, the acting context (injected by `get_acting_context`).
+
+    Returns:
+        dict: the plan summary built by `_services_out`.
+
+    Raises:
+        HTTPException: 401/403/404 from `get_acting_context`.
+
+    Example:
+        GET /api/accounts/services
+        Authorization: Bearer eyJ...
+        -> 200 {"active": ["data_cleaning"], "can_add": true, "services": [...], ...}
+    """
     return await _services_out(ctx)
 
 
 @router.post("/services")
 async def add_service(body: AddServiceIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/accounts/services — record interest in a project with a consultant.
+
+    This does NOT unlock tools (only a paid package does; see
+    api/services/entitlements.py). Only the plan holder (individual or team
+    owner) — or their consultant acting for them — may add.
+
+    Args:
+        body: AddServiceIn, the service id to add.
+        ctx: dict, the acting context (injected by `get_acting_context`).
+
+    Returns:
+        dict: the updated plan summary built by `_services_out`.
+
+    Raises:
+        HTTPException: 403 when the caller isn't the plan holder; 400 for an
+            unknown service id; plus 401/403/404 from `get_acting_context`.
+
+    Example:
+        POST /api/accounts/services
+        Authorization: Bearer eyJ...
+        {"service_id": "data_engineering"}
+        -> 200 {"active": [...], "interests": ["data_engineering"], ...}
+    """
     acc = ctx["account"]
     try:
         await entitlements.add_services(acc, [body.service_id])

@@ -27,7 +27,23 @@ CATALOG_PATH = Path(__file__).resolve().parents[2] / "data_skills" / "catalog.js
 
 @lru_cache
 def load_catalog() -> dict:
-    """Parse catalog.json once per process. Returns {} if it is absent."""
+    """
+    Parse catalog.json once per process. Returns {} if it is absent.
+
+    @lru_cache keeps the parsed file, so edits to catalog.json are picked up
+    only after the server restarts.
+
+    Returns:
+        dict: the parsed data_skills/catalog.json ({"categories": [...], ...}),
+        or {} when the file does not exist.
+
+    Raises:
+        json.JSONDecodeError: if the file exists but is not valid JSON.
+
+    Example:
+        >>> load_catalog()["categories"][0]["id"]
+        'data_cleaning'
+    """
     try:
         return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -35,10 +51,38 @@ def load_catalog() -> dict:
 
 
 def skills_by_category() -> dict[str, list[dict]]:
-    """{category id: [{id, label, source}, ...]}"""
+    """
+    Map each service category id to the skills listed under it.
+
+    {category id: [{id, label, source}, ...]}
+
+    Returns:
+        dict[str, list[dict]]: category id -> its skill entries as written in
+        catalog.json (each has at least "id", "label" and "source"). Empty when
+        the catalog is missing.
+
+    Example:
+        >>> skills_by_category()["data_cleaning"][0]["id"]
+        'data-cleaning'
+    """
     return {c["id"]: c["skills"] for c in load_catalog().get("categories", [])}
 
 
 def capability_labels(category_id: str) -> list[str]:
-    """Client-friendly labels for one category, e.g. ['ER diagrams', ...]."""
+    """
+    Client-friendly labels for one category, e.g. ['ER diagrams', ...].
+
+    These are the "What's included" chips on a service card.
+
+    Args:
+        category_id: a service category id, e.g. "data_cleaning" (the same ids
+            as the services in api/services/pricing.py).
+
+    Returns:
+        list[str]: the skills' labels in catalog order; [] for an unknown id.
+
+    Example:
+        >>> capability_labels("data_cleaning")[:2]
+        ['Duplicate & missing-value cleanup', 'Multi-file sorting & stacking']
+    """
     return [s["label"] for s in skills_by_category().get(category_id, [])]

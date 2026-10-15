@@ -39,11 +39,58 @@ Z = norm.ppf(0.975) + norm.ppf(0.80)   # ≈ 2.80 for 80% power, two-sided α = 
 
 
 def detectable_d(n1: int, n2: int) -> float:
-    """Smallest standardized difference (Cohen's d) detectable with 80% power."""
+    """
+    Smallest standardized difference (Cohen's d) detectable with 80% power.
+
+    Uses d = Z × √(1/n1 + 1/n2), where Z = z(0.975) + z(0.80) ≈ 2.80 (two-sided
+    α = 0.05, 80% power). Smaller groups -> larger d -> only big differences show up.
+
+    Args:
+        n1: int, size of the first group (must be > 0).
+        n2: int, size of the second group (must be > 0).
+
+    Returns:
+        float: the minimum detectable Cohen's d.
+
+    Example:
+        >>> round(detectable_d(100, 100), 3)
+        0.396
+    """
     return Z * math.sqrt(1 / n1 + 1 / n2)
 
 
 def run(df: pd.DataFrame, unit_column=None, group_column=None) -> SkillResult:
+    """
+    Judge whether there is enough data to answer common questions, honestly counted.
+
+    Steps:
+    - Start from sample_size_snapshot (api/services/sample_size.py): complete rows, warnings,
+      and rules-of-thumb checks
+    - If unit_column is given, the honest n is its number of DISTINCT values (e.g. customers),
+      not the row count
+    - If group_column is given: size of each group (distinct units when unit_column is set),
+      the smallest group, the imbalance ratio (> 10:1 is flagged), and the detectable Cohen's d
+      between the two smallest groups (small ≤ 0.3, medium ≤ 0.6, else large)
+    - Re-judge each rule of thumb against the honest n: green if n ≥ rows_needed, yellow if
+      n ≥ half of it, else red
+
+    Args:
+        df: pd.DataFrame, the table.
+        unit_column: str | None, what one independent unit is (e.g. "customer_id").
+        group_column: str | None, grouping you want to compare (e.g. "store").
+
+    Returns:
+        SkillResult: summary with the honest sample size and what it is (not) enough for;
+        findings; tables "rules_of_thumb" (with verdicts) and "group_cells" when grouped; a
+        group-size bar chart when grouped; data {"snapshot": ..., "honest_n": int}.
+
+    Raises:
+        SkillInputError: if unit_column or group_column is not in the table.
+
+    Example:
+        >>> res = run(df, unit_column="customer_id", group_column="store")
+        >>> res.data["honest_n"]   # number of distinct customers
+    """
     snap = sample_size_snapshot(df)
     findings = list(snap["warnings"][:1])
     tables = {"rules_of_thumb": snap["checks"]}

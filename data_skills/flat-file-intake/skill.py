@@ -24,6 +24,26 @@ SKILL = SkillSpec(
 
 
 def run(tables: dict[str, pd.DataFrame]) -> SkillResult:
+    """
+    Sort several uploaded tables into groups and find the links between them.
+
+    A thin wrapper around api.services.categorizer.categorize: each DataFrame is wrapped
+    in a LoadedDataset (size 0, type "table"), then the categorizer groups files by shared
+    columns, spots year-partitioned files, guesses the business entity, and finds exact
+    join keys or fuzzy links between groups.
+
+    Args:
+        tables: dict[str, pd.DataFrame], file/table name -> its data.
+
+    Returns:
+        SkillResult: summary is the categorizer's suggested next step; findings describe each
+        group (with its recommendation) and each relationship; tables "groups" (label,
+        structure, files, years) and "links" (which groups, on which columns, by what method).
+
+    Example:
+        >>> res = run({"sales_2023.csv": df23, "sales_2024.csv": df24, "customers.csv": cust})
+        >>> [g["group"] for g in res.tables["groups"]]   # e.g. a sales group and a customers group
+    """
     datasets = [LoadedDataset(name=n, source_file=n, file_type="table", df=df, size_bytes=0) for n, df in tables.items()]
     result = categorize(datasets)
     findings = [f"{g.label}: {', '.join(g.members)} — {g.recommendation}" for g in result.groups]

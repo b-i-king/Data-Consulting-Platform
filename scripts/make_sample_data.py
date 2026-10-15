@@ -68,10 +68,32 @@ DELIVERY_LAUNCH = pd.Timestamp("2025-03-01")
 def _add_order_type_and_demographics(sales: pd.DataFrame, customers: pd.DataFrame, seed: int) -> pd.DataFrame:
     """
     Add order_type (one per order) and the customer's type and age group.
+
     Uses its own random stream so the original columns are unchanged.
       * order_type: online pickup grows from ~12% to ~28% of orders over the
         two years; delivery only exists from March 1, 2025; catering is rare.
       * walk-ins (no customer_id) are "Walk-in" with no age group (missing).
+
+    Every line of the same order gets the same order_type (it is drawn once per
+    order_id, then merged back onto the lines). Customer type and age group are
+    left-joined from `customers` on customer_id.
+
+    Args:
+        sales: Order lines with at least order_id, order_date and customer_id columns
+            (customer_id is None for walk-ins).
+        customers: The customer table with customer_id, customer_type and age_group.
+        seed: Base random seed; this function uses `seed + 200` so its draws never
+            shift the numbers generated elsewhere.
+
+    Returns:
+        pd.DataFrame: A copy of `sales` with three new columns: order_type
+        ("In-store", "Online pickup", "Delivery" or "Catering"), customer_type
+        ("Walk-in" when there is no customer) and age_group (NaN for walk-ins).
+
+    Example:
+        >>> out = _add_order_type_and_demographics(sales, customers, seed=7)
+        >>> out.loc[out["customer_id"].isna(), "customer_type"].unique()
+        array(['Walk-in'], dtype=object)
     """
     rng = np.random.default_rng(seed + 200)
     orders = sales.drop_duplicates("order_id")[["order_id", "order_date"]].reset_index(drop=True)
@@ -91,6 +113,39 @@ def _add_order_type_and_demographics(sales: pd.DataFrame, customers: pd.DataFram
 
 
 def make(end: pd.Timestamp, seed: int = 7) -> dict[str, pd.DataFrame]:
+    """
+    Generate the five fictional "Sunrise Bakery" tables covering the two years ending on `end`.
+
+    What gets built (see the module header for the full story):
+    - customers: 400 people (IDs 1001-1400), ~12% with no email, plus customer_type
+      and age_group drawn from a separate random stream (`seed + 100`).
+    - sales: Poisson orders per day (base 12) scaled by +35% growth over two years,
+      x1.45 on weekends and x1.3 in November-December; 1-2 lines per order, ~30% walk-ins,
+      prices switch to the higher list on June 1, 2025. Then deliberate mess is added:
+      25 duplicate rows, 40 stores written " Midtown " with stray spaces, and one blank row.
+    - feedback: 900 CSAT (1-5) and NPS (0-10) responses.
+    - expenses: five monthly expense lines (rent, payroll, ingredients, utilities,
+      marketing), with payroll and ingredients growing ~20% and marketing higher in Nov-Dec.
+    - quickbooks_customers: 250 of the same customers as a QuickBooks export with no
+      customer_id and varied name spellings ("Last, First", ALL CAPS), for fuzzy matching.
+
+    The seed is fixed by default, so the same `end` always gives identical tables.
+
+    Args:
+        end: Last date in the data; the range starts two years earlier (plus one day).
+        seed: Random seed for NumPy and pandas sampling (default 7).
+
+    Returns:
+        dict[str, pd.DataFrame]: Keys "sales", "customers", "feedback", "expenses" and
+        "quickbooks_customers"; each name is also the CSV file name written to samples/.
+
+    Example:
+        >>> tables = make(pd.Timestamp("2026-10-10"))
+        >>> sorted(tables)
+        ['customers', 'expenses', 'feedback', 'quickbooks_customers', 'sales']
+        >>> len(tables["customers"])
+        400
+    """
     rng = np.random.default_rng(seed)
     start = end - pd.DateOffset(years=2) + pd.Timedelta(days=1)
     days = pd.date_range(start, end, freq="D")

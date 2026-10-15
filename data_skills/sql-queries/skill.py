@@ -41,12 +41,54 @@ TYPES = {
 
 
 def ident(name: str) -> str:
-    """Safe snake_case identifier: 'Order Date' -> order_date (no quoting needed)."""
+    """
+    Safe snake_case identifier: 'Order Date' -> order_date (no quoting needed).
+
+    Lower-cases, replaces runs of non-alphanumerics with "_", and trims underscores.
+    A leading digit gets a "c_" prefix; an empty result becomes "col".
+
+    Args:
+        name: str, a table or column name (converted with str() first).
+
+    Returns:
+        str: an identifier valid unquoted in Postgres, BigQuery, and Snowflake.
+
+    Example:
+        >>> ident("Order Date")
+        'order_date'
+        >>> ident("2024 total")
+        'c_2024_total'
+    """
     s = re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_") or "col"
     return f"c_{s}" if s[0].isdigit() else s
 
 
 def sql_type(col: str, s: pd.Series, is_date: bool, dialect: str) -> str:
+    """
+    Choose the SQL column type for one pandas column in the given dialect.
+
+    Rules, in order: date column -> DATE; bool -> BOOLEAN; integer -> BIGINT/INT64/NUMBER;
+    float -> money type (NUMERIC(14, 2) etc.) when the name mentions amount, price, cost,
+    total, revenue, balance, or fee, otherwise a float type; anything else -> text.
+
+    Args:
+        col: str, the column name (used to spot money columns).
+        s: pd.Series, the column's data (its dtype decides the type).
+        is_date: bool, True if date_columns detected it as a date.
+        dialect: str, "postgres", "bigquery", or "snowflake" (a key of TYPES).
+
+    Returns:
+        str: the SQL type, e.g. "NUMERIC(14, 2)".
+
+    Raises:
+        KeyError: if dialect is not one of the TYPES keys.
+
+    Example:
+        >>> sql_type("amount", pd.Series([1.5]), False, "postgres")
+        'NUMERIC(14, 2)'
+        >>> sql_type("ratio", pd.Series([1.5]), False, "bigquery")
+        'FLOAT64'
+    """
     t = TYPES[dialect]
     if is_date:
         return t["date"]
@@ -60,6 +102,30 @@ def sql_type(col: str, s: pd.Series, is_date: bool, dialect: str) -> str:
 
 
 def run(df: pd.DataFrame, table_name="my_table", dialect="postgres") -> SkillResult:
+    """
+    Generate warehouse-ready SQL for one table: CREATE TABLE, quality checks, starter queries.
+
+    - CREATE TABLE: snake_case columns typed by sql_type, NOT NULL where the data is never
+      empty, and a PRIMARY KEY on the first complete, unique column whose name ends in "id"
+      (BigQuery adds NOT ENFORCED)
+    - Quality checks: row count, nulls per column, duplicate keys (when there is a key)
+    - Starter analysis: monthly totals with a window-function running total (first date and
+      number column) and top 10 categories, with the right DATE_TRUNC form per dialect
+
+    Args:
+        df: pd.DataFrame, the table.
+        table_name: str, table name in the warehouse (made safe with ident). Default "my_table".
+        dialect: str, "postgres" (default, also Supabase), "bigquery", or "snowflake".
+
+    Returns:
+        SkillResult: summary naming the dialect, table, and primary key; findings with counts of
+        checks and queries; artifact "sql_schema" with all the SQL.
+
+    Example:
+        >>> res = run(pd.DataFrame({"order_id": [1, 2], "amount": [9.5, 12.0]}), table_name="Orders")
+        >>> res.summary
+        'Postgres DDL for orders (2 columns, primary key order_id).'
+    """
     tbl = ident(table_name)
     dates = set(date_columns(df))
     pk = next((c for c in df.columns if df[c].notna().all() and df[c].is_unique and re.search(r"id$", str(c), re.I)), None)

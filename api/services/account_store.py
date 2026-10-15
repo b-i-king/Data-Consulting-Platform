@@ -46,10 +46,35 @@ class AccountExistsError(ValueError):
 
 
 def _now() -> datetime:
+    """
+    Return the current time in UTC (timezone-aware), used for created/updated stamps.
+
+    Returns:
+        datetime: the current UTC time.
+
+    Example:
+        >>> _now().tzinfo
+        datetime.timezone.utc
+    """
     return datetime.now(timezone.utc)
 
 
 async def get_account_by_email(email: str) -> dict | None:
+    """
+    Look up an account by email address (letter case is ignored).
+
+    Emails are stored lower-cased, so the address is lower-cased before searching.
+
+    Args:
+        email: str, the address to look up.
+
+    Returns:
+        dict | None: the accounts row, or None if no account uses that email.
+
+    Example:
+        >>> (await get_account_by_email("Ana@Bakery.com"))["email"]
+        'ana@bakery.com'
+    """
     email = email.lower()
     if database.pool is None:
         return next((a for a in _accounts.values() if a["email"] == email), None)
@@ -58,6 +83,22 @@ async def get_account_by_email(email: str) -> dict | None:
 
 
 async def get_account(account_id: str) -> dict | None:
+    """
+    Look up an account by its id.
+
+    Args:
+        account_id: str, the account's UUID as text.
+
+    Returns:
+        dict | None: the accounts row, or None if it does not exist.
+
+    Raises:
+        ValueError: on the database path, if `account_id` is not a valid UUID.
+
+    Example:
+        >>> (await get_account(account_id))["first_name"]
+        'Ana'
+    """
     if database.pool is None:
         return _accounts.get(account_id)
     row = await database.pool.fetchrow("SELECT * FROM accounts WHERE id = $1", uuid.UUID(account_id))
@@ -86,6 +127,45 @@ async def create_account(
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
     is created automatically and the person becomes its owner.
+
+    On the database path the account, the team and the account's team link are
+    written in ONE transaction, so a failure never leaves half-created records.
+    `last_login_at` is set only for "active" accounts. `consultant_id` is kept
+    only when `wants_consultant` is True.
+
+    Args:
+        account_type: str, "individual" or "business".
+        first_name: str, the person's first name.
+        last_name: str, the person's last name.
+        email: str, sign-in address (stored lower-cased; must be unique).
+        company_name: str | None, business name (also used as the team name).
+        team_id: str | None, join this existing team instead of creating one.
+        team_role: str | None, role on that team (set to "owner" for a new team).
+        status: str, account status, default "active".
+        industry_supersector: str | None, industry grouping from the signup form.
+        naics_sector: str | None, NAICS sector code.
+        naics_subsector: str | None, NAICS subsector code.
+        company_size: str | None, size band from the signup form.
+        location: dict | None, a place from the signup picker
+            (api/services/locations.py) with "id", "city", "region",
+            "country_code" and "label".
+        industry_other: str | None, free-text industry when none fits.
+        wants_consultant: bool, True if the client asked for "done for you" help.
+        consultant_id: str | None, the consultant assigned (kept only when
+            `wants_consultant` is True).
+
+    Returns:
+        dict: the new account (same fields as the accounts table).
+
+    Raises:
+        AccountExistsError: if an account with this email already exists.
+
+    Example:
+        >>> acc = await create_account(account_type="business", first_name="Ana",
+        ...                            last_name="Diaz", email="Ana@Bakery.com",
+        ...                            company_name="Sunrise Bakery")
+        >>> acc["email"], acc["team_role"]
+        ('ana@bakery.com', 'owner')
     """
     email = email.lower()
     if await get_account_by_email(email):
@@ -163,7 +243,20 @@ async def create_account(
 
 
 async def touch_last_login(account_id: str) -> None:
-    """Record a sign-in time (useful for your consulting analysis: who is active?)."""
+    """
+    Record a sign-in time (useful for your consulting analysis: who is active?).
+
+    On the memory path an unknown account id is ignored.
+
+    Args:
+        account_id: str, the account that just signed in.
+
+    Returns:
+        None. Updates accounts.last_login_at to now.
+
+    Example:
+        >>> await touch_last_login(account_id)
+    """
     if database.pool is None:
         if account_id in _accounts:
             _accounts[account_id]["last_login_at"] = _now()
@@ -174,6 +267,19 @@ async def touch_last_login(account_id: str) -> None:
 
 
 async def list_team_members(team_id: str) -> list[dict]:
+    """
+    List every account on a team (the owner included), oldest first on the database path.
+
+    Args:
+        team_id: str, the team's UUID as text.
+
+    Returns:
+        list[dict]: accounts rows on that team ([] if none).
+
+    Example:
+        >>> [m["team_role"] for m in await list_team_members(team_id)]
+        ['owner', 'member']
+    """
     if database.pool is None:
         return [a for a in _accounts.values() if a["team_id"] == team_id]
     rows = await database.pool.fetch(
@@ -183,6 +289,19 @@ async def list_team_members(team_id: str) -> list[dict]:
 
 
 async def get_team(team_id: str) -> dict | None:
+    """
+    Look up a team by its id.
+
+    Args:
+        team_id: str, the team's UUID as text.
+
+    Returns:
+        dict | None: the teams row ("id", "name", "owner_account_id", ...), or None.
+
+    Example:
+        >>> (await get_team(team_id))["name"]
+        'Sunrise Bakery'
+    """
     if database.pool is None:
         return _teams.get(team_id)
     row = await database.pool.fetchrow("SELECT * FROM teams WHERE id = $1", uuid.UUID(team_id))
@@ -193,8 +312,26 @@ async def record_usage(
     *, account_id: str, dataset_name: str, rows: int, runtime_seconds: float,
     billable_minutes: float, amount_usd: float, consultant_id: str | None = None,
 ) -> None:
-    """Save one billing record. Only metadata — never the data itself.
-    `consultant_id` is set when a consultant downloaded on the client's behalf."""
+    """
+    Save one billing record. Only metadata — never the data itself.
+    `consultant_id` is set when a consultant downloaded on the client's behalf.
+
+    Args:
+        account_id: str, the client account billed.
+        dataset_name: str, the downloaded file's name.
+        rows: int, row count of the downloaded table (stored as row_count).
+        runtime_seconds: float, measured processing time.
+        billable_minutes: float, minutes charged after rounding up.
+        amount_usd: float, amount charged in US dollars.
+        consultant_id: str | None, the consultant who downloaded, if any.
+
+    Returns:
+        None. Inserts one usage_events row.
+
+    Example:
+        >>> await record_usage(account_id=aid, dataset_name="sales.csv", rows=18210,
+        ...                    runtime_seconds=0.2, billable_minutes=1.0, amount_usd=0.5)
+    """
     event = {"account_id": account_id, "dataset_name": dataset_name, "rows": rows,
              "runtime_seconds": runtime_seconds, "billable_minutes": billable_minutes,
              "amount_usd": amount_usd, "consultant_id": consultant_id, "created_at": _now()}
@@ -213,7 +350,22 @@ async def record_usage(
 # ── Services on the plan (table account_services) ───────────────────────────
 
 async def list_services(account_id: str) -> list[str]:
-    """Active service ids stored for this account (no defaults added here)."""
+    """
+    List the active service ids stored for this account (no defaults added here).
+
+    These are the account_services rows (project interests). Data Cleaning is not
+    added automatically; see entitlements.py for that rule.
+
+    Args:
+        account_id: str, the plan holder's account id.
+
+    Returns:
+        list[str]: service ids with status "active" (database order, not catalog order).
+
+    Example:
+        >>> await list_services(account_id)
+        ['data_visualization']
+    """
     if database.pool is None:
         return [sid for sid, row in _services.get(account_id, {}).items() if row["status"] == "active"]
     rows = await database.pool.fetch(
@@ -224,7 +376,23 @@ async def list_services(account_id: str) -> list[str]:
 
 
 async def add_services(account_id: str, service_ids: list[str], source: str) -> None:
-    """Add (or re-activate) services on an account's plan."""
+    """
+    Add (or re-activate) services on an account's plan.
+
+    An id already on the plan is switched back to "active"; on the database path
+    its original `source` is kept, on the memory path the row is replaced.
+
+    Args:
+        account_id: str, the plan holder's account id.
+        service_ids: list[str], service ids to add.
+        source: str, where the request came from (e.g. "signup", "added").
+
+    Returns:
+        None. Upserts account_services rows.
+
+    Example:
+        >>> await add_services(account_id, ["data_visualization"], "added")
+    """
     if database.pool is None:
         plan = _services.setdefault(account_id, {})
         for sid in service_ids:
@@ -242,7 +410,19 @@ async def add_services(account_id: str, service_ids: list[str], source: str) -> 
 # ── Consultants (table consultants) and their clients ───────────────────────
 
 async def get_consultant_by_account(account_id: str) -> dict | None:
-    """The consultant row for a signed-in account, or None if they aren't one."""
+    """
+    Return the consultant row for a signed-in account, or None if they aren't one.
+
+    Args:
+        account_id: str, the account's UUID as text.
+
+    Returns:
+        dict | None: the consultants row, or None for clients.
+
+    Example:
+        >>> await get_consultant_by_account(client_account_id) is None
+        True
+    """
     if database.pool is None:
         return next((c for c in _consultants.values() if c["account_id"] == account_id), None)
     row = await database.pool.fetchrow("SELECT * FROM consultants WHERE account_id = $1", uuid.UUID(account_id))
@@ -250,6 +430,19 @@ async def get_consultant_by_account(account_id: str) -> dict | None:
 
 
 async def get_consultant(consultant_id: str) -> dict | None:
+    """
+    Look up a consultant by the consultant row's own id (not the account id).
+
+    Args:
+        consultant_id: str, the consultants row UUID as text.
+
+    Returns:
+        dict | None: the consultants row, or None if it does not exist.
+
+    Example:
+        >>> (await get_consultant(cid))["display_name"]
+        'Pat'
+    """
     if database.pool is None:
         return _consultants.get(consultant_id)
     row = await database.pool.fetchrow("SELECT * FROM consultants WHERE id = $1", uuid.UUID(consultant_id))
@@ -257,6 +450,19 @@ async def get_consultant(consultant_id: str) -> dict | None:
 
 
 async def get_consultant_by_email(email: str) -> dict | None:
+    """
+    Look up a consultant by email address (letter case is ignored).
+
+    Args:
+        email: str, the consultant's address.
+
+    Returns:
+        dict | None: the consultants row, or None if no consultant uses that email.
+
+    Example:
+        >>> (await get_consultant_by_email("PAT@example.com"))["email"]
+        'pat@example.com'
+    """
     email = email.lower()
     if database.pool is None:
         return next((c for c in _consultants.values() if c["email"] == email), None)
@@ -265,7 +471,23 @@ async def get_consultant_by_email(email: str) -> dict | None:
 
 
 async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
-    """Create (or refresh) the consultant row for a consultant's account."""
+    """
+    Create (or refresh) the consultant row for a consultant's account.
+
+    If the row already exists only `is_default` is updated. A new row uses the
+    account's first name as the display name and starts active.
+
+    Args:
+        account: dict, the consultant's accounts row (needs "id", "first_name", "email").
+        is_default: bool, True for the default consultant (first CONSULTANT_EMAILS address).
+
+    Returns:
+        dict: the consultants row.
+
+    Example:
+        >>> (await ensure_consultant(pat_account, is_default=True))["is_default"]
+        True
+    """
     existing = await get_consultant_by_account(str(account["id"]))
     name = account["first_name"]
     if database.pool is None:
@@ -288,7 +510,21 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
 
 
 async def list_clients(consultant_id: str) -> list[dict]:
-    """Accounts assigned to this consultant (plan holders: individuals and business owners)."""
+    """
+    List the accounts assigned to this consultant (plan holders: individuals and business owners).
+
+    Sorted by company name, or first name when there is no company, ignoring case.
+
+    Args:
+        consultant_id: str, the consultants row id.
+
+    Returns:
+        list[dict]: accounts rows whose consultant_id is this consultant.
+
+    Example:
+        >>> [c["company_name"] for c in await list_clients(cid)]
+        ['Acme Logistics', 'Sunrise Bakery']
+    """
     if database.pool is None:
         return sorted((a for a in _accounts.values() if a.get("consultant_id") == consultant_id),
                       key=lambda a: (a.get("company_name") or a["first_name"]).lower())
@@ -301,7 +537,20 @@ async def list_clients(consultant_id: str) -> list[dict]:
 
 
 async def assign_waiting_clients(consultant_id: str) -> int:
-    """Give clients who asked for a consultant (but have none yet) to this consultant."""
+    """
+    Give clients who asked for a consultant (but have none yet) to this consultant.
+
+    Args:
+        consultant_id: str, the consultants row id to assign them to.
+
+    Returns:
+        int: how many accounts were assigned (on the database path, read from the
+            "UPDATE <n>" status PostgreSQL returns).
+
+    Example:
+        >>> await assign_waiting_clients(cid)
+        2
+    """
     if database.pool is None:
         waiting = [a for a in _accounts.values() if a.get("wants_consultant") and not a.get("consultant_id")]
         for a in waiting:
@@ -320,6 +569,21 @@ LIVE_STATUSES = ("active", "trialing", "past_due")   # these keep a plan switche
 
 
 async def set_stripe_customer(account_id: str, customer_id: str) -> None:
+    """
+    Save the Stripe customer id on an account (set the first time they pay).
+
+    On the memory path an unknown account id is ignored.
+
+    Args:
+        account_id: str, the account's UUID as text.
+        customer_id: str, the Stripe customer id ("cus_...").
+
+    Returns:
+        None. Updates accounts.stripe_customer_id.
+
+    Example:
+        >>> await set_stripe_customer(account_id, "cus_Q1w2e3")
+    """
     if database.pool is None:
         if account_id in _accounts:
             _accounts[account_id]["stripe_customer_id"] = customer_id
@@ -329,6 +593,19 @@ async def set_stripe_customer(account_id: str, customer_id: str) -> None:
 
 
 async def get_account_by_stripe_customer(customer_id: str) -> dict | None:
+    """
+    Look up an account by its Stripe customer id (used by the webhook).
+
+    Args:
+        customer_id: str, the Stripe customer id ("cus_...").
+
+    Returns:
+        dict | None: the accounts row, or None if no account has that customer id.
+
+    Example:
+        >>> (await get_account_by_stripe_customer("cus_Q1w2e3"))["email"]
+        'ana@bakery.com'
+    """
     if database.pool is None:
         return next((a for a in _accounts.values() if a.get("stripe_customer_id") == customer_id), None)
     row = await database.pool.fetchrow("SELECT * FROM accounts WHERE stripe_customer_id = $1", customer_id)
@@ -343,6 +620,32 @@ async def upsert_subscription(*, account_id: str, billing_interval: str, status:
     Create or update one subscription and REPLACE its items
     (items = [{"plan_id": ..., "stripe_subscription_item_id": ...}]). Matched by
     our id (test mode) or Stripe's id.
+
+    On the database path, `subscription_id` given -> UPDATE that row; otherwise
+    INSERT, or update the existing row with the same `stripe_subscription_id`.
+    The row and its items change in ONE transaction (old items are deleted, the
+    new ones inserted).
+
+    Args:
+        account_id: str, the plan holder's account id.
+        billing_interval: str, "month" or "year".
+        status: str, Stripe status ("active", "trialing", "past_due", "canceled", ...).
+        items: list[dict], one {"plan_id", "stripe_subscription_item_id" (optional)}
+            per tool.
+        stripe_subscription_id: str | None, Stripe's subscription id ("sub_...").
+        stripe_customer_id: str | None, Stripe's customer id.
+        cancel_at_period_end: bool, True if it ends at the end of the period.
+        current_period_end: datetime | None, when the current period ends.
+        subscription_id: str | None, our own subscription id (test mode updates).
+
+    Returns:
+        dict: the subscription row with its "items" list.
+
+    Example:
+        >>> sub = await upsert_subscription(account_id=aid, billing_interval="month",
+        ...                                 status="active", items=[{"plan_id": "all_tools"}])
+        >>> sub["items"]
+        [{'plan_id': 'all_tools', 'stripe_subscription_item_id': None}]
     """
     row = {"account_id": account_id, "billing_interval": billing_interval, "status": status,
            "stripe_subscription_id": stripe_subscription_id, "stripe_customer_id": stripe_customer_id,
@@ -388,7 +691,23 @@ async def upsert_subscription(*, account_id: str, billing_interval: str, status:
 
 
 async def list_subscriptions(account_id: str, live_only: bool = True) -> list[dict]:
-    """An account's subscriptions (each with its "items"), newest first; by default only live ones."""
+    """
+    List an account's subscriptions (each with its "items"), newest first; by default only live ones.
+
+    Live means status in LIVE_STATUSES ("active", "trialing", "past_due").
+
+    Args:
+        account_id: str, the plan holder's account id.
+        live_only: bool, True (default) to skip canceled/ended subscriptions.
+
+    Returns:
+        list[dict]: subscription rows, each with "items" (plan_id and
+            stripe_subscription_item_id).
+
+    Example:
+        >>> [i["plan_id"] for i in (await list_subscriptions(aid))[0]["items"]]
+        ['all_tools']
+    """
     if database.pool is None:
         rows = [s for s in _subscriptions.values() if s["account_id"] == account_id
                 and (not live_only or s["status"] in LIVE_STATUSES)]
@@ -407,7 +726,20 @@ async def list_subscriptions(account_id: str, live_only: bool = True) -> list[di
 
 
 async def set_subscription_status(subscription_id: str, status: str, cancel_at_period_end: bool = False) -> None:
-    """Test mode only (no Stripe): cancel by our own id."""
+    """
+    Set a subscription's status by our own id. Test mode only (no Stripe): cancel by our own id.
+
+    Args:
+        subscription_id: str, our subscription id.
+        status: str, the new status (e.g. "canceled").
+        cancel_at_period_end: bool, stored alongside (default False).
+
+    Returns:
+        None.
+
+    Example:
+        >>> await set_subscription_status(sub_id, "canceled")
+    """
     if database.pool is None:
         if subscription_id in _subscriptions:
             _subscriptions[subscription_id].update(status=status, cancel_at_period_end=cancel_at_period_end,
@@ -422,7 +754,27 @@ async def set_subscription_status(subscription_id: str, status: str, cancel_at_p
 async def record_consulting_purchase(*, account_id: str, hours: float, rate_per_hour_usd: float,
                                      amount_usd: float, service_id: str | None = None,
                                      stripe_checkout_session_id: str | None = None) -> None:
-    """Save prepaid consulting hours (once per Stripe Checkout — the webhook may repeat)."""
+    """
+    Save prepaid consulting hours (once per Stripe Checkout — the webhook may repeat).
+
+    A repeat with the same `stripe_checkout_session_id` is ignored, so Stripe
+    re-sending a webhook never doubles the hours. Rows are saved as "paid".
+
+    Args:
+        account_id: str, the client account that bought the hours.
+        hours: float, number of hours bought.
+        rate_per_hour_usd: float, hourly rate at purchase time.
+        amount_usd: float, total paid in US dollars.
+        service_id: str | None, the service the hours are for, if any.
+        stripe_checkout_session_id: str | None, Stripe Checkout id (None in test mode).
+
+    Returns:
+        None. Inserts a consulting_purchases row (unless it is a repeat).
+
+    Example:
+        >>> await record_consulting_purchase(account_id=aid, hours=2, rate_per_hour_usd=80.0,
+        ...                                  amount_usd=160.0)
+    """
     row = {"account_id": account_id, "service_id": service_id, "hours": hours, "rate_per_hour_usd": rate_per_hour_usd,
            "amount_usd": amount_usd, "stripe_checkout_session_id": stripe_checkout_session_id,
            "status": "paid", "created_at": _now()}
@@ -441,7 +793,21 @@ async def record_consulting_purchase(*, account_id: str, hours: float, rate_per_
 
 
 async def consulting_hours(account_id: str) -> float:
-    """Total prepaid consulting hours bought by this account."""
+    """
+    Return the total prepaid consulting hours bought by this account.
+
+    Only purchases with status "paid" count.
+
+    Args:
+        account_id: str, the client account id.
+
+    Returns:
+        float: total hours (0.0 if none).
+
+    Example:
+        >>> await consulting_hours(aid)
+        2.0
+    """
     if database.pool is None:
         return float(sum(c["hours"] for c in _consulting if c["account_id"] == account_id and c["status"] == "paid"))
     value = await database.pool.fetchval(
@@ -452,7 +818,26 @@ async def consulting_hours(account_id: str) -> float:
 
 
 async def save_plan(plan: dict) -> None:
-    """Upsert one subscription_plans row (scripts/sync_stripe.py)."""
+    """
+    Upsert one subscription_plans row (scripts/sync_stripe.py).
+
+    Unlike insert_missing_plans, this overwrites an existing row, including its
+    Stripe product and price ids, and marks it active.
+
+    Args:
+        plan: dict, with "id", "name", "description", "service_ids",
+            "monthly_price_usd", "annual_price_usd" and optionally
+            "stripe_product_id", "stripe_monthly_price_id", "stripe_annual_price_id",
+            "sort_order" (default 0), "kind" (default "tool"), "is_base", "requires".
+
+    Returns:
+        None.
+
+    Example:
+        >>> await save_plan({"id": "ai", "name": "AI", "description": "...", "service_ids": ["ai"],
+        ...                  "monthly_price_usd": 29.0, "annual_price_usd": 290.0,
+        ...                  "stripe_product_id": "prod_..."})
+    """
     if database.pool is None:
         _plans[plan["id"]] = dict(plan)
         return
@@ -476,7 +861,22 @@ async def save_plan(plan: dict) -> None:
 
 
 async def insert_missing_plans(plans: list[dict]) -> None:
-    """Add plan rows that don't exist yet; existing rows (and their Stripe ids) are left alone."""
+    """
+    Add plan rows that don't exist yet; existing rows (and their Stripe ids) are left alone.
+
+    Args:
+        plans: list[dict], one dict per plan with "id", "name", "description",
+            "service_ids", "monthly_price_usd", "annual_price_usd", "sort_order",
+            and optionally "kind", "is_base", "requires" (see billing.ensure_plans).
+
+    Returns:
+        None.
+
+    Example:
+        >>> await insert_missing_plans([{"id": "ai", "name": "AI", "description": "...",
+        ...                              "service_ids": ["ai"], "monthly_price_usd": 29.0,
+        ...                              "annual_price_usd": 290.0, "sort_order": 6}])
+    """
     if database.pool is None:
         for plan in plans:
             _plans.setdefault(plan["id"], dict(plan))

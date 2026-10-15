@@ -51,6 +51,45 @@ SKILL = SkillSpec(
 
 
 def run(df, target=None, features=None, exclude=None, date_column=None, max_rows=50000) -> SkillResult:
+    """
+    Train a baseline and two models to predict a target column, and report honest test scores.
+
+    Steps:
+    - Drop rows with no target; sample down to max_rows (random_state=0); need 50+ rows
+    - Regression if the target is numeric with > 10 distinct values, else classification
+    - Features: given `features`, or all numeric_columns + categorical_columns (≤ 50 levels),
+      minus `exclude` and the target (ID-like columns are already left out by the helpers)
+    - Split: by time (oldest 80% train, newest 20% test) when date_column is given, else a
+      random 80/20 split (stratified for classification when every class has 2+ rows)
+    - Preprocess: median-impute + scale numbers; most-frequent-impute + one-hot categories
+    - Models: median / most-common baseline, linear or logistic regression, gradient boosting;
+      5-fold cross-validation on the training set, then scored on the test set
+      (MAE for regression; accuracy, plus ROC AUC for two classes)
+    - Permutation importance of the best model gives the top drivers (associations, not causes)
+
+    Args:
+        df: pd.DataFrame, the table.
+        target: str | None, column to predict. Required.
+        features: list[str] | None, columns to use (default: all usable columns).
+        exclude: list[str] | None, columns to leave out, e.g. ones only known after the fact (leakage).
+        date_column: str | None, date column for a time-based split.
+        max_rows: int, sample at most this many rows (default 50,000) to keep runs fast.
+
+    Returns:
+        SkillResult: summary naming the best model and its score vs. the baseline; findings with
+        a verdict, the validation method, and top drivers; tables "model_comparison" and
+        "drivers"; a bar chart of the top 10 drivers; data {"task": "regression" |
+        "classification", "metric": "MAE" | "accuracy"}.
+
+    Raises:
+        SkillInputError: if no valid target is given, fewer than 50 rows have a target, or no
+            usable feature columns remain.
+
+    Example:
+        >>> res = run(df, target="amount", exclude=["tip"], date_column="order_date")
+        >>> res.data
+        {'task': 'regression', 'metric': 'MAE'}
+    """
     if not target or target not in df.columns:
         raise SkillInputError("Choose a 'target' column to predict.")
     data = df.dropna(subset=[target])

@@ -34,6 +34,34 @@ BENFORD = np.log10(1 + 1 / np.arange(1, 10))
 
 
 def run(df: pd.DataFrame) -> SkillResult:
+    """
+    Look for signs that the data was processed (filled, rounded, capped, generated) before you got it.
+
+    Signals checked (each is a question for the data owner, not proof of tampering):
+    - Whole table: 500+ rows with zero missing values and zero duplicate rows
+    - Per number column (50+ values, 5+ distinct):
+      - imputation spike: the most common value is > 15% of rows and > 4x the runner-up;
+        noted as "the mean/median" when it sits within 0.01 SD of either
+      - rounding: > 90% of non-zero values are multiples of 100, 10, or 5 (largest base
+        reported) and the typical size is above that base
+      - capping: > 5% of values exactly at the max or min (columns with 20+ distinct values)
+      - Benford: for 300+ positive values spanning > 1000x, mean absolute deviation of
+        leading-digit shares from Benford's law above 0.015
+    - Per date column (60+ dates): every day in the span present with identical row counts
+
+    Args:
+        df: pd.DataFrame, the RAW table (this skill sets wants_raw=True so cleaning hasn't hidden
+            the signals).
+
+    Returns:
+        SkillResult: summary with the number of signals (or "looks raw"); one finding per signal;
+        table "signals" with column, signal, and question_to_ask.
+
+    Example:
+        >>> res = run(pd.DataFrame({"amount": [10, 20, 30]}))
+        >>> res.summary
+        'No signs of prior processing: the data looks raw.'
+    """
     flags = []
 
     if len(df) >= 500 and df.isna().sum().sum() == 0 and not df.duplicated().any():
