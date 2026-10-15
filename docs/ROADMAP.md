@@ -132,7 +132,8 @@ data sources and services clients ask for → which connector to build after Qui
 
 ### Other connectors
 After QuickBooks: Google Sheets → Square/Shopify → Gusto → Snowflake/BigQuery
-([CONNECTORS.md](CONNECTORS.md)).
+([CONNECTORS.md](CONNECTORS.md)). Warehouse-sized sources can use the optional
+PySpark engine, already set up but off by default ([SPARK.md](SPARK.md)).
 
 ### Mobile apps
 React Native + Expo app (iOS/Android) calling the same API, following the

@@ -104,7 +104,7 @@ tools are offered.
 ## 2. From the command line
 
 ```bash
-python -m data_skills list                                   # all 31 skills by category
+python -m data_skills list                                   # all 32 skills by category
 python -m data_skills describe build-dashboard               # a skill's options
 python -m data_skills run build-dashboard samples/sales.csv  # -> outputs/build-dashboard/html_dashboard.html
 python -m data_skills run build-dashboard samples/sales.csv --param 'filters={"customer_type": "Wholesale"}'

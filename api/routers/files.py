@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from api.core.config import get_settings
 from api.core.security import get_acting_context
-from api.services import account_store, entitlements
+from api.services import account_store, entitlements, fair_use
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import (
     load_uploads,
@@ -163,7 +163,9 @@ async def download_cleaned(
     Re-runs exactly the same pipeline as /analyze (so nothing is ever stored),
     picks one group, records the billable runtime (metadata only) and streams
     the file. Charge rules: the per-minute runtime price, capped at the amount
-    the client confirmed, and $0 when their plan includes downloads. A
+    the client confirmed, $0 when their plan includes downloads, and $0 for a
+    repeat of the exact same data downloaded in the fair-use window. Over the
+    fair-use limit (DAILY_DOWNLOAD_LIMIT per DOWNLOAD_WINDOW_HOURS) -> 429. A
     consultant acting for a client (X-Acting-As) bills the client and is
     recorded on the usage row.
 
@@ -183,11 +185,13 @@ async def download_cleaned(
 
     Returns:
         StreamingResponse: the file as an attachment named "<label>_cleaned.<csv|xlsx>",
-        with headers X-Runtime-Seconds and X-Amount-USD (what it cost).
+        with headers X-Runtime-Seconds, X-Amount-USD (what it cost) and
+        X-Repeat-Download ("1" when it was a free repeat).
 
     Raises:
         HTTPException: 401/403/404 from `get_acting_context`; 404 "That dataset
-            group was not found."; 400/413 for upload or choice problems.
+            group was not found."; 400/413 for upload or choice problems;
+            429 when the account is over its fair-use download limit.
 
     Example:
         POST /api/files/download   (multipart/form-data)
@@ -205,6 +209,13 @@ async def download_cleaned(
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That dataset group was not found.")
 
+    # Fair use: at most DAILY_DOWNLOAD_LIMIT downloads per rolling window, and
+    # the exact same result downloaded again in that window isn't charged twice.
+    # Only a one-way fingerprint of the table is kept — never the data.
+    decision = await fair_use.evaluate_download(str(ctx["account"]["id"]), group.cleaned)
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=decision.message)
+
     # Record the billable runtime (metadata only — the data is not stored).
     cost = runtime_cost(result.total_runtime_seconds)
     if confirmed_amount_usd is not None:
@@ -212,6 +223,8 @@ async def download_cleaned(
         cost["amount_usd"] = min(cost["amount_usd"], round(confirmed_amount_usd, 2))
     if await entitlements.downloads_included(ctx["account"]):
         cost["amount_usd"] = 0.0   # their plan includes Data Cleaning: no per-minute charge
+    if decision.repeat:
+        cost["amount_usd"] = 0.0   # same data already downloaded (and paid for) recently
     await account_store.record_usage(
         account_id=str(ctx["account"]["id"]),
         consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
@@ -220,6 +233,7 @@ async def download_cleaned(
         runtime_seconds=cost["runtime_seconds"],
         billable_minutes=cost["billable_minutes"],
         amount_usd=cost["amount_usd"],
+        data_fingerprint=decision.fingerprint,
     )
 
     # Build the file in memory and stream it back.
@@ -252,5 +266,7 @@ async def download_cleaned(
             # Lets the frontend show what the download cost.
             "X-Runtime-Seconds": str(cost["runtime_seconds"]),
             "X-Amount-USD": f"{cost['amount_usd']:.2f}",
+            # "1" when this was a free repeat of data downloaded recently.
+            "X-Repeat-Download": "1" if decision.repeat else "0",
         },
     )

@@ -1,0 +1,218 @@
+{
+  "QueryResponse": {
+    "Invoice": [
+      {
+        "AllowIPNPayment": false,
+        "AllowOnlinePayment": false,
+        "AllowOnlineCreditCardPayment": false,
+        "AllowOnlineACHPayment": false,
+        "domain": "QBO",
+        "sparse": false,
+        "Id": "130",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2026-09-14T09:22:11-07:00",
+          "LastUpdatedTime": "2026-09-15T13:05:47-07:00"
+        },
+        "CustomField": [
+          {
+            "DefinitionId": "1",
+            "Name": "Delivery Window",
+            "Type": "StringType",
+            "StringValue": "6-8 AM"
+          }
+        ],
+        "DocNumber": "1037",
+        "TxnDate": "2026-09-14",
+        "CurrencyRef": {
+          "value": "USD",
+          "name": "United States Dollar"
+        },
+        "LinkedTxn": [],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Description": "Sourdough loaves, wholesale",
+            "Amount": 96.0,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "5",
+                "name": "Sourdough Loaf"
+              },
+              "UnitPrice": 8,
+              "Qty": 12,
+              "ItemAccountRef": {
+                "value": "79",
+                "name": "Sales of Product Income"
+              },
+              "TaxCodeRef": {
+                "value": "TAX"
+              }
+            }
+          },
+          {
+            "Id": "2",
+            "LineNum": 2,
+            "Description": "Cupcake boxes (6), wholesale",
+            "Amount": 72.0,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "9",
+                "name": "Cupcake Box (6)"
+              },
+              "UnitPrice": 18,
+              "Qty": 4,
+              "ItemAccountRef": {
+                "value": "79",
+                "name": "Sales of Product Income"
+              },
+              "TaxCodeRef": {
+                "value": "TAX"
+              }
+            }
+          },
+          {
+            "Amount": 168.0,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TxnTaxCodeRef": {
+            "value": "2"
+          },
+          "TotalTax": 13.44,
+          "TaxLine": [
+            {
+              "Amount": 13.44,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "3"
+                },
+                "PercentBased": true,
+                "TaxPercent": 8,
+                "NetAmountTaxable": 168.0
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "21",
+          "name": "Blue Door Cafe"
+        },
+        "CustomerMemo": {
+          "value": "Thank you for your business!"
+        },
+        "BillAddr": {
+          "Id": "45",
+          "Line1": "512 Peachtree St NE",
+          "City": "Atlanta",
+          "CountrySubDivisionCode": "GA",
+          "PostalCode": "30308"
+        },
+        "FreeFormAddress": true,
+        "SalesTermRef": {
+          "value": "3",
+          "name": "Net 30"
+        },
+        "DueDate": "2026-10-14",
+        "TotalAmt": 181.44,
+        "ApplyTaxAfterDiscount": false,
+        "PrintStatus": "NotSet",
+        "EmailStatus": "EmailSent",
+        "BillEmail": {
+          "Address": "orders@bluedoorcafe.example"
+        },
+        "Balance": 181.44
+      },
+      {
+        "AllowIPNPayment": false,
+        "AllowOnlinePayment": false,
+        "AllowOnlineCreditCardPayment": false,
+        "AllowOnlineACHPayment": false,
+        "domain": "QBO",
+        "sparse": false,
+        "Id": "131",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-09-16T10:02:30-07:00",
+          "LastUpdatedTime": "2026-09-16T10:02:30-07:00"
+        },
+        "CustomField": [
+          {
+            "DefinitionId": "1",
+            "Name": "Delivery Window",
+            "Type": "StringType"
+          }
+        ],
+        "DocNumber": "1038",
+        "TxnDate": "2026-09-16",
+        "CurrencyRef": {
+          "value": "USD",
+          "name": "United States Dollar"
+        },
+        "LinkedTxn": [
+          {
+            "TxnId": "88",
+            "TxnType": "Payment"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Description": "Celebration cake, 10 inch",
+            "Amount": 65.0,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "12",
+                "name": "Celebration Cake"
+              },
+              "UnitPrice": 65,
+              "Qty": 1,
+              "ServiceDate": "2026-09-20",
+              "ItemAccountRef": {
+                "value": "79",
+                "name": "Sales of Product Income"
+              },
+              "TaxCodeRef": {
+                "value": "NON"
+              }
+            }
+          },
+          {
+            "Amount": 65.0,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 0
+        },
+        "CustomerRef": {
+          "value": "34",
+          "name": "Cora's Flowers"
+        },
+        "SalesTermRef": {
+          "value": "1",
+          "name": "Due on receipt"
+        },
+        "DueDate": "2026-09-16",
+        "TotalAmt": 65.0,
+        "ApplyTaxAfterDiscount": false,
+        "PrintStatus": "NeedToPrint",
+        "EmailStatus": "NotSet",
+        "Balance": 0
+      }
+    ],
+    "startPosition": 1,
+    "maxResults": 2,
+    "totalCount": 2
+  },
+  "time": "2026-10-01T09:12:44.123-07:00"
+}

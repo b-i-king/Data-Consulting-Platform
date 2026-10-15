@@ -39,9 +39,9 @@ from api.core.config import get_settings  # noqa: E402
 
 PLATFORM_TABLES = ["accounts", "teams", "consultants", "account_services", "subscription_plans", "subscriptions",
                    "subscription_items", "consulting_purchases", "consultations", "storage_consents", "load_runs",
-                   "usage_events", "intake_responses"]
+                   "usage_events", "intake_responses", "data_connections"]
 WAREHOUSE_TABLES = ["dim_client", "dim_date", "dim_source", "dim_event_type", "dim_customer", "dim_employee",
-                    "dim_product", "fact_event"]
+                    "dim_product", "fact_event", "field_map", "unified_data"]
 
 
 async def main(check_only: bool, warehouse: bool) -> int:

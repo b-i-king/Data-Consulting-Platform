@@ -19,8 +19,9 @@ WHAT IS STORED (and what is NOT)
 Stored: name, email, account type, team membership, the services on each
 account's plan, the consultant (if any) assigned to each client, subscriptions
 and prepaid consulting hours (kept in sync by Stripe), a usage record per
-download (file name, row count, runtime, amount) for billing, consultations
-(free and paid calls), storage consents and load-run summaries.
+download (file name, row count, runtime, amount, and a one-way fingerprint of
+the result for fair use) for billing, each connector's refresh schedule,
+consultations (free and paid calls), storage consents and load-run summaries.
 Passwords: only a Supabase user id, or a one-way hash in local mode.
 NOT stored here: the client's uploaded data. Files are processed in memory
 only. (Clients who consent to managed storage have cleaned rows loaded into
@@ -46,6 +47,8 @@ _plans: dict[str, dict] = {}             # plan id -> subscription_plans row (St
 _consultations: dict[str, dict] = {}     # consultation id -> consultations row
 _consents: list[dict] = []               # storage_consents rows
 _load_runs: list[dict] = []              # load_runs rows
+
+_connections: dict[tuple[str, str], dict] = {}   # (account_id, connector) -> data_connections row
 
 
 class AccountExistsError(ValueError):
@@ -358,6 +361,7 @@ async def get_team(team_id: str) -> dict | None:
 async def record_usage(
     *, account_id: str, dataset_name: str, rows: int, runtime_seconds: float,
     billable_minutes: float, amount_usd: float, consultant_id: str | None = None,
+    data_fingerprint: str | None = None,
 ) -> None:
     """
     Save one billing record. Only metadata — never the data itself.
@@ -371,6 +375,8 @@ async def record_usage(
         billable_minutes: float, minutes charged after rounding up.
         amount_usd: float, amount charged in US dollars.
         consultant_id: str | None, the consultant who downloaded, if any.
+        data_fingerprint: str | None, the one-way SHA-256 fingerprint of the
+            downloaded table (fair_use.data_fingerprint) — a hash, never the data.
 
     Returns:
         None. Inserts one usage_events row.
@@ -381,17 +387,51 @@ async def record_usage(
     """
     event = {"account_id": account_id, "dataset_name": dataset_name, "rows": rows,
              "runtime_seconds": runtime_seconds, "billable_minutes": billable_minutes,
-             "amount_usd": amount_usd, "consultant_id": consultant_id, "created_at": _now()}
+             "amount_usd": amount_usd, "consultant_id": consultant_id,
+             "data_fingerprint": data_fingerprint, "created_at": _now()}
     if database.pool is None:
         _usage.append(event)
         return
     await database.pool.execute(
         """INSERT INTO usage_events (account_id, dataset_name, row_count, runtime_seconds,
-                                     billable_minutes, amount_usd, consultant_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                                     billable_minutes, amount_usd, consultant_id, data_fingerprint)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
         uuid.UUID(account_id), dataset_name, rows, runtime_seconds, billable_minutes, amount_usd,
-        uuid.UUID(consultant_id) if consultant_id else None,
+        uuid.UUID(consultant_id) if consultant_id else None, data_fingerprint,
     )
+
+
+async def recent_usage(account_id: str, since: datetime) -> list[dict]:
+    """
+    List an account's download records made at or after `since` (for fair use).
+
+    Only the fields the fair-use check needs are returned, newest first.
+
+    Args:
+        account_id: str, the client account that was billed.
+        since: datetime, timezone-aware start of the window (e.g. 24 hours ago).
+
+    Returns:
+        list[dict]: [{"created_at": datetime, "data_fingerprint": str | None,
+        "amount_usd": float}, ...].
+
+    Example:
+        >>> rows = await recent_usage(aid, datetime.now(timezone.utc) - timedelta(hours=24))
+        >>> len(rows)
+        2
+    """
+    if database.pool is None:
+        rows = [u for u in _usage if u["account_id"] == account_id and u["created_at"] >= since]
+        return sorted(({"created_at": u["created_at"], "data_fingerprint": u.get("data_fingerprint"),
+                        "amount_usd": u["amount_usd"]} for u in rows),
+                      key=lambda r: r["created_at"], reverse=True)
+    rows = await database.pool.fetch(
+        """SELECT created_at, data_fingerprint, amount_usd FROM usage_events
+           WHERE account_id = $1 AND created_at >= $2 ORDER BY created_at DESC""",
+        uuid.UUID(account_id), since,
+    )
+    return [{"created_at": r["created_at"], "data_fingerprint": r["data_fingerprint"],
+             "amount_usd": float(r["amount_usd"])} for r in rows]
 
 
 # ── Services on the plan (table account_services) ───────────────────────────
@@ -1232,3 +1272,71 @@ async def list_load_runs(account_id: str, limit: int = 20) -> list[dict]:
         uuid.UUID(account_id), limit,
     )
     return [dict(r) for r in rows]
+
+# ── Data connections (table data_connections) ───────────────────────────────
+
+async def list_connections(account_id: str) -> list[dict]:
+    """
+    List a client's connector settings (schedule and status — never the data).
+
+    Args:
+        account_id: str, the client account (plan holder).
+
+    Returns:
+        list[dict]: data_connections rows as dicts ("connector", "refresh_frequency",
+        "status", "last_synced_at", "next_sync_at", ...), ordered by connector.
+
+    Example:
+        >>> [c["connector"] for c in await list_connections(aid)]
+        ['quickbooks']
+    """
+    if database.pool is None:
+        return sorted((dict(c) for (aid, _), c in _connections.items() if aid == account_id),
+                      key=lambda c: c["connector"])
+    rows = await database.pool.fetch(
+        "SELECT * FROM data_connections WHERE account_id = $1 ORDER BY connector", uuid.UUID(account_id))
+    return [dict(r) for r in rows]
+
+
+async def set_connection_frequency(*, account_id: str, connector: str, refresh_frequency: str,
+                                   next_sync_at: datetime | None, consultant_id: str | None = None) -> dict:
+    """
+    Create or update a client's connector with a refresh frequency.
+
+    A new row starts with status "pending" (schedule chosen, not connected yet).
+    An existing row keeps its status and last sync; only the frequency, the next
+    sync time and updated_at change.
+
+    Args:
+        account_id: str, the client account (plan holder).
+        connector: str, e.g. "quickbooks" (validated by connections.validate first).
+        refresh_frequency: str, a pricing.REFRESH_OPTIONS id.
+        next_sync_at: datetime | None, from connections.next_sync_at (None = manual).
+        consultant_id: str | None, the consultant who set it up, if any.
+
+    Returns:
+        dict: the saved row.
+
+    Example:
+        >>> row = await set_connection_frequency(account_id=aid, connector="quickbooks",
+        ...                                      refresh_frequency="weekly", next_sync_at=None)
+        >>> row["status"], row["refresh_frequency"]
+        ('pending', 'weekly')
+    """
+    if database.pool is None:
+        row = _connections.setdefault((account_id, connector), {
+            "id": str(uuid.uuid4()), "account_id": account_id, "connector": connector, "status": "pending",
+            "last_synced_at": None, "consultant_id": consultant_id, "created_at": _now()})
+        row.update(refresh_frequency=refresh_frequency, next_sync_at=next_sync_at, updated_at=_now())
+        return dict(row)
+    row = await database.pool.fetchrow(
+        """INSERT INTO data_connections (account_id, consultant_id, connector, refresh_frequency, next_sync_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (account_id, connector) DO UPDATE
+               SET refresh_frequency = EXCLUDED.refresh_frequency,
+                   next_sync_at = EXCLUDED.next_sync_at, updated_at = now()
+           RETURNING *""",
+        uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, connector,
+        refresh_frequency, next_sync_at,
+    )
+    return dict(row)

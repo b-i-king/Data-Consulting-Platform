@@ -94,8 +94,9 @@ def test_guest_analyze_then_signup_then_download():
     assert len(df) == 2
     assert "X-Amount-USD" in res.headers
 
-    # 5. The charge never goes above the total the client confirmed.
-    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV)),
+    # 5. The charge never goes above the total the client confirmed. (Different
+    # data: the exact same result again would be a free repeat — see test_fair_use.)
+    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV + b"Cy,7\n")),
                       data={"file_format": "csv", "confirmed_amount_usd": "0.25"})
     assert res.status_code == 200
     assert res.headers["X-Amount-USD"] == "0.25"
@@ -134,9 +135,9 @@ SALES = (__import__("pathlib").Path(__file__).resolve().parents[1] / "samples" /
 
 
 def test_list_skills():
-    """Check that GET /api/skills lists all 31 skills, spread across the service categories."""
+    """Check that GET /api/skills lists all 32 skills, spread across the service categories."""
     skills = client.get("/api/skills").json()
-    assert len(skills) == 31
+    assert len(skills) == 32
     assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
 
 

@@ -21,6 +21,9 @@ WHAT THIS FILE DOES
 6. CONSULTING: the first 30-minute consultation is free (except Data Strategy
    & Discovery, which is paid from the start); after that, consulting is
    billed by the hour (CONSULTING_RATE_PER_HOUR_USD, default $80).
+7. CONNECTED-DATA REFRESH: how often a connector (QuickBooks) pulls new data —
+   manual, weekly and daily (the default) are included; hourly and live are
+   paid add-ons per connection (REFRESH_OPTIONS; rules in connections.py).
 
 ALL PRICES BELOW ARE PLACEHOLDERS. Edit them here (or move them into the
 database later) once you settle on your packages. The per-minute cleaning
@@ -753,3 +756,65 @@ def catalog() -> list[dict]:
                     "tool_annual_usd": tool.annual_usd if tool else None,
                     "tool_requires": list(tool.requires) if tool else []})
     return out
+
+
+# ── Connected-data refresh (how often a connector pulls new data) ──────────
+# A connector (QuickBooks first) copies a client's data into managed storage,
+# so it needs Data Engineering. Each pull costs us API calls and compute, so
+# the everyday choices are included and the frequent ones are paid add-ons.
+# PLACEHOLDER PRICES, per connection per month. Not in Stripe yet: they are
+# shown as "free until connectors launch" (billable=False) — when connectors
+# go live, set billable=True and add Stripe prices (scripts/sync_stripe.py).
+
+
+@dataclass(frozen=True)
+class RefreshOption:
+    id: str                          # stored in data_connections.refresh_frequency
+    label: str
+    description: str
+    interval_minutes: int | None     # scheduled pull every N minutes; None = only on request
+    refresh_now_gap_minutes: int     # "Refresh now" no sooner than this after the last pull
+    monthly_usd: float               # add-on price per connection (0 = included)
+    billable: bool = False           # False = not charged yet (connectors not launched)
+
+
+REFRESH_OPTIONS: tuple[RefreshOption, ...] = (
+    RefreshOption(
+        id="manual", label="Only when I ask", interval_minutes=None, refresh_now_gap_minutes=60, monthly_usd=0.0,
+        description="Nothing runs on a schedule; click Refresh now (at most once an hour)."),
+    RefreshOption(
+        id="weekly", label="Once a week", interval_minutes=7 * 24 * 60, refresh_now_gap_minutes=24 * 60,
+        monthly_usd=0.0, description="Pulls new and changed records every week. Good for monthly reporting."),
+    RefreshOption(
+        id="daily", label="Once a day", interval_minutes=24 * 60, refresh_now_gap_minutes=4 * 60, monthly_usd=0.0,
+        description="Pulls new and changed records every night. The default."),
+    RefreshOption(
+        id="hourly", label="Every hour", interval_minutes=60, refresh_now_gap_minutes=15, monthly_usd=15.0,
+        description="Pulls new and changed records every hour. Paid add-on."),
+    RefreshOption(
+        id="live", label="Live (about every 15 minutes)", interval_minutes=15, refresh_now_gap_minutes=5,
+        monthly_usd=40.0,
+        description="Near real time: changes arrive within about 15 minutes. Paid add-on."),
+)
+REFRESH_OPTIONS_BY_ID = {o.id: o for o in REFRESH_OPTIONS}
+DEFAULT_REFRESH = "daily"
+
+
+def refresh_catalog() -> list[dict]:
+    """
+    List the refresh choices as plain dicts (for the API and the web picker).
+
+    Each dict is the RefreshOption's fields plus "included" (True when it costs
+    nothing extra) and "price_label" (e.g. "Included", "+$15.00/month").
+
+    Returns:
+        list[dict]: one dict per option, slowest-to-fastest except "manual" first.
+
+    Example:
+        >>> [(o["id"], o["price_label"]) for o in refresh_catalog()][3]
+        ('hourly', '+$15.00/month')
+    """
+    return [{**asdict(o), "included": o.monthly_usd == 0,
+             "default": o.id == DEFAULT_REFRESH,
+             "price_label": "Included" if o.monthly_usd == 0 else f"+${o.monthly_usd:,.2f}/month"}
+            for o in REFRESH_OPTIONS]

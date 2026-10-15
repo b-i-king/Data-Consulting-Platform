@@ -484,3 +484,8 @@ class DeleteStoredIn(BaseModel):
     on purpose, so a stray click or request can't wipe a client's data."""
 
     confirm: str = Field(max_length=20)
+
+class RefreshIn(BaseModel):
+    """How often a connector should pull new data (an id from pricing.REFRESH_OPTIONS)."""
+
+    refresh_frequency: Literal["manual", "weekly", "daily", "hourly", "live"]

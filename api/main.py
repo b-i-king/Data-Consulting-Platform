@@ -30,7 +30,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from api.core import database
 from api.core.config import get_settings
-from api.routers import accounts, billing, consultants, consultations, files, intake, skills, warehouse
+from api.routers import accounts, billing, connections, consultants, consultations, files, intake, skills, warehouse
 from api.services import auth
 
 logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
@@ -99,6 +99,7 @@ app.include_router(consultants.router, prefix="/api", tags=["consultants"])
 app.include_router(billing.router, prefix="/api", tags=["billing"])
 app.include_router(consultations.router, prefix="/api", tags=["consultations"])
 app.include_router(warehouse.router, prefix="/api", tags=["warehouse"])
+app.include_router(connections.router, prefix="/api", tags=["connections"])
 
 
 @app.get("/health", tags=["health"])

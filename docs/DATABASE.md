@@ -42,6 +42,8 @@ erDiagram
     consultants |o--o{ consultations : "confirmed by"
     accounts ||--o{ storage_consents : "store my data"
     accounts ||--o{ load_runs : "loads into warehouse"
+    accounts ||--o{ data_connections : "connectors (refresh schedule)"
+    consultants |o--o{ data_connections : "set up on the client's behalf"
 
     accounts {
         uuid id PK
@@ -161,6 +163,17 @@ erDiagram
         int row_count
         numeric runtime_seconds
         numeric amount_usd
+        text data_fingerprint "one-way hash, fair use"
+    }
+    data_connections {
+        uuid id PK
+        uuid account_id FK
+        uuid consultant_id FK
+        text connector "quickbooks, ..."
+        text refresh_frequency "manual | weekly | daily | hourly | live"
+        text status
+        timestamptz last_synced_at
+        timestamptz next_sync_at
     }
     intake_responses {
         bigint id PK
@@ -182,7 +195,8 @@ erDiagram
 | `subscriptions` | client subscription | **Stripe webhook only** (`api/services/billing.py`) | One billing interval for all its tools. `active`, `trialing`, `past_due` keep it on. Cancel = `cancel_at_period_end` until the period ends, then `canceled`. |
 | `subscription_items` | tool in a subscription ("build your own package") | Stripe webhook (replaced as a whole on every change) | The total price is the sum of the items' prices. |
 | `consulting_purchases` | paid Checkout for consulting hours | Stripe webhook | **Not used by the website any more**: paid sessions are booked and paid on Cal.com (`PAID_BOOKING_URL`) and tracked in `consultations`. Kept so old rows stay readable. |
-| `usage_events` | cleaned-file download | download endpoint | Metadata only (name, row count, runtime, amount) — never the data. `consultant_id` set when a consultant downloaded for the client. Amount is $0 when a plan includes Data Cleaning. |
+| `usage_events` | cleaned-file download | download endpoint | Metadata only (name, row count, runtime, amount) — never the data. `consultant_id` set when a consultant downloaded for the client. Amount is $0 when a plan includes Data Cleaning, and for a repeat of the same data. `data_fingerprint` is a one-way SHA-256 hash of the downloaded table, used for fair use (download limit, free repeats — [PAYMENTS.md](PAYMENTS.md#fair-use)); the data can't be rebuilt from it. |
+| `data_connections` | client picks a refresh schedule for a connector (Plan & billing → Connected data) | `PUT /api/connections/{connector}/refresh` (later: the sync job) | One row per connector per client: how often it refreshes (`daily` by default; `hourly`/`live` are add-ons — [PRICING.md](PRICING.md)), status, last/next sync. Holds the schedule only — pulled data goes to the warehouse. Needs Data Engineering. |
 | `intake_responses` | guest questionnaire | (not used yet) | Analytics: which sources and services people ask for. |
 | `consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to `PAID_BOOKING_URL`. `ended` = Cal.com says the slot passed, waiting for the consultant. Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |
 | `storage_consents` | client's "store my data" | first warehouse load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. `consented_by` = the client, or the consultant acting for them. "Delete stored data" sets `withdrawn_at`. |
@@ -237,30 +251,29 @@ feature is built. Proposed shapes:
 
 ### QuickBooks (and later other connectors)
 
+`data_connections` (above) already exists with the refresh schedule. When
+the QuickBooks OAuth work starts, it gains the sign-in columns, plus a log of
+every pull:
+
 ```sql
--- One connected outside account per client and provider.
-CREATE TABLE connections (
-    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id         UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,   -- plan holder
-    provider           TEXT NOT NULL CHECK (provider IN ('quickbooks', 'google_sheets', 'square', 'shopify', 'gusto')),
-    external_id        TEXT NOT NULL,       -- QuickBooks "realmId" (the company)
-    display_name       TEXT,                -- "Lee Bakery LLC"
+-- The connected outside account (added to the existing data_connections table).
+ALTER TABLE data_connections
+    ADD COLUMN external_id      TEXT,          -- QuickBooks "realmId" (the company)
+    ADD COLUMN display_name     TEXT,          -- "Lee Bakery LLC"
     -- OAuth tokens: NEVER plain text. Store the id of a Supabase Vault secret
     -- (or encrypt with a key kept outside the database).
-    token_secret_id    UUID NOT NULL,
-    token_expires_at   TIMESTAMPTZ,
-    status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'needs_reauth', 'disconnected')),
-    connected_by       UUID REFERENCES accounts (id),   -- owner, or consultant acting
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_synced_at     TIMESTAMPTZ,
-    UNIQUE (provider, external_id)
-);
+    ADD COLUMN token_secret_id  UUID,
+    ADD COLUMN token_expires_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX uq_data_connections_external ON data_connections (connector, external_id);
 -- One row per sync (what was pulled, and whether it worked).
 CREATE TABLE sync_runs (
     id             BIGSERIAL PRIMARY KEY,
-    connection_id  UUID NOT NULL REFERENCES connections (id) ON DELETE CASCADE,
+    connection_id  UUID NOT NULL REFERENCES data_connections (id) ON DELETE CASCADE,
+    trigger        TEXT NOT NULL CHECK (trigger IN ('schedule', 'refresh_now')),
     entities       TEXT[] NOT NULL,         -- {'customers','invoices','payments'}
     rows_pulled    INTEGER NOT NULL DEFAULT 0,
+    rows_inserted  INTEGER NOT NULL DEFAULT 0,   -- new values (unified.plan_upsert "insert")
+    rows_updated   INTEGER NOT NULL DEFAULT 0,   -- changed values ("update"); unchanged ones are skipped
     status         TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
     error          TEXT,
     started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

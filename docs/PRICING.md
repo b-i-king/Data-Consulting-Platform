@@ -84,6 +84,45 @@ files finish in well under a second, so in practice the first minute is a flat
 fee — consider whether `MINIMUM_CHARGE_USD` or a free tier fits your goals of
 keeping costs low for small businesses.
 
+### Fair use (so nobody games the per-minute price)
+
+Every download is rounded **up** to a whole minute, so splitting one job into
+many small downloads costs more, never less. On top of that
+([`api/services/fair_use.py`](../api/services/fair_use.py)):
+
+- **Download limit:** at most `DAILY_DOWNLOAD_LIMIT` (default 20) downloads per
+  client account in a rolling `DOWNLOAD_WINDOW_HOURS` (24). The next one gets a
+  friendly "try again after 10/16/2026 9:15 AM UTC" message (HTTP 429). A
+  consultant downloading for a client counts against that client. `0` = no limit.
+- **Repeats are free:** downloading the exact same cleaned data again within
+  the window costs $0.00 (it still counts toward the limit). "The same data"
+  is decided by a one-way fingerprint (SHA-256) of the table, stored in
+  `usage_events.data_fingerprint` — never the data itself.
+
+## Connected data: how often it refreshes
+
+Connectors (QuickBooks first) pull a client's data into managed storage, so
+they need **Data Engineering**. Each pull costs API calls and compute, so the
+client chooses how often (Plan & billing → Connected data); prices are
+**per connection per month**, placeholders in
+[`pricing.py`](../api/services/pricing.py) `REFRESH_OPTIONS`:
+
+| Choice | Pulls | "Refresh now" no sooner than | Price |
+|---|---|---|---|
+| Only when I ask (`manual`) | never on a schedule | 1 hour after the last pull | Included |
+| Once a week (`weekly`) | every 7 days | 24 hours | Included |
+| **Once a day (`daily`, default)** | every night | 4 hours | Included |
+| Every hour (`hourly`) | every 60 minutes | 15 minutes | +$15.00/month |
+| Live (`live`) | about every 15 minutes | 5 minutes | +$40.00/month |
+
+The "Refresh now" gap stops anyone getting hourly data for the price of daily
+by pressing the button all day. Hourly and live are **free until connectors
+launch** (`billable=False`, like AI) and are not in Stripe yet; when they go
+live, set `billable=True` and add Stripe prices in `scripts/sync_stripe.py`.
+Pulls only bring **new and changed** records (QuickBooks' change data
+capture), so a frequent schedule doesn't re-copy everything — see
+[DATA_MODEL.md](DATA_MODEL.md) for how duplicates are kept out of storage.
+
 ## Estimates and confirmations (before anything is charged)
 
 Every step that costs money asks first, with the amount on screen:
@@ -139,7 +178,8 @@ Code: `api/services/entitlements.py`.
 ## What is recorded
 
 Each download writes a row to `usage_events` (account, dataset name, row count,
-runtime, billable minutes, amount; $0 with a plan that includes cleaning).
+runtime, billable minutes, amount — $0 with a plan that includes cleaning or for
+a repeat of the same data — and the table's one-way fingerprint for fair use).
 Subscriptions are paid through Stripe ([PAYMENTS.md](PAYMENTS.md)); consulting sessions on Cal.com;
 pay-per-minute downloads without a plan are recorded but not yet charged.
 

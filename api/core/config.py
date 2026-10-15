@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     # Minimum charge for any paid download, in US dollars (0 = no minimum).
     minimum_charge_usd: float = Field(default=0.0, alias="MINIMUM_CHARGE_USD")
 
+    # ── Fair use (api/services/fair_use.py) ───────────────────────────────────
+    # Most cleaned-data downloads one client account can make in a rolling
+    # window (DOWNLOAD_WINDOW_HOURS). Stops anyone splitting work into dozens of
+    # tiny downloads a day; normal use is a handful. 0 = no limit.
+    daily_download_limit: int = Field(default=20, alias="DAILY_DOWNLOAD_LIMIT")
+    download_window_hours: int = Field(default=24, alias="DOWNLOAD_WINDOW_HOURS")
+
     # ── Consultant hand-off ───────────────────────────────────────────────────
     # Your scheduling link (Calendly, Cal.com, Google Calendar booking page…).
     # Shown whenever a guest picks a service that needs a human consultant.
@@ -129,6 +136,21 @@ class Settings(BaseSettings):
     # their password — a consultant can open every assigned client, so they get
     # a second check. Empty = consultant sign-in is switched off.
     consultant_access_code: str = Field(default="", alias="CONSULTANT_ACCESS_CODE")
+
+    # ── Big-data engine (PySpark, optional) ───────────────────────────────────
+    # pandas is the data engine. PySpark is an OPTIONAL second engine for data
+    # too big for one machine's memory or living in a client's cloud warehouse.
+    # It needs `pip install -r requirements-spark.txt` and Java 17, so it is
+    # OFF by default (see docs/SPARK.md and api/services/spark_engine.py).
+    spark_enabled: bool = Field(default=False, alias="SPARK_ENABLED")
+    # Where Spark runs: "local[*]" = on this machine, using every CPU core;
+    # or a cluster address such as "spark://host:7077".
+    spark_master: str = Field(default="local[*]", alias="SPARK_MASTER")
+    # Name shown in the Spark web UI and cluster logs.
+    spark_app_name: str = Field(default="data-consulting-platform", alias="SPARK_APP_NAME")
+    # Table size (rows × columns) at which a job switches from pandas to Spark.
+    # 50,000,000 cells is roughly 1–4 GB in pandas memory.
+    spark_min_cells: int = Field(default=50_000_000, alias="SPARK_MIN_CELLS")
 
     model_config = {
         "env_file": ".env",

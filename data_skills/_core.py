@@ -22,7 +22,8 @@ THE RESULT SHAPE (SkillResult)
     summary    one or two plain-English sentences, the headline
     findings   bullet points a client can read
     tables     named tables (lists of row dicts) — shown as tables / saved as CSV
-    charts     chart specs the web app draws (see `line_chart` / `bar_chart`)
+    charts     chart specs the web app draws (see `line_chart`, `bar_chart`,
+               `histogram_chart`, `box_chart`, `scatter_chart`, `heatmap_chart`)
     artifacts  text outputs: Markdown reports, SQL, Mermaid diagrams, HTML
     data       anything else structured (numbers other code may want)
 """
@@ -432,3 +433,149 @@ def bar_chart(title: str, categories: list, values: list, value_label: str = "")
     """
     return json_safe({"type": "bar", "title": title, "categories": categories,
                       "values": values, "value_label": value_label})
+
+
+def histogram_chart(title: str, bin_edges: list, counts: list, x_label: str = "", y_label: str = "rows") -> dict:
+    """
+    Build a histogram spec: value ranges (bins) and how many rows fall in each.
+
+    `bin_edges` has one more item than `counts`: bin i covers
+    bin_edges[i] up to bin_edges[i + 1]. This is exactly what `numpy.histogram`
+    returns, so the usual call is `histogram_chart(title, edges.tolist(), counts.tolist())`.
+
+    Args:
+        title: chart title.
+        bin_edges: the bin boundaries, smallest first (len(counts) + 1 numbers).
+        counts: rows per bin.
+        x_label: optional label for the value axis (usually the column name).
+        y_label: label for the count axis (default "rows").
+
+    Returns:
+        dict: {"type": "histogram", "title", "bin_edges", "counts", "x_label", "y_label"},
+        JSON-safe (NaN -> None).
+
+    Example:
+        >>> counts, edges = np.histogram([1, 2, 2, 3, 9], bins=2)
+        >>> histogram_chart("amount", edges.tolist(), counts.tolist())["counts"]
+        [4, 1]
+    """
+    return json_safe({"type": "histogram", "title": title, "bin_edges": list(bin_edges),
+                      "counts": [int(c) for c in counts], "x_label": x_label, "y_label": y_label})
+
+
+def box_stats(name: str, values: pd.Series | list, max_outliers: int = 50) -> dict | None:
+    """
+    Compute one box of a box plot with the 1.5 × IQR rule (Tukey's fences).
+
+    The box runs from the 25th percentile (q1) to the 75th (q3), with a line at the
+    median. IQR = q3 - q1. Points below q1 - 1.5 × IQR or above q3 + 1.5 × IQR are
+    outliers; the whiskers end at the most extreme values still inside those fences.
+    Only the `max_outliers` most extreme outliers are listed (so a big table does not
+    send thousands of dots), but `outlier_count` is always the full number.
+
+    Args:
+        name: label for this box (a column name or a group value).
+        values: the numbers; NaN values are ignored.
+        max_outliers: most outlier values to list (default 50).
+
+    Returns:
+        dict | None: {"name", "n", "whisker_low", "q1", "median", "q3", "whisker_high",
+        "lower_fence", "upper_fence", "outliers", "outlier_count"}, or None when there are
+        no numbers at all.
+
+    Example:
+        >>> box_stats("amount", [1, 2, 3, 4, 100])["outliers"]
+        [100.0]
+    """
+    s = pd.to_numeric(pd.Series(values), errors="coerce").dropna().astype(float)
+    if s.empty:
+        return None
+    q1, med, q3 = (float(v) for v in s.quantile([0.25, 0.5, 0.75]))
+    iqr = q3 - q1
+    lo_fence, hi_fence = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    inside = s[(s >= lo_fence) & (s <= hi_fence)]
+    out = s[(s < lo_fence) | (s > hi_fence)]
+    # Keep the most extreme outliers (furthest from the median) when there are many.
+    shown = out.loc[(out - med).abs().sort_values(ascending=False).index[:max_outliers]].sort_values()
+    return json_safe({
+        "name": str(name), "n": int(len(s)),
+        "whisker_low": float(inside.min()) if len(inside) else q1,
+        "q1": q1, "median": med, "q3": q3,
+        "whisker_high": float(inside.max()) if len(inside) else q3,
+        "lower_fence": lo_fence, "upper_fence": hi_fence,
+        "outliers": shown.tolist(), "outlier_count": int(len(out)),
+    })
+
+
+def box_chart(title: str, boxes: list[dict], value_label: str = "", group_label: str = "") -> dict:
+    """
+    Build a box plot spec: one box per group (or per column), each made by `box_stats`.
+
+    Args:
+        title: chart title.
+        boxes: box dicts from `box_stats` (None entries are dropped).
+        value_label: optional label for the value axis (e.g. "amount").
+        group_label: optional label for the group axis (e.g. "store").
+
+    Returns:
+        dict: {"type": "box", "title", "boxes": [...], "value_label", "group_label"}, JSON-safe.
+
+    Example:
+        >>> box_chart("amount by store", [box_stats("Midtown", [1, 2, 3])], "amount")["boxes"][0]["median"]
+        2.0
+    """
+    return json_safe({"type": "box", "title": title, "boxes": [b for b in boxes if b],
+                      "value_label": value_label, "group_label": group_label})
+
+
+def scatter_chart(title: str, x: list, y: list, x_label: str = "", y_label: str = "") -> dict:
+    """
+    Build a scatter plot spec: one dot per row, x against y.
+
+    Pairs where either value is missing are dropped. Callers should sample big
+    tables first (the EDA report keeps at most 500 points) so the chart stays fast.
+
+    Args:
+        title: chart title.
+        x: x values, one per row.
+        y: y values, one per row (same length as `x`).
+        x_label: x-axis label (usually the column name).
+        y_label: y-axis label.
+
+    Returns:
+        dict: {"type": "scatter", "title", "points": [{"x", "y"}, ...], "x_label", "y_label"},
+        JSON-safe.
+
+    Example:
+        >>> scatter_chart("qty vs amount", [1, 2, None], [5, 9, 3])["points"]
+        [{'x': 1, 'y': 5}, {'x': 2, 'y': 9}]
+    """
+    points = [{"x": a, "y": b} for a, b in zip(x, y)
+              if a is not None and b is not None and not pd.isna(a) and not pd.isna(b)]
+    return json_safe({"type": "scatter", "title": title, "points": points, "x_label": x_label, "y_label": y_label})
+
+
+def heatmap_chart(title: str, rows: list[str], columns: list[str], values: list[list], value_label: str = "r") -> dict:
+    """
+    Build a heatmap spec: a grid of numbers in [-1, 1] (usually a correlation matrix).
+
+    The web app colors each cell on a diverging scale: one color for negative
+    values, another for positive, fading to the card color at 0.
+
+    Args:
+        title: chart title.
+        rows: row labels, top to bottom.
+        columns: column labels, left to right.
+        values: one list per row, one number per column (NaN -> None = no color).
+        value_label: what the numbers are (default "r", the correlation coefficient).
+
+    Returns:
+        dict: {"type": "heatmap", "title", "rows", "columns", "values", "min": -1, "max": 1,
+        "value_label"}, JSON-safe.
+
+    Example:
+        >>> heatmap_chart("Correlation", ["a", "b"], ["a", "b"], [[1, 0.5], [0.5, 1]])["values"][0]
+        [1, 0.5]
+    """
+    return json_safe({"type": "heatmap", "title": title, "rows": list(rows), "columns": list(columns),
+                      "values": values, "min": -1, "max": 1, "value_label": value_label})
