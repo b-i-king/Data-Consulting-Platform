@@ -52,6 +52,32 @@ SKILL = SkillSpec(
 
 
 def run(df: pd.DataFrame, date_column=None, state_column=None, goal=None) -> SkillResult:
+    """
+    Add built-in reference columns and propose outside data that could fill gaps.
+
+    Enrichment done here (offline, no outside service):
+    - from the date column: day_of_week, is_weekend, month, quarter, year,
+      holiday_name and is_us_federal_holiday (pandas' US federal holiday calendar)
+    - from a 2-letter US state column: census_region and census_division
+    Suggestions (findings) depend on the columns present: weather/events for dates,
+    Census data for state and ZIP, SBA/BLS benchmarks for NAICS, product hierarchy
+    and cost, and customer matching with accounting records. A `goal` is put first.
+
+    Args:
+        df: the table to enrich (not modified; a copy is enriched).
+        date_column: date column to enrich (default: the first date column, if any).
+        state_column: 2-letter US state column (default: a column named state,
+            state_code or province, if any).
+        goal: what you're trying to analyze (shapes the suggestions).
+
+    Returns:
+        SkillResult: summary listing the added columns; findings with the plan for
+        outside sources; table "enriched_preview" (first 200 rows); data["added_columns"].
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv")).data["added_columns"][:2]
+        ['day_of_week', 'is_weekend']
+    """
     out = df.copy()
     added, plan = [], []
     cols_lower = {str(c).lower(): c for c in df.columns}

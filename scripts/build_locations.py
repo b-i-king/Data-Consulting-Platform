@@ -51,6 +51,28 @@ WORLD_MIN_POPULATION = 15000
 
 
 def main() -> None:
+    """
+    Build api/data/locations.json from the GeoNames data in `geonamescache`.
+
+    Rules:
+    - US cities come from a cache filtered at US_MIN_POPULATION (1,000 people) and are
+      kept only when their state code (admin1code) is a known US state.
+    - Non-US cities come from a cache filtered at WORLD_MIN_POPULATION (15,000 people)
+      and are kept only when their country code is known; their region code is left
+      blank ("") because the source does not name non-US regions.
+    - Cities are sorted biggest population first, because the location picker ranks
+      search results by population.
+    - The JSON is written compactly (no spaces) to keep the file small, and a one-line
+      summary is printed.
+
+    Returns:
+        None. Side effect: overwrites api/data/locations.json and prints a summary line.
+
+    Example:
+        $ pip install geonamescache
+        $ python scripts/build_locations.py
+        Wrote api/data/locations.json: 48,000 cities (17,000 in the US)   # counts vary
+    """
     us_cache = geonamescache.GeonamesCache(min_city_population=US_MIN_POPULATION)
     world_cache = geonamescache.GeonamesCache(min_city_population=WORLD_MIN_POPULATION)
 

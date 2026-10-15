@@ -43,7 +43,22 @@ _RULES_OF_THUMB = [
 
 
 def _verdict(n: int, needed: int) -> str:
-    """green = enough, yellow = within half of the target, red = well short."""
+    """
+    Grade how close the available rows are to a rule-of-thumb target.
+
+    green = enough, yellow = within half of the target, red = well short.
+
+    Args:
+        n: rows available (the complete rows).
+        needed: rows the rule of thumb asks for.
+
+    Returns:
+        str: "green" if n >= needed, "yellow" if n >= needed / 2, else "red".
+
+    Example:
+        >>> _verdict(400, 385), _verdict(200, 385), _verdict(100, 385)
+        ('green', 'yellow', 'red')
+    """
     if n >= needed:
         return "green"
     if n >= needed / 2:
@@ -52,7 +67,31 @@ def _verdict(n: int, needed: int) -> str:
 
 
 def _time_span(df: pd.DataFrame) -> dict | None:
-    """Find the first column that is mostly dates and describe its range."""
+    """
+    Find the first column that is mostly dates and describe its range.
+
+    Columns are checked left to right; the first one that qualifies wins:
+    - a real datetime column always qualifies
+    - a text (object) column qualifies when its NAME contains "date", "time",
+      "created", "day" or "month" AND at least 80% of its non-empty values
+      parse as dates (values that fail to parse are ignored)
+    - empty columns and everything else are skipped
+
+    The span is at least 1 day, so a single-day file does not divide by zero.
+
+    Args:
+        df: the cleaned table.
+
+    Returns:
+        dict | None: {"column", "first", "last" (ISO 8601 text), "days_covered",
+        "rows_per_day"}, or None when no date column is found.
+
+    Example:
+        >>> df = pd.DataFrame({"when": pd.to_datetime(["2024-01-01", "2024-01-11"])})
+        >>> _time_span(df)
+        {'column': 'when', 'first': '2024-01-01T00:00:00', 'last': '2024-01-11T00:00:00',
+         'days_covered': 10, 'rows_per_day': 0.2}
+    """
     for col in df.columns:
         s = df[col].dropna()
         if s.empty:
@@ -79,7 +118,34 @@ def _time_span(df: pd.DataFrame) -> dict | None:
 
 
 def sample_size_snapshot(df: pd.DataFrame) -> dict:
-    """Build the automatic part of the sample-size assessment."""
+    """
+    Build the automatic part of the sample-size assessment.
+
+    "Effective n" is the number of COMPLETE rows (no missing value in any
+    column), because many analyses silently drop incomplete rows. Every check
+    below uses that number:
+    - rules-of-thumb verdicts (green / yellow / red) from `_RULES_OF_THUMB`
+    - regression guidance: about 10–20 complete rows per predictor column
+    - a warning when more than 20% of rows have a missing value, plus a
+      standing reminder that row count is not always sample size
+
+    Args:
+        df: the cleaned table.
+
+    Returns:
+        dict: keys "rows", "columns", "unique_rows", "complete_rows",
+        "incomplete_row_pct" (0–100), "memory_mb", "time_span" (see _time_span),
+        "regression_predictor_guidance" (text), "checks" (list of
+        {"question", "rows_needed", "rows_available", "verdict", "note"}) and
+        "warnings" (list of text).
+
+    Example:
+        >>> snap = sample_size_snapshot(pd.DataFrame({"amount": [1.0, None]}))
+        >>> snap["rows"], snap["complete_rows"], snap["incomplete_row_pct"]
+        (2, 1, 50.0)
+        >>> snap["checks"][0]["verdict"]
+        'red'
+    """
     n_rows = int(len(df))
     n_cols = int(df.shape[1])
     complete_rows = int(df.dropna(how="any").shape[0])

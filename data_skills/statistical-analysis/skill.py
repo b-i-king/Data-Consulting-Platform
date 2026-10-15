@@ -33,6 +33,26 @@ SKILL = SkillSpec(
 
 
 def describe(s: pd.Series) -> dict:
+    """
+    Descriptive statistics for one number column.
+
+    Missing values are dropped first. Std uses ddof=1 (NaN with one value); skew is NaN
+    with fewer than 3 values. A 95% confidence interval for the mean (t-distribution) is
+    added when n > 1. "normal" is the D'Agostino test result (p ≥ 0.05), or None when
+    n < 20 or there are 3 or fewer distinct values.
+
+    Args:
+        s: pd.Series, the numeric values.
+
+    Returns:
+        dict: keys n, mean, median, std, min, p05, p95, max, skew, ci95_low and ci95_high
+        (only when n > 1), and normal (bool or None).
+
+    Example:
+        >>> r = describe(pd.Series([1, 2, 3, 4]))
+        >>> round(r["ci95_low"], 3), round(r["ci95_high"], 3), r["normal"]
+        (0.446, 4.554, None)
+    """
     s = s.dropna().astype(float)
     n = len(s)
     row = {"n": n, "mean": s.mean(), "median": s.median(), "std": s.std(ddof=1) if n > 1 else np.nan,
@@ -46,6 +66,30 @@ def describe(s: pd.Series) -> dict:
 
 
 def run(df, columns=None, group_column=None) -> SkillResult:
+    """
+    Descriptive statistics, skew, normality, and confidence intervals for number columns.
+
+    Runs describe() per column (and per group when group_column is given; floats rounded to
+    4 decimals). Ungrouped findings flag skewed columns (|skew| > 1 -> report the median) and
+    non-normal ones (use rank-based tests). Grouped findings compare the highest and lowest
+    group means: overlapping 95% intervals are called "similar".
+
+    Args:
+        df: pd.DataFrame, the table.
+        columns: list[str] | None, number columns (default: all numeric_columns).
+        group_column: str | None, optional category to compute stats per group.
+
+    Returns:
+        SkillResult: summary with the column (and group) count; findings; table "statistics".
+
+    Raises:
+        SkillInputError: if there are no number columns to analyze.
+
+    Example:
+        >>> res = run(df, columns=["amount"])
+        >>> res.summary
+        'Statistics for 1 column(s).'
+    """
     cols = columns or numeric_columns(df)
     if not cols:
         raise SkillInputError("No number columns to analyze.")

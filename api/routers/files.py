@@ -63,6 +63,47 @@ async def analyze_files(
     # Transform steps, JSON: {"<group_id>": [{"op": "change_type", ...}, ...]} (api/services/transforms.py)
     transforms: Annotated[str, Form()] = "{}",
 ):
+    """
+    POST /api/files/analyze — GUEST: upload 1+ files and see how they would be cleaned.
+
+    No sign-in. Files are read in memory (never saved), grouped into related
+    tables, cleaned, and summarized. For each group the reply has the cleaning
+    report, a sample-size snapshot, the wait/charge estimate to download it, and
+    a short preview (the first PREVIEW_MAX_ROWS rows, like `df.head()`). The
+    browser calls this again each time the user changes a choice.
+
+    Args:
+        files: list[UploadFile], one or more flat files (multipart form field "files").
+        missing_strategy: str, "keep" (default) or "drop_any" — the default
+            missing-value handling.
+        column_actions: str, JSON {"<group_id>": {"<column>": "keep|drop|mean|median|
+            mode|auto|drop_rows"}}; default "{}".
+        column_names: str, JSON {"<group_id>": {"<column key>": "new name"}}; default "{}".
+        transforms: str, JSON {"<group_id>": [{"op": "change_type", ...}, ...]}
+            (see api/services/transforms.py); default "{}".
+
+    Returns:
+        dict: {"categorization": how the files relate,
+        "groups": [{"group_id", "label", "report", "sample_size",
+        "download_estimate", "preview": {"columns", "rows", "total_rows",
+        "truncated"}}, ...],
+        "runtime": {"runtime_seconds", "billing_increment_seconds",
+        "billable_minutes", "rate_per_minute_usd", "amount_usd"}}.
+
+    Raises:
+        HTTPException: 400 for no files, too many files, duplicate names,
+            unreadable files or malformed JSON choices; 413 for a file over
+            MAX_UPLOAD_MB.
+
+    Example:
+        POST /api/files/analyze   (multipart/form-data)
+        files=@sales.csv  missing_strategy=keep
+        -> 200 {"categorization": {...},
+                "groups": [{"group_id": 0, "label": "sales",
+                            "preview": {"columns": ["date", "amount"], "rows": [...],
+                                        "total_rows": 1200, "truncated": true}, ...}],
+                "runtime": {"runtime_seconds": 0.21, "amount_usd": 0.5, ...}}
+    """
     settings = get_settings()
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
@@ -116,6 +157,46 @@ async def download_cleaned(
     column_names: Annotated[str, Form()] = "{}",
     transforms: Annotated[str, Form()] = "{}",
 ):
+    """
+    POST /api/files/download — SIGNED IN: re-upload the same files and get one cleaned table back.
+
+    Re-runs exactly the same pipeline as /analyze (so nothing is ever stored),
+    picks one group, records the billable runtime (metadata only) and streams
+    the file. Charge rules: the per-minute runtime price, capped at the amount
+    the client confirmed, and $0 when their plan includes downloads. A
+    consultant acting for a client (X-Acting-As) bills the client and is
+    recorded on the usage row.
+
+    Args:
+        ctx: dict, the acting context (injected by `get_acting_context`).
+        files: list[UploadFile], the same files sent to /analyze.
+        group_id: int, which cleaned table to download (default 0).
+        missing_strategy: str, "keep" (default) or "drop_any".
+        file_format: str, "csv" (default, UTF-8 with BOM so Excel shows accents)
+            or "xlsx" (adds a "missing_value_report" sheet and, if rows were
+            removed for a blank ID, a "rows_missing_id" sheet).
+        column_actions: str, JSON per-column missing-value choices (as for /analyze).
+        confirmed_amount_usd: float | None, the price the client saw and
+            confirmed; the charge never goes above it.
+        column_names: str, JSON column renames (as for /analyze).
+        transforms: str, JSON transform steps (as for /analyze).
+
+    Returns:
+        StreamingResponse: the file as an attachment named "<label>_cleaned.<csv|xlsx>",
+        with headers X-Runtime-Seconds and X-Amount-USD (what it cost).
+
+    Raises:
+        HTTPException: 401/403/404 from `get_acting_context`; 404 "That dataset
+            group was not found."; 400/413 for upload or choice problems.
+
+    Example:
+        POST /api/files/download   (multipart/form-data)
+        Authorization: Bearer eyJ...
+        files=@sales.csv  group_id=0  file_format=csv  confirmed_amount_usd=0.50
+        -> 200 text/csv
+           Content-Disposition: attachment; filename="sales_cleaned.csv"
+           X-Amount-USD: 0.50
+    """
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))

@@ -36,6 +36,29 @@ SKILL = SkillSpec(
 
 
 def run(tables: dict[str, pd.DataFrame], client_name="client") -> SkillResult:
+    """
+    Draft a client-specific SKILL.md from the client's tables (BOOTSTRAP mode).
+
+    For each table: row count, grain (the first column that is complete and unique
+    is treated as the key; otherwise a TODO), date coverage of the first date column,
+    candidate metrics (SUM of each number column; amount/revenue/total/sales columns
+    are labeled "revenue") and dimensions with up to 8 example values. Then adds
+    Metrics, Glossary and Gotchas sections with TODOs only the client can answer.
+
+    Args:
+        tables: {table name: DataFrame}.
+        client_name: client or company name (default "client"); it is also turned into
+            a lowercase, hyphenated slug for the skill name ("<slug>-data").
+
+    Returns:
+        SkillResult: summary naming the draft skill; findings with next steps; and
+        artifacts["markdown_skill"], the draft SKILL.md text.
+
+    Example:
+        >>> r = run({"sales": pd.read_csv("samples/sales.csv")}, client_name="Sweet Rise Bakery")
+        >>> r.artifacts["markdown_skill"].splitlines()[1]
+        'name: sweet-rise-bakery-data'
+    """
     slug = re.sub(r"[^a-z0-9]+", "-", client_name.lower()).strip("-") or "client"
     md = ["---", f"name: {slug}-data", f"description: How to analyze {client_name}'s data — tables, metrics, "
           "definitions, and gotchas. Use for any question about their sales, customers, or operations.", "---", "",

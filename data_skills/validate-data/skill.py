@@ -39,10 +39,56 @@ SKILL = SkillSpec(
 
 
 def run(df, metric=None, group_by=None, agg="sum", reported=None, control_column=None, tolerance_pct=0.5) -> SkillResult:
+    """
+    QA an analysis: recompute reported numbers and run the classic pitfall checks.
+
+    Checks (status "pass", "fail", or "warn"):
+    - Reconcile each reported number ("total" or a group name) against a fresh recompute;
+      fails beyond tolerance_pct or if the group doesn't exist
+    - Parts add up to the whole (sum/count only) — a gap means rows with no group value
+    - Rows silently dropped: missing metric (or group) values a groupby would skip
+    - Exact duplicate rows that would inflate totals
+    - Groups with fewer than 30 rows
+    - Simpson's paradox (two groups + control_column): does the overall leader by mean lose
+      within any level of the control column?
+    Verdict: FAIL if any check fails, PASS WITH WARNINGS if any warns, else PASS.
+
+    Args:
+        df: pd.DataFrame, the table the analysis used.
+        metric: str | None, number column (default: first number column).
+        group_by: str | None, category the analysis breaks down by.
+        agg: str, "sum" (default), "mean", or "count".
+        reported: dict | None, numbers you plan to report, e.g. {"total": 12345, "Midtown": 7000}.
+        control_column: str | None, second category for the Simpson's-paradox check.
+        tolerance_pct: float, allowed reconciliation difference in percent (default 0.5).
+
+    Returns:
+        SkillResult: summary with the verdict and passed count; findings for each non-passing
+        check; table "checks"; data {"verdict": "PASS" | "PASS WITH WARNINGS" | "FAIL"}.
+
+    Raises:
+        SkillInputError: if no number column is found or control_column is not in the table.
+
+    Example:
+        >>> res = run(df, metric="amount", group_by="store", reported={"total": 12345})
+        >>> res.data["verdict"]   # e.g. "PASS WITH WARNINGS"
+    """
     metric = require_column(df, metric, "number", numeric_columns(df))
     checks = []
 
     def add(name, ok, detail, severity="fail"):
+        """
+        Record one check result in the enclosing run()'s `checks` list.
+
+        Args:
+            name: str, short check name, e.g. "duplicate rows".
+            ok: bool, True if the check passed.
+            detail: str, human-readable explanation shown in the report.
+            severity: str, status to record when ok is False: "fail" (default) or "warn".
+
+        Returns:
+            None. Appends {"check", "status", "detail"} to `checks`.
+        """
         checks.append({"check": name, "status": "pass" if ok else severity, "detail": detail})
 
     total = df[metric].agg(agg)

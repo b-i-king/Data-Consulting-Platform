@@ -25,6 +25,10 @@ QUICKBOOKS = pd.DataFrame({
 
 
 def test_normalizers():
+    """
+    Check name normalization (case, punctuation, "&"/"and" and suffixes like LLC/Co. removed)
+    and phone normalization (digits only, US country code dropped, too-short numbers blank).
+    """
     assert normalize_name("ACME BAKERY, LLC") == "acme bakery"
     # "&" and "and" are treated the same (both dropped), so these two agree:
     assert normalize_name("Smith & Sons Co.") == normalize_name("Smith and Sons") == "smith sons"
@@ -33,6 +37,7 @@ def test_normalizers():
 
 
 def test_detects_columns_by_name():
+    """Check that email, phone and name columns (or split first/last name columns) are found by header."""
     cols = detect_match_columns(SALES)
     assert (cols.email, cols.phone, cols.name) == ("Customer Email", "Phone", "Customer")
     split = detect_match_columns(pd.DataFrame({"first_name": [], "last_name": [], "email": []}))
@@ -40,6 +45,10 @@ def test_detects_columns_by_name():
 
 
 def test_match_records_end_to_end():
+    """
+    Check matching a sales export to QuickBooks: exact email first, then exact phone, then fuzzy
+    names; company suffixes are ignored, there are no false matches, and matches are one-to-one.
+    """
     m = match_records(SALES, QUICKBOOKS).set_index("left_index")
     assert m.loc[0, "method"] == "email" and m.loc[0, "right_index"] == 0      # exact email wins
     assert m.loc[1, "method"] == "phone" and m.loc[1, "right_index"] == 1      # exact phone
@@ -50,6 +59,7 @@ def test_match_records_end_to_end():
 
 
 def test_review_band():
+    """Check that a close-but-not-certain name match (score 80 to under 92) is flagged for review."""
     left = pd.DataFrame({"name": ["Sunrise Dental Group"]})
     right = pd.DataFrame({"name": ["Sunrise Dental"]})
     [row] = match_records(left, right).to_dict("records")

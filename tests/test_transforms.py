@@ -11,6 +11,14 @@ from api.services.transforms import format_check, outlier_check
 
 
 def _workouts() -> pd.DataFrame:
+    """Build the small workouts table used by the transform tests.
+
+    Like the W3Schools pandas cleaning example: one Duration of 450 is a typo for 45,
+    one Date has no slashes ("20201226") and one is "not a date".
+
+    Returns:
+        pd.DataFrame: 14 rows with Duration, Date (text) and Calories columns.
+    """
     # Like the W3Schools example: one Duration of 450 is clearly a typo for 45.
     return pd.DataFrame({
         "Duration": [60, 60, 60, 45, 45, 60, 60, 450, 30, 60, 60, 60, 45, 60],
@@ -22,6 +30,7 @@ def _workouts() -> pd.DataFrame:
 
 
 def test_wrong_data_is_found_but_not_changed():
+    """Check the 450 duration is flagged as an outlier with its limits, but the value is not changed."""
     cleaned, report = clean_dataframe(_workouts())
     dur = next(c for c in report.column_reports if c.column == "duration")
     assert dur.outliers["count"] == 1 and dur.outliers["examples"] == ["450"]
@@ -31,6 +40,7 @@ def test_wrong_data_is_found_but_not_changed():
 
 
 def test_wrong_format_is_found_with_the_values_that_wont_convert():
+    """Check format_check suggests the right type and lists the values that won't convert."""
     _, report = clean_dataframe(_workouts())
     date = next(c for c in report.column_reports if c.column == "date")
     assert date.format_issue["to"] == "date"
@@ -41,6 +51,13 @@ def test_wrong_format_is_found_with_the_values_that_wont_convert():
 
 @pytest.mark.parametrize("method, expected_max, rows", [("cap", 120, 14), ("remove", 60, 13), ("blank", 60, 14)])
 def test_rules_for_wrong_data(method, expected_max, rows):
+    """Check an outlier rule caps, removes or blanks the 450 duration, and it is no longer flagged.
+
+    Args:
+        method: str, the outlier method ("cap", "remove" or "blank").
+        expected_max: int, the largest duration left afterward.
+        rows: int, the row count left afterward.
+    """
     # W3Schools: "if Duration > 120, set it to 120" (cap), or drop those rows (remove).
     cleaned, report = clean_dataframe(_workouts(), transforms=[
         {"op": "outliers", "column": "duration", "method": method, "high": 120}])
@@ -52,6 +69,7 @@ def test_rules_for_wrong_data(method, expected_max, rows):
 
 
 def test_replace_one_wrong_value_and_change_type_then_drop_blank_dates():
+    """Check replace and change-type steps run, then rows whose date didn't convert are dropped."""
     cleaned, report = clean_dataframe(
         _workouts(),
         transforms=[{"op": "replace_values", "column": "duration", "find": "450", "replace": "45"},
@@ -65,6 +83,7 @@ def test_replace_one_wrong_value_and_change_type_then_drop_blank_dates():
 
 
 def test_promote_headers_and_remove_top_rows():
+    """Check removing a title row and promoting the next row to headers gives the right columns and data."""
     # An export with a title row, then the real header row, then data.
     raw = pd.DataFrame([["Sales report", None, None], ["Store", "Month", "Sales"],
                         ["North", "Jan", "10"], ["South", "Jan", "12"]], columns=["a", "b", "c"])
@@ -76,6 +95,7 @@ def test_promote_headers_and_remove_top_rows():
 
 
 def test_unpivot_and_pivot():
+    """Check unpivot turns month columns into rows and pivot turns them back."""
     wide = pd.DataFrame({"Store": ["North", "South"], "Jan": [10, 12], "Feb": [11, 13]})
     long, _ = clean_dataframe(wide, transforms=[
         {"op": "unpivot", "columns": ["jan", "feb"], "attribute": "Month", "value": "Sales"}])
@@ -85,6 +105,7 @@ def test_unpivot_and_pivot():
 
 
 def test_bad_steps_have_plain_english_errors():
+    """Check unknown steps, missing columns and bad values raise plain-English ValueErrors."""
     df = pd.DataFrame({"a": [1, 2]})
     with pytest.raises(ValueError, match="unknown step"):
         clean_dataframe(df, transforms=[{"op": "explode"}])
@@ -95,10 +116,12 @@ def test_bad_steps_have_plain_english_errors():
 
 
 def test_a_negative_limit_starts_at_zero_when_nothing_is_negative():
+    """Check the low outlier limit is 0, not negative, when the data has no negative values."""
     s = pd.Series([1, 2, 2, 3, 3, 3, 4, 4, 5, 6, 200])
     assert outlier_check(s)["low"] == 0
 
 
 def test_dates_in_the_future_are_unusual():
+    """Check a far-future date is flagged as an outlier."""
     s = pd.Series(pd.to_datetime(["2024-01-01"] * 11 + ["2999-01-01"]))
     assert outlier_check(s)["count"] == 1

@@ -32,6 +32,25 @@ SKILL = SkillSpec(
 
 
 def spread(s: pd.Series) -> dict:
+    """
+    Compute every spread measure for one number column.
+
+    Missing values are dropped first. Sample SD/variance use ddof=1 (NaN with one value);
+    population SD uses ddof=0. CV is SD ÷ |mean| × 100, or None when the mean is 0.
+    Skew is 0.0 with fewer than 3 values.
+
+    Args:
+        s: pd.Series, the numeric values.
+
+    Returns:
+        dict: keys n, mean, sd_sample, sd_population, variance, iqr, mad (median absolute
+        deviation), cv_pct, skew.
+
+    Example:
+        >>> r = spread(pd.Series([1, 2, 3, 4]))
+        >>> round(r["sd_sample"], 3), r["iqr"], r["mad"]
+        (1.291, 1.5, 1.0)
+    """
     s = s.dropna().astype(float)
     mean = s.mean()
     sd = s.std(ddof=1) if len(s) > 1 else float("nan")
@@ -42,6 +61,30 @@ def spread(s: pd.Series) -> dict:
 
 
 def run(df, columns=None, group_column=None) -> SkillResult:
+    """
+    Report spread and variability for number columns, with warnings where SD misleads.
+
+    Computes spread() per column (and per group when group_column is given) and adds a note:
+    "skewed — prefer IQR/MAD" when |skew| > 1, "nearly constant" when CV < 1%, or
+    "mean ≈ 0, CV not meaningful". Findings cover the first 8 rows; floats are rounded to 4
+    decimals.
+
+    Args:
+        df: pd.DataFrame, the table.
+        columns: list[str] | None, number columns (default: all numeric_columns).
+        group_column: str | None, optional category to compute spread per group.
+
+    Returns:
+        SkillResult: summary naming the column with the highest CV; findings per column;
+        table "spread".
+
+    Raises:
+        SkillInputError: if there are no number columns to analyze.
+
+    Example:
+        >>> res = run(df, columns=["amount"], group_column="store")
+        >>> res.tables["spread"][0]["group"]   # first store name
+    """
     cols = columns or numeric_columns(df)
     if not cols:
         raise SkillInputError("No number columns to analyze.")

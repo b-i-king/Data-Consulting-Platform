@@ -38,6 +38,40 @@ _FREQ = {"week": "W-MON", "month": "MS", "quarter": "QS", "year": "YS"}
 
 
 def run(df, metric=None, dimension=None, agg="sum", date_column=None, period="month") -> SkillResult:
+    """
+    Answer "what is <metric> by <dimension>, what drives it, and how has it changed?"
+
+    Steps:
+    1. Breakdown: combine `metric` by `dimension` with `agg`, largest first, with each
+       category's share of the total (shares only for sum/count).
+    2. Concentration (sum/count, 3+ categories): how many categories make up 80% of the total.
+    3. Change (if a date column exists): bucket by `period` and compare the latest FULL
+       period with the one before it. The newest period is skipped because it is likely
+       partial; at least 3 periods are needed. Reports the overall change and which
+       categories rose or fell the most.
+
+    Args:
+        df: the table to analyze.
+        metric: number column to analyze (default: the first number column).
+        dimension: category column to break it down by (default: the first category column).
+        agg: "sum" (default), "mean" or "count".
+        date_column: date column for the change analysis (default: the first date column, if any).
+        period: "week", "month" (default), "quarter" or "year".
+
+    Returns:
+        SkillResult: summary with the overall value; findings on the top category,
+        concentration and latest change; tables "breakdown" (category, value, share_pct)
+        and, when dates allow, "change_drivers" (category, previous, latest, change);
+        one bar chart of the top 15 categories.
+
+    Raises:
+        SkillInputError: a named column doesn't exist, or no number/category column was found.
+
+    Example:
+        >>> df = pd.read_csv("samples/sales.csv")
+        >>> run(df, metric="amount", dimension="store").summary
+        # 'Sum of amount: ... across N store values.'
+    """
     metric = require_column(df, metric, "number", numeric_columns(df))
     dimension = require_column(df, dimension, "category", categorical_columns(df))
     by = df.groupby(dimension, dropna=False)[metric].agg(agg).sort_values(ascending=False)

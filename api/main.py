@@ -37,6 +37,26 @@ logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """
+    Run startup work before the API serves requests, and cleanup after it stops.
+
+    On startup (when running on Render, which sets RENDER=true) it logs a
+    warning if JWT_SECRET_KEY or ALLOWED_ORIGINS were left at their
+    development defaults, then opens the database pool. The `yield` is the
+    point where the server runs; code after it closes the pool on shutdown.
+
+    Args:
+        _app: FastAPI, the application instance (required by FastAPI; unused).
+
+    Returns:
+        AsyncIterator[None]: an async context manager (via @asynccontextmanager)
+        that yields once, while the server is running.
+
+    Example:
+        Passed to FastAPI rather than called directly:
+
+            app = FastAPI(lifespan=lifespan)
+    """
     settings = get_settings()
     if settings.using_default_jwt_secret and os.environ.get("RENDER"):
         # Render sets RENDER=true. A missing secret means anyone could forge sign-ins.
@@ -80,5 +100,17 @@ app.include_router(billing.router, prefix="/api", tags=["billing"])
 
 @app.get("/health", tags=["health"])
 async def health():
-    """Used by Render's health check and the frontend's warm-up ping."""
+    """
+    Used by Render's health check and the frontend's warm-up ping.
+
+    Needs no sign-in and touches no data. Also reports whether the database
+    pool is open, which is a quick way to see if DATABASE_URL works.
+
+    Returns:
+        dict: {"status": "ok", "database": "connected" or "in-memory"}.
+
+    Example:
+        GET /health
+        -> 200 {"status": "ok", "database": "in-memory"}
+    """
     return {"status": "ok", "database": "connected" if database.pool else "in-memory"}

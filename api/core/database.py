@@ -31,7 +31,28 @@ pool: asyncpg.Pool | None = None
 
 
 async def init_pool() -> None:
-    """Create the connection pool. Called once from the FastAPI lifespan hook."""
+    """
+    Create the connection pool. Called once from the FastAPI lifespan hook.
+
+    Behavior:
+    - DATABASE_URL empty: logs a warning and leaves `pool` as None, so the app
+      runs on the in-memory store (development mode).
+    - DATABASE_URL set: opens an asyncpg pool of 1 to 5 connections with
+      prepared-statement caching off (required by Supabase's transaction
+      pooler) and a 10-second connect timeout.
+    - Connection fails (e.g. a paused Supabase project): logs the error and
+      leaves `pool` as None instead of crashing, so guest cleaning still works.
+
+    Returns:
+        None. Side effect: sets the module-level `pool` variable.
+
+    Example:
+        Called by `lifespan` in api/main.py on startup:
+
+            await database.init_pool()
+            if database.pool is None:
+                ...  # account_store falls back to its in-memory dictionaries
+    """
     global pool
     dsn = get_settings().database_url
     if not dsn:
@@ -58,7 +79,20 @@ async def init_pool() -> None:
 
 
 async def close_pool() -> None:
-    """Close every connection in the pool. Called on shutdown."""
+    """
+    Close every connection in the pool. Called on shutdown.
+
+    Safe to call when no pool was ever opened (it then does nothing). After
+    closing, `pool` is reset to None so nothing tries to use a closed pool.
+
+    Returns:
+        None. Side effect: closes the pool and sets `pool` to None.
+
+    Example:
+        Called by `lifespan` in api/main.py after the server stops:
+
+            await database.close_pool()
+    """
     global pool
     if pool is not None:
         await pool.close()

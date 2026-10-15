@@ -14,6 +14,7 @@ client = TestClient(app)
 
 
 def test_tree_has_sectors_and_subsectors_only():
+    """Check the NAICS tree has 20 sectors and only 3-digit subsectors that sit inside their sector."""
     tree = naics_tree()
     assert len(tree["sectors"]) == 20
     codes = {s["code"] for s in tree["sectors"]}
@@ -27,12 +28,14 @@ def test_tree_has_sectors_and_subsectors_only():
 
 
 def test_goods_vs_services_split():
+    """Check which sectors count as goods-producing vs. service-providing (BLS supersectors)."""
     by_code = {s["code"]: s["supersector"] for s in naics_tree()["sectors"]}
     assert {c for c, g in by_code.items() if g == "goods_producing"} == {"11", "21", "23", "31-33"}
     assert by_code["22"] == "service_providing"   # BLS counts Utilities as services
 
 
 def test_validate_industry():
+    """Check validate_industry accepts a consistent or empty choice and returns an error otherwise."""
     assert validate_industry(None, None, None) is None                       # all optional
     assert validate_industry("service_providing", "44-45", "445") is None
     assert validate_industry("goods_producing", "44-45", None)               # wrong group
@@ -41,6 +44,7 @@ def test_validate_industry():
 
 
 def test_business_signup_stores_industry_and_team_inherits_it():
+    """Check a business signup saves its industry and the team members get the same industry."""
     res = client.post("/api/accounts/signup", json={
         "account_type": "business", "first_name": "Ria", "last_name": "Ng",
         "email": "ria@example.com", "company_name": "Ng Grocers",
@@ -55,6 +59,7 @@ def test_business_signup_stores_industry_and_team_inherits_it():
 
 
 def test_individual_cannot_set_industry():
+    """Check an individual signup with an industry is rejected (422)."""
     res = client.post("/api/accounts/signup", json={
         "account_type": "individual", "first_name": "A", "last_name": "B",
         "email": "solo-ind@example.com", "industry_supersector": "goods_producing",
@@ -63,11 +68,13 @@ def test_individual_cannot_set_industry():
 
 
 def test_options_include_industries():
+    """Check GET /api/intake/options includes the industry supersectors."""
     body = client.get("/api/intake/options").json()
     assert body["industries"]["supersectors"][0]["id"] == "goods_producing"
 
 
 def test_company_size_uses_linkedin_codes_and_team_inherits_it():
+    """Check company sizes use LinkedIn codes A-I and team members inherit the owner's size."""
     sizes = client.get("/api/intake/options").json()["company_sizes"]
     assert [s["id"] for s in sizes] == list("ABCDEFGHI")
     assert sizes[2]["employees"] == "11-50"
@@ -84,6 +91,7 @@ def test_company_size_uses_linkedin_codes_and_team_inherits_it():
 
 
 def test_company_size_rejected_when_unknown_or_individual():
+    """Check an unknown size code, or a size on an individual signup, is rejected (422)."""
     base = {"first_name": "A", "last_name": "B"}
     bad_code = client.post("/api/accounts/signup", json={
         **base, "account_type": "business", "email": "size-z@example.com", "company_size": "Z"})

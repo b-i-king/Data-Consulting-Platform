@@ -37,6 +37,37 @@ SKILL = SkillSpec(
 
 def run(df: pd.DataFrame, missing_strategy: str = "keep", column_actions=None, column_names=None,
         transforms=None) -> SkillResult:
+    """
+    Run the platform's cleaning pipeline (api/services/cleaning.py) and report the results.
+
+    Order: transform steps -> clean column names -> tidy text -> drop empty rows -> drop
+    exact duplicates -> restore whole numbers -> missing-value report with advice ->
+    wrong-data and wrong-format checks. Nothing is filled or removed unless
+    `column_actions` (or missing_strategy="drop_any") asks for it.
+
+    Args:
+        df: the raw table (this skill sets wants_raw=True, so it gets the upload as is).
+        missing_strategy: "keep" (default) keeps rows with gaps; "drop_any" drops them.
+        column_actions: per cleaned column name: keep, drop, mean, median, mode, auto,
+            or drop_rows (IDs), e.g. {"age_group": "mode", "order_id": "drop_rows"}.
+        column_names: your own names by cleaned name, e.g. {"unnamed_column_4": "store_code"}.
+        transforms: transform steps in order (like Power Query), e.g.
+            [{"op": "change_type", "column": "order_date", "to": "date"}].
+
+    Returns:
+        SkillResult: summary (rows in/out, fields, % missing); findings (pipeline notes
+        plus the 3 most-missing columns); tables "missing_values" (per-column report
+        with suggested fill and advice) and "cleaned_preview" (first 200 rows);
+        data["report"] with the full cleaning report.
+
+    Raises:
+        SkillInputError: the pipeline rejected an option (e.g. an unknown fill method,
+            or two columns given the same name).
+
+    Example:
+        >>> run(raw_df, column_actions={"age_group": "mode"}).summary
+        # 'N rows in, M rows out; K fields; x.x% of cells are missing.'
+    """
     try:
         cleaned, report = clean_dataframe(df, missing_strategy=missing_strategy, column_actions=column_actions,
                                           column_names=column_names, transforms=transforms)

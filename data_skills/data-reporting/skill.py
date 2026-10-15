@@ -31,6 +31,29 @@ SKILL = SkillSpec(
 
 
 def run(df: pd.DataFrame, title: str = "Data report") -> SkillResult:
+    """
+    Build a shareable report by running other skills and collecting their findings.
+
+    Sections: Overview (explore-data), Data quality (data-cleaning), Unusual values
+    (anomaly-analysis), Trends (trend-analysis, only with a date and a number column),
+    Relationships (correlation-analysis, only with 2+ number columns) and Privacy
+    (pii-flag). A section whose skill rejects the data is kept with a "Skipped: ..."
+    note instead of failing the report.
+
+    Args:
+        df: the table to report on.
+        title: report title (default "Data report").
+
+    Returns:
+        SkillResult: summary with the section count; findings listing the section
+        headings; artifacts "markdown_report" and "html_report" (a print-ready page:
+        open it in a browser and choose "Save as PDF").
+
+    Example:
+        >>> r = run(pd.read_csv("samples/sales.csv"), title="Q3 review")
+        >>> sorted(r.artifacts)
+        ['html_report', 'markdown_report']
+    """
     from data_skills.registry import run_skill   # imported here to avoid a circular import
 
     sections = [("Overview", "explore-data", {}), ("Data quality", "data-cleaning", {}),

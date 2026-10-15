@@ -19,7 +19,19 @@ CODE = "lavender-test-code"
 
 @pytest.fixture(autouse=True)
 def consultant_settings(monkeypatch):
-    """Two consultants (the first is the default) and an access code; fresh memory store."""
+    """
+    Two consultants (the first is the default) and an access code; fresh memory store.
+
+    Runs automatically for every test: sets CONSULTANT_EMAILS and CONSULTANT_ACCESS_CODE,
+    clears cached settings, and empties the in-memory accounts, teams, consultants and
+    services. Settings are cleared again after the test.
+
+    Args:
+        monkeypatch: pytest fixture for setting environment variables for one test.
+
+    Returns:
+        Iterator[None]: yields once while the test runs (setup before, cleanup after).
+    """
     monkeypatch.setenv("CONSULTANT_EMAILS", "brandon@example.com, second@example.com")
     monkeypatch.setenv("CONSULTANT_ACCESS_CODE", CODE)
     get_settings.cache_clear()
@@ -30,11 +42,43 @@ def consultant_settings(monkeypatch):
 
 
 def _signup(email, first="Dana", **extra):
+    """
+    Post a signup for an individual account and return the raw response.
+
+    Args:
+        email: Email for the new account.
+        first: First name (default "Dana"); the last name is always "Lee".
+        **extra: Extra signup fields merged into the JSON body, e.g. access_code=CODE or
+            wants_consultant=True.
+
+    Returns:
+        httpx.Response: The TestClient response (check .status_code, then .json()).
+
+    Example:
+        >>> _signup("ana@example.com", "Ana", wants_consultant=True).status_code
+        201
+    """
     body = {"account_type": "individual", "first_name": first, "last_name": "Lee", "email": email, **extra}
     return client.post("/api/accounts/signup", json=body)
 
 
 def _auth(token, acting_as=None):
+    """
+    Build request headers for a signed-in user, optionally acting for a client.
+
+    Args:
+        token: The access token of the person making the request.
+        acting_as: A client account id to work on (sent as X-Acting-As), or None to act as
+            yourself. Only that client's own consultant is allowed (get_acting_context).
+
+    Returns:
+        dict[str, str]: Headers with "Authorization: Bearer <token>" and, when acting_as is
+        given, "X-Acting-As: <client id>".
+
+    Example:
+        >>> _auth("abc", "acct-1")
+        {'Authorization': 'Bearer abc', 'X-Acting-As': 'acct-1'}
+    """
     h = {"Authorization": f"Bearer {token}"}
     if acting_as:
         h["X-Acting-As"] = acting_as
@@ -42,10 +86,29 @@ def _auth(token, acting_as=None):
 
 
 def _consultant(email="brandon@example.com", first="Brandon"):
+    """
+    Sign up a consultant (an email listed in CONSULTANT_EMAILS plus the access code).
+
+    Args:
+        email: Consultant email (default "brandon@example.com", the default consultant).
+        first: Consultant first name (default "Brandon").
+
+    Returns:
+        str: The consultant's access token.
+
+    Example:
+        >>> token = _consultant()
+        >>> client.get("/api/consultant/clients", headers=_auth(token)).status_code
+        200
+    """
     return _signup(email, first, access_code=CODE).json()["access_token"]
 
 
 def test_consultant_sign_in_needs_the_access_code():
+    """
+    Check that a consultant email can sign up or sign in only with the right access code, and
+    then gets the "consultant" role.
+    """
     assert _signup("brandon@example.com", "Brandon").status_code == 403            # no code
     assert _signup("brandon@example.com", "Brandon", access_code="nope").status_code == 403
     res = _signup("brandon@example.com", "Brandon", access_code=CODE)
@@ -56,6 +119,13 @@ def test_consultant_sign_in_needs_the_access_code():
 
 
 def test_consultant_sign_in_is_off_without_a_code(monkeypatch):
+    """
+    Check that consultant sign-in is switched off (403 with a clear message) when no access code
+    is configured.
+
+    Args:
+        monkeypatch: pytest fixture used to clear CONSULTANT_ACCESS_CODE.
+    """
     monkeypatch.setenv("CONSULTANT_ACCESS_CODE", "")
     get_settings.cache_clear()
     res = _signup("brandon@example.com", "Brandon", access_code="anything")
@@ -63,6 +133,10 @@ def test_consultant_sign_in_is_off_without_a_code(monkeypatch):
 
 
 def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
+    """
+    Check that a "done for you" client is assigned to the default consultant and gets every
+    available tool, while a do-it-yourself client gets only Data Cleaning.
+    """
     _consultant()
     opts = client.get("/api/intake/options").json()
     assert opts["consultant"] == {"name": "Brandon"}
@@ -81,6 +155,10 @@ def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
 
 
 def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
+    """
+    Check that a client who asked for a consultant before any existed is assigned to the first
+    consultant who signs up.
+    """
     waiting = _signup("early@example.com", "Early", wants_consultant=True).json()["account"]
     assert waiting["consultant_name"] is None                # nobody set up yet
     token = _consultant()
@@ -89,6 +167,11 @@ def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
 
 
 def test_the_access_rule():
+    """
+    Check the access rule: a consultant can act for their own client but not another
+    consultant's; a client can never act as anyone or list clients; each consultant sees only
+    their own clients.
+    """
     brandon = _consultant()
     other = _consultant("second@example.com", "Avery")
     mine = _signup("ana@example.com", "Ana", wants_consultant=True).json()
@@ -112,6 +195,10 @@ def test_the_access_rule():
 
 
 def test_a_consultants_download_is_billed_to_the_client():
+    """
+    Check that a download a consultant makes while acting for a client is recorded as the
+    client's usage, with the consultant's id attached.
+    """
     brandon = _consultant()
     ana = _signup("ana@example.com", "Ana", wants_consultant=True).json()["account"]["id"]
     csv = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(40))
@@ -124,6 +211,10 @@ def test_a_consultants_download_is_billed_to_the_client():
 
 
 def test_other_industry_is_saved_and_empty_means_nothing():
+    """
+    Check the "Other" industry field: extra spaces are tidied, blank means none, and giving both
+    "Other" and a NAICS sector is rejected (422).
+    """
     res = client.post("/api/accounts/signup", json={
         "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",
         "company_name": "Lu Kitchen", "industry_other": "  Food   truck "})

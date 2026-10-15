@@ -166,7 +166,21 @@ ID_NAME = re.compile(r"(^|_)(id|key|code|number|num|no|zip|zipcode|postal|sku|uu
 
 
 def _rows(n: int) -> str:
-    """'1 row' / '12 rows' — keeps report sentences grammatical."""
+    """
+    Say "1 row" / "12 rows" — keeps report sentences grammatical.
+
+    Numbers get US thousands separators.
+
+    Args:
+        n: int: the number of rows.
+
+    Returns:
+        str: the count followed by "row" or "rows".
+
+    Example:
+        >>> _rows(1), _rows(1200)
+        ('1 row', '1,200 rows')
+    """
     return f"{n:,} row" if n == 1 else f"{n:,} rows"
 
 # Columns WE add (not the client's data); ignored when spotting empty/duplicate rows.
@@ -244,6 +258,20 @@ class CleaningReport:
 
     def to_dict(self) -> dict:
         # Every field except the DataFrame (asdict would also deep-copy it).
+        """
+        Turn the report into a plain dict that can be sent as JSON.
+
+        Every field is included EXCEPT `rows_missing_id` (a DataFrame, used only for
+        the Excel download). Nested ColumnReports become dicts, and lists/dicts are
+        copied so changing the result does not change the report.
+
+        Returns:
+            dict: field name -> value, ready for the API response.
+
+        Example:
+            report.to_dict()["rows_after"]        # e.g. 1200
+            report.to_dict()["column_reports"][0]["column"]   # e.g. "order_date"
+        """
         out = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "rows_missing_id"}
         out["column_reports"] = [asdict(c) for c in self.column_reports]
         out["columns_renamed"] = dict(self.columns_renamed)
@@ -258,9 +286,25 @@ class CleaningReport:
 
 def snake_case(name: object) -> str:
     """
-    Step 0 for one name: 'Order Date' -> 'order_date', 'CustomerID' ->
-    'customer_id', 'Unit Price ($)' -> 'unit_price', 'Café Name' -> 'cafe_name'.
+    Step 0 for one name: make it lowercase "snake_case".
+
+    Rules, in order:
+    - trim spaces; accented letters become plain letters (é -> e)
+    - camelCase is split ("CustomerID" -> "Customer ID", "IDNumber" -> "ID Number")
+    - lowercase, and every run of non-letters/digits becomes one "_" (stripped at the ends)
+    'Order Date' -> 'order_date', 'CustomerID' -> 'customer_id',
+    'Unit Price ($)' -> 'unit_price', 'Café Name' -> 'cafe_name'.
     Returns '' for a name with no letters or digits (the caller numbers it).
+
+    Args:
+        name: object: the column name (any value; converted with `str()`).
+
+    Returns:
+        str: the snake_case name, or '' when nothing usable is left.
+
+    Example:
+        >>> snake_case("Unit Price ($)"), snake_case("CustomerID"), snake_case("###")
+        ('unit_price', 'customer_id', '')
     """
     text = str(name).strip()
     # Accented letters -> plain letters (é -> e), so names are easy to type in code.
@@ -273,7 +317,24 @@ def snake_case(name: object) -> str:
 
 
 def clean_column_names(columns) -> list[str]:
-    """Step 0 for a whole table: snake_case every name, keeping names unique."""
+    """
+    Step 0 for a whole table: snake_case every name, keeping names unique.
+
+    - each name goes through `snake_case`; an empty result becomes column_<position>
+      (1-based)
+    - a name starting with a digit gets "col_" in front ("2024 sales" -> col_2024_sales)
+    - repeats get a number: the second "amount" -> amount_2, the third -> amount_3
+
+    Args:
+        columns: iterable of column names (any values), in table order.
+
+    Returns:
+        list[str]: the new names, same length and order as `columns`.
+
+    Example:
+        >>> clean_column_names(["Amount", "amount", "", "2024 Sales"])
+        ['amount', 'amount_2', 'column_3', 'col_2024_sales']
+    """
     seen: dict[str, int] = {}
     out = []
     for i, col in enumerate(columns, start=1):
@@ -292,10 +353,26 @@ def clean_column_names(columns) -> list[str]:
 
 def _header_problems(auto: list[str], fixed: set[str]) -> dict[str, str]:
     """
-    Step 0 checks on the automatic names: which columns had a blank header
-    ("unnamed") or share a name with another column ("duplicate"). A column
-    the client renamed or removed (`fixed`) is fine. A duplicate group is fixed once at most one
-    of its columns still has its automatic name.
+    Step 0 checks: find blank ("unnamed") and repeated ("duplicate") headers.
+
+    Works on the automatic names: unnamed_column_<n> means the header cell was
+    blank; "amount_2" alongside "amount" means the name was repeated. A column
+    the client renamed or removed (`fixed`) is fine. A duplicate group is fixed
+    once at most one of its columns still has its automatic name.
+
+    Args:
+        auto: list[str]: the automatic Step 0 names (the stable column keys).
+        fixed: set[str]: keys of columns the client renamed or is removing.
+
+    Returns:
+        dict[str, str]: key -> "unnamed" or "duplicate", only for columns that
+        still have a problem.
+
+    Example:
+        >>> _header_problems(["amount", "amount_2", "unnamed_column_3"], set())
+        {'unnamed_column_3': 'unnamed', 'amount': 'duplicate', 'amount_2': 'duplicate'}
+        >>> _header_problems(["amount", "amount_2"], {"amount_2"})
+        {}
     """
     problems: dict[str, str] = {}
     names = set(auto)
@@ -317,9 +394,27 @@ def _header_problems(auto: list[str], fixed: set[str]) -> dict[str, str]:
 
 def _apply_client_names(auto: list[str], column_names: dict[str, str] | None) -> list[str]:
     """
-    Step 0: the client's own names ({automatic name or current name: new name}),
-    cleaned like every other name. Raises ValueError (shown to the client) for
-    an empty name or a name used twice.
+    Step 0: apply the client's own column names.
+
+    Each new name is cleaned like every other name (`snake_case`, "col_" in front
+    of a leading digit). Keys that are not in `auto` (columns no longer in the
+    file) are ignored.
+
+    Args:
+        auto: list[str]: the automatic Step 0 names, in table order.
+        column_names: dict[str, str] | None: {automatic name: new name} from the
+            client; None or {} changes nothing.
+
+    Returns:
+        list[str]: the final names, same order as `auto`.
+
+    Raises:
+        ValueError: (shown to the client) for a name with no letters or digits, or
+            when two columns would end up with the same name.
+
+    Example:
+        >>> _apply_client_names(["amount", "amount_2"], {"amount_2": "Amount Refunded"})
+        ['amount', 'amount_refunded']
     """
     final = list(auto)
     for key, new in (column_names or {}).items():
@@ -338,7 +433,26 @@ def _apply_client_names(auto: list[str], column_names: dict[str, str] | None) ->
 
 
 def _infer_type(series: pd.Series) -> str:
-    """Return a friendly type name for a column (used only for reporting)."""
+    """
+    Return a friendly type name for a column (used only for reporting).
+
+    Missing values are ignored. bool -> "true/false", numbers -> "number",
+    datetimes -> "date". A text column is checked on its first 500 values: if
+    95%+ are numbers once "$", ",", "%" and spaces are removed it is "number
+    (stored as text)"; if 95%+ parse as dates it is "date (stored as text)";
+    otherwise "text". No values at all -> "empty".
+
+    Args:
+        series: pd.Series: the column to describe.
+
+    Returns:
+        str: "empty", "true/false", "number", "date", "number (stored as text)",
+        "date (stored as text)" or "text".
+
+    Example:
+        >>> _infer_type(pd.Series(["$1,200", "$15"])), _infer_type(pd.Series([True, False]))
+        ('number (stored as text)', 'true/false')
+    """
     s = series.dropna()
     if s.empty:
         return "empty"
@@ -358,7 +472,25 @@ def _infer_type(series: pd.Series) -> str:
 
 
 def _tidy_text(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Step 1: trim spaces in text columns and convert blanks to NaN."""
+    """
+    Step 1: trim spaces in text columns and convert blanks to NaN.
+
+    Only object/string columns are touched, and only cells that really are
+    strings (numbers mixed into a text column are left alone). A cell that is
+    empty after trimming becomes NaN, so it counts as missing. Modifies `df` in place.
+
+    Args:
+        df: pd.DataFrame: the working copy of the table.
+
+    Returns:
+        tuple[pd.DataFrame, int]: the tidied table and how many blank text cells
+        were turned into missing values.
+
+    Example:
+        >>> df, n = _tidy_text(pd.DataFrame({"name": [" Acme ", "  ", "Bo"]}))
+        >>> df["name"].tolist(), n
+        (['Acme', nan, 'Bo'], 1)
+    """
     converted = 0
     for col in df.columns:
         # Only object/string columns hold free text.
@@ -375,10 +507,23 @@ def _tidy_text(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
 
 def _restore_whole_numbers(df: pd.DataFrame) -> list[str]:
     """
-    Step 3b: turn float columns that only hold whole numbers back into
-    integers. Uses pandas' nullable "Int64" type, which allows blanks, so
-    1001.0 -> 1001 while missing values stay missing. Returns the changed
-    column names (for the report).
+    Step 3b: turn float columns that only hold whole numbers back into integers.
+
+    Uses pandas' nullable "Int64" type, which allows blanks, so 1001.0 -> 1001
+    while missing values stay missing. Skipped for columns with no values, any
+    decimal value, or values of 2**53 or more (beyond what a float stores exactly).
+    Modifies `df` in place.
+
+    Args:
+        df: pd.DataFrame: the working copy of the table.
+
+    Returns:
+        list[str]: the changed column names (for the report).
+
+    Example:
+        >>> df = pd.DataFrame({"id": [1001.0, None, 1003.0], "price": [1.5, 2.0, None]})
+        >>> _restore_whole_numbers(df), str(df["id"].dtype)
+        (['id'], 'Int64')
     """
     changed = []
     for col in df.columns:
@@ -396,15 +541,46 @@ def _restore_whole_numbers(df: pd.DataFrame) -> list[str]:
 
 
 def _is_number(series: pd.Series) -> bool:
-    """Real number columns (true/false columns are numbers to pandas, but not to people)."""
+    """
+    Say whether a column holds real numbers.
+
+    True/false columns are numbers to pandas, but not to people, so they are excluded.
+
+    Args:
+        series: pd.Series: the column to test.
+
+    Returns:
+        bool: True for int/float columns, False for bool, text, dates, etc.
+
+    Example:
+        >>> _is_number(pd.Series([1, 2])), _is_number(pd.Series([True]))
+        (True, False)
+    """
     return pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series)
 
 
 def _fill_value(series: pd.Series, method: str):
     """
-    The value used to fill gaps with `method` ("mean", "median" or "mode"),
-    or None when the method doesn't fit the column (e.g. the mean of text).
-    Whole-number columns (pandas "Int64") get a rounded value.
+    Work out the value used to fill gaps with `method` ("mean", "median" or "mode").
+
+    Returns None when the method doesn't fit the column:
+    - ID / code columns (name matches `ID_NAME`) and empty columns: never filled
+    - mean / median: numbers only
+    - mode: anything except dates (ties: the first value in sort order)
+    Whole-number columns (pandas "Int64") get a rounded mean or median.
+
+    Args:
+        series: pd.Series: the column to fill (its `.name` is checked for IDs).
+        method: str: "mean", "median" or "mode"; anything else gives None.
+
+    Returns:
+        The fill value (float, int, str, ...), or None when the method doesn't fit.
+
+    Example:
+        >>> _fill_value(pd.Series([1, 2, None, 10], name="qty"), "median")
+        2.0
+        >>> _fill_value(pd.Series([1, 2, None], name="customer_id"), "mean") is None
+        True
     """
     s = series.dropna()
     if s.empty or ID_NAME.search(str(series.name)):   # IDs and codes are never filled
@@ -422,7 +598,32 @@ def _fill_value(series: pd.Series, method: str):
 
 
 def _missing_advice(series: pd.Series, missing_pct: float) -> dict:
-    """Step 4: the level, plain-English advice, and fill suggestion for one column."""
+    """
+    Step 4: the level, plain-English advice, and fill suggestion for one column.
+
+    - No gaps: level "none", no advice.
+    - ID / code columns: level "low" (<20%), "review" (20–90%) or "remove" (90%+);
+      below 90% the suggestion is "drop_rows" (an ID should never be blank), at
+      90%+ the advice is to remove the column. No fill values are offered.
+    - Other columns: `fill_options` lists each fill that fits and its value
+      (numbers: mean, median, mode; others: mode). Numbers get a skewness, and
+      the suggestion is the median when |skewness| >= `SKEW_LIMIT` (0.5), else the
+      mean; other columns get the mode. The level is "low", "review" or "remove"
+      by the same 20% / 90% limits.
+
+    Args:
+        series: pd.Series: the column, before the user's missing-value choices.
+        missing_pct: float: percentage (0–100) of rows missing in this column.
+
+    Returns:
+        dict: {missing_level, recommendation, suggested_fill, skewness,
+        fill_options}, merged into the column's ColumnReport.
+
+    Example:
+        >>> a = _missing_advice(pd.Series([1.0, 2.0, 3.0, None], name="price"), 25.0)
+        >>> a["missing_level"], a["suggested_fill"], a["fill_options"]
+        ('review', 'mean', {'mean': '2', 'median': '2', 'mode': '1'})
+    """
     advice = {"missing_level": "none", "recommendation": "", "suggested_fill": None,
               "skewness": None, "fill_options": {}}
     if missing_pct == 0:
@@ -477,9 +678,35 @@ def _missing_advice(series: pd.Series, missing_pct: float) -> dict:
 def _apply_column_actions(df: pd.DataFrame, actions: dict[str, str], advice: dict[str, dict],
                           notes: list[str]) -> tuple[pd.DataFrame, dict[str, tuple[str, int]], pd.DataFrame | None]:
     """
-    Step 5a: drop or fill columns, or drop rows, as the user chose. Returns the
-    new data, {column: (what was done, cells filled or rows removed)}, and the
-    rows removed by "drop_rows" (None if none). "auto" means our suggestion.
+    Step 5a: drop or fill columns, or drop rows, as the user chose.
+
+    For each column choice: "keep" does nothing; "auto" means our suggestion
+    (`suggested_fill` in `advice`, or keep); "drop" removes the column;
+    "drop_rows" removes rows where this column is missing and sets them aside
+    for the "rows_missing_id" sheet; "mean" / "median" / "mode" fill the gaps
+    (if the method doesn't fit, a note is added and the column is left as is).
+    Columns not in `df` are ignored.
+
+    Args:
+        df: pd.DataFrame: the working table (a copy; it is changed).
+        actions: dict[str, str]: column name -> one of `COLUMN_ACTIONS`.
+        advice: dict[str, dict]: column name -> its profile, including
+            "suggested_fill" from `_missing_advice`.
+        notes: list[str]: the report notes; messages are appended to it.
+
+    Returns:
+        tuple[pd.DataFrame, dict[str, tuple[str, int]], pd.DataFrame | None]:
+        the new data; {column: (what was done, cells filled or rows removed)},
+        where "what was done" is "dropped", "rows_dropped", "mean", "median" or
+        "mode"; and the rows removed by "drop_rows" (None if none).
+
+    Raises:
+        ValueError: for an action that is not in `COLUMN_ACTIONS`.
+
+    Example:
+        out, done, removed = _apply_column_actions(df.copy(), {"price": "median", "notes": "drop"},
+                                                   profiles, notes)
+        done   # {"price": ("median", 3), "notes": ("dropped", 0)}
     """
     done: dict[str, tuple[str, int]] = {}
     set_aside: list[pd.DataFrame] = []
@@ -534,8 +761,33 @@ def clean_dataframe(
     `transforms` is the ordered list of steps (Steps 0b and 1b, transforms.py).
     Leave them out to change nothing.
 
-    Returns (cleaned_dataframe, report). `report.runtime_seconds` is the
-    wall-clock processing time, which is what runtime billing is based on.
+    The caller's DataFrame is never modified. Columns are profiled (missing
+    counts, advice, outliers, format issues) BEFORE the missing-value choices,
+    so the report always shows where the gaps were.
+
+    Args:
+        df: pd.DataFrame: the table as read from the file.
+        dataset_name: str: name shown in the report (default "dataset").
+        missing_strategy: "keep" | "drop_any": Step 5b; "drop_any" removes every
+            row that still has a missing value after Step 5a.
+        column_actions: dict[str, str] | None: per-column missing-value choices.
+        column_names: dict[str, str] | None: the client's new column names.
+        transforms: list[dict] | None: the client's transform steps.
+
+    Returns:
+        tuple[pd.DataFrame, CleaningReport]: (cleaned_dataframe, report). The
+        cleaned data has a fresh 0..n-1 index. `report.runtime_seconds` is the
+        wall-clock processing time, which is what runtime billing is based on.
+
+    Raises:
+        ValueError: (plain English, shown to the client) for an invalid transform
+            step, a bad or repeated client column name, or an unknown column action.
+
+    Example:
+        >>> raw = pd.DataFrame({"Order ID": [1, 1, 2], "Amount": [" 5 ", " 5 ", ""]})
+        >>> clean, report = clean_dataframe(raw)
+        >>> list(clean.columns), report.duplicate_rows_removed, report.blank_strings_converted
+        (['order_id', 'amount'], 1, 1)
     """
     started = time.perf_counter()
     notes: list[str] = []
@@ -557,7 +809,22 @@ def clean_dataframe(
     removing = {key_of.get(c, c) for c, a in (column_actions or {}).items() if a == "drop"}
     problems = _header_problems(auto, {a for a, f in zip(auto, final) if a != f} | removing)
     def as_in_file(o: str) -> str:
-        """The header as the client typed it: "" if blank, "Amount" for a second "Amount"."""
+        """
+        Show the header as the client typed it in the file.
+
+        A blank header (unnamed_column_<n>) becomes "", and a repeat made unique by
+        file_reader ("Amount_2" next to "Amount") goes back to "Amount".
+
+        Args:
+            o: str: the column name after the header steps, before Step 0.
+
+        Returns:
+            str: the original header text ("" when it was blank).
+
+        Example:
+            as_in_file("unnamed_column_3")   # ""
+            as_in_file("Amount_2")           # "Amount" (when "Amount" is also a column)
+        """
         if UNNAMED.match(o):
             return ""
         m = REPEAT.match(o)
@@ -770,7 +1037,26 @@ def clean_dataframe(
 
 
 def analysis_readiness(rows_before: int, rows_after: int) -> str:
-    """Step 7: "" when there are enough rows to analyze, else the reason (shown to the user)."""
+    """
+    Step 7: check there are enough rows to analyze, before and after cleaning.
+
+    Both counts must be at least `MIN_ROWS_FOR_ANALYSIS` (30). The "before" check
+    comes first, so a small upload gets the "add more rows" message.
+
+    Args:
+        rows_before: int: rows in the file as uploaded.
+        rows_after: int: rows left after cleaning (and the user's row choices).
+
+    Returns:
+        str: "" when there are enough rows to analyze, else the reason (shown to
+        the user; the dashboard and non-cleaning skills are switched off).
+
+    Example:
+        >>> analysis_readiness(100, 50)
+        ''
+        >>> analysis_readiness(10, 10)[:28]
+        'This file has only 10 rows —'
+    """
     m = MIN_ROWS_FOR_ANALYSIS
     if rows_before < m:
         return (f"This file has only {rows_before:,} row{'s' if rows_before != 1 else ''} — analysis needs at least "
@@ -788,7 +1074,20 @@ def dataframe_to_records(df: pd.DataFrame, limit: int | None = None) -> list[dic
     Convert a DataFrame to JSON-safe rows for the on-screen preview.
 
     NaN / NaT become `None` (shown as an empty cell), and dates/numpy types
-    become plain strings/numbers that JSON understands.
+    become plain strings/numbers that JSON understands. Dates use ISO format
+    ("2024-01-05T00:00:00.000"). Note an integer column with blanks comes back
+    as floats (1.0).
+
+    Args:
+        df: pd.DataFrame: the table to show.
+        limit: int | None: only the first `limit` rows; None = all rows.
+
+    Returns:
+        list[dict]: one dict per row, {column name: value}.
+
+    Example:
+        >>> dataframe_to_records(pd.DataFrame({"a": [1, None]}))
+        [{'a': 1.0}, {'a': None}]
     """
     view = df if limit is None else df.head(limit)
     # to_json handles numpy types, NaN and dates correctly; read it back as dicts.

@@ -32,6 +32,27 @@ SKILL = SkillSpec(
 
 
 def run(df: pd.DataFrame) -> SkillResult:
+    """
+    Recommend the right chart types for this dataset, with chart design rules.
+
+    Looks at column roles (dates, number columns excluding IDs, categories with 30 or
+    fewer values) and suggests: a KPI tile for the first number; line charts (first
+    date x first two numbers); sorted horizontal bars (first two categories x first
+    number, top 7 + "Other" above 8 values); histograms (first two numbers); a scatter
+    plot (2+ numbers); and a stacked bar (2+ categories and a number).
+
+    Args:
+        df: the table.
+
+    Returns:
+        SkillResult: summary with the number of recommendations; findings with the
+        chart rules (one y-axis, 8 colors or fewer, sorted bars from zero, labeled
+        lines); table "recommendations" (chart, job, columns, why).
+
+    Example:
+        >>> run(pd.read_csv("samples/sales.csv")).tables["recommendations"][0]["chart"]
+        'KPI tile'
+    """
     dates, nums, cats = date_columns(df), numeric_columns(df), categorical_columns(df, max_unique=30)
     recs = []
     if nums:

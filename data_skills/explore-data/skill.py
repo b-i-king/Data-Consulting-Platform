@@ -24,6 +24,31 @@ SKILL = SkillSpec(
 
 
 def run(df: pd.DataFrame) -> SkillResult:
+    """
+    Profile every column of a table and suggest how each one should be used.
+
+    For each column: dtype, missing %, distinct count, and a one-line summary.
+    The role is decided as follows:
+    - date columns (date_columns) -> "date", summary is the first and last date
+    - numeric (not bool) -> "metric" if numeric_columns keeps it, otherwise "identifier"
+      (ID-like numbers); summary is min / median / mean / max
+    - everything else -> "dimension" if it is a low-cardinality category, "identifier" if
+      more than 90% of rows are distinct, else "text"; summary is the top 3 values with counts
+    Columns more than 20% empty get an extra finding.
+
+    Args:
+        df: pd.DataFrame, the table to profile.
+
+    Returns:
+        SkillResult: summary with row and column counts; findings listing dimensions, metrics,
+        dates, and identifiers (plus gappy columns); table "profile" (one row per column);
+        one bar chart of missing % by column.
+
+    Example:
+        >>> res = run(pd.read_csv("samples/sales.csv"))
+        >>> res.tables["profile"][0].keys()
+        dict_keys(['column', 'dtype', 'missing_pct', 'distinct', 'role', 'summary'])
+    """
     n = len(df)
     dates = set(date_columns(df))
     metrics = set(numeric_columns(df))

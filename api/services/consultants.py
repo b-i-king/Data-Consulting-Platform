@@ -47,11 +47,48 @@ ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without
 
 
 def is_consultant_email(email: str) -> bool:
+    """
+    Tell whether an email address is listed in CONSULTANT_EMAILS.
+
+    The comparison ignores letter case (the settings list is already lower-cased).
+
+    Args:
+        email: str, the address someone is signing in or signing up with.
+
+    Returns:
+        bool: True if the address belongs to a consultant.
+
+    Example:
+        >>> is_consultant_email("Pat@Example.com")   # CONSULTANT_EMAILS="pat@example.com"
+        True
+    """
     return email.lower() in get_settings().consultant_email_list
 
 
 def check_access_code(code: str | None) -> None:
-    """Raise 403 unless consultant sign-in is switched on and the code matches."""
+    """
+    Raise 403 unless consultant sign-in is switched on and the code matches.
+
+    Consultant sign-in is "off" while CONSULTANT_ACCESS_CODE is empty. The code
+    is compared with hmac.compare_digest, which takes the same time whether or not
+    a guess is close, so response times do not leak the code.
+
+    Args:
+        code: str | None, the access code the person typed (None or "" if missing).
+
+    Returns:
+        None: returns quietly when the code is correct.
+
+    Raises:
+        HTTPException: 403 if CONSULTANT_ACCESS_CODE is not set, or the code is
+            missing or wrong (detail CODE_REQUIRED).
+
+    Example:
+        >>> check_access_code("s3cret")   # CONSULTANT_ACCESS_CODE="s3cret" -> no error
+        >>> check_access_code("guess")
+        Traceback (most recent call last):
+        HTTPException: 403 Consultant sign-in: enter your consultant access code.
+    """
     expected = get_settings().consultant_access_code
     if not expected:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
@@ -63,7 +100,21 @@ def check_access_code(code: str | None) -> None:
 
 
 async def default_consultant() -> dict | None:
-    """The first CONSULTANT_EMAILS address — once that person has signed in at least once."""
+    """
+    Find the default consultant: the first CONSULTANT_EMAILS address.
+
+    New "done for you" clients are assigned to this person. The consultant row
+    exists only once that person has signed in at least once (see register).
+
+    Returns:
+        dict | None: the consultants row, or None if CONSULTANT_EMAILS is empty or
+            the first consultant has not signed in yet.
+
+    Example:
+        >>> c = await default_consultant()
+        >>> c["email"] if c else None
+        'pat@example.com'
+    """
     emails = get_settings().consultant_email_list
     return await account_store.get_consultant_by_email(emails[0]) if emails else None
 
@@ -71,8 +122,23 @@ async def default_consultant() -> dict | None:
 async def register(account: dict) -> dict:
     """
     Make sure a consultant's row exists (the "consultants" dimension table).
+
     The default consultant also picks up clients who asked for a consultant
-    before anyone was set up to take them.
+    before anyone was set up to take them. A consultant is the default when their
+    email is the first CONSULTANT_EMAILS address; the flag is refreshed on every
+    call.
+
+    Args:
+        account: dict, the consultant's accounts row (needs "id", "first_name",
+            "email").
+
+    Returns:
+        dict: the consultants row (with "id", "is_default", ...).
+
+    Example:
+        >>> row = await register(pat_account)   # Pat is first in CONSULTANT_EMAILS
+        >>> row["is_default"]
+        True
     """
     emails = get_settings().consultant_email_list
     consultant = await account_store.ensure_consultant(account, is_default=bool(emails) and account["email"] == emails[0])
@@ -82,7 +148,24 @@ async def register(account: dict) -> dict:
 
 
 def client_summary(acc: dict) -> dict:
-    """What the consultant's "Working on" picker shows for one client."""
+    """
+    Build what the consultant's "Working on" picker shows for one client.
+
+    The label is the company name when there is one, else the person's full name.
+
+    Args:
+        acc: dict, the client's accounts row.
+
+    Returns:
+        dict: {"id", "label", "person", "email", "account_type", "company_name",
+            "location", "naics_sector", "industry_other"}.
+
+    Example:
+        >>> client_summary({"id": 7, "first_name": "Ana", "last_name": "Diaz",
+        ...                 "email": "ana@bakery.com", "account_type": "business",
+        ...                 "company_name": "Sunrise Bakery"})["label"]
+        'Sunrise Bakery'
+    """
     name = f"{acc['first_name']} {acc['last_name']}"
     return {
         "id": str(acc["id"]),
@@ -99,10 +182,33 @@ def client_summary(acc: dict) -> dict:
 
 async def acting_context(token: dict, acting_as: str | None) -> dict:
     """
-    Who this request is for: {"account", "consultant", "acting"}.
+    Decide who this request is for: {"account", "consultant", "acting"}.
+
       account    the account whose plan, team and billing apply
       consultant the caller's consultant row (None for clients)
       acting     True when a consultant is working on a client's account
+
+    THE ACCESS RULE: with no `acting_as` (or the caller's own id) the request is
+    for the caller. Otherwise the caller must be a consultant AND the client's plan
+    holder (the client, or their business's team owner) must be assigned to that
+    consultant (accounts.consultant_id).
+
+    Args:
+        token: dict, the decoded sign-in token; "sub" is the caller's account id.
+        acting_as: str | None, the client account id from the `X-Acting-As` header.
+
+    Returns:
+        dict: {"account": dict, "consultant": dict | None, "acting": bool}.
+
+    Raises:
+        HTTPException: 401 if the caller's account no longer exists (ACCOUNT_GONE);
+            403 if the caller is not a consultant or the client is not assigned to
+            them; 404 if the client account does not exist.
+
+    Example:
+        >>> ctx = await acting_context({"sub": consultant_id}, client_id)
+        >>> ctx["acting"], str(ctx["account"]["id"]) == client_id
+        (True, True)
     """
     me = await account_store.get_account(token["sub"])
     if me is None:

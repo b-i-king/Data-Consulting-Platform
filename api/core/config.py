@@ -121,26 +121,99 @@ class Settings(BaseSettings):
     # ── Convenience helpers (computed, not read from the environment) ─────────
     @property
     def consultant_email_list(self) -> list[str]:
-        """CONSULTANT_EMAILS as a clean lowercase list, default consultant first."""
+        """
+        CONSULTANT_EMAILS as a clean lowercase list, default consultant first.
+
+        Splits the comma-separated setting, trims spaces around each address,
+        lowercases it (so sign-in matching ignores case) and drops empty pieces
+        left by stray or trailing commas. Order is kept, so index 0 is the
+        default consultant that new "do it for me" clients are assigned to.
+
+        Returns:
+            list[str]: consultant email addresses, lowercase, in the order written;
+            an empty list when CONSULTANT_EMAILS is not set.
+
+        Example:
+            >>> Settings(consultant_emails=" Ana@Example.com, ,bo@example.com,").consultant_email_list
+            ['ana@example.com', 'bo@example.com']
+        """
         return [e.strip().lower() for e in self.consultant_emails.split(",") if e.strip()]
 
     @property
     def origins_list(self) -> list[str]:
-        """ALLOWED_ORIGINS split into a clean Python list."""
+        """
+        ALLOWED_ORIGINS split into a clean Python list.
+
+        Each comma-separated entry is trimmed of spaces and of a trailing "/",
+        because browsers send the Origin header without one (a pasted
+        "https://x.vercel.app/" would otherwise never match). Empty entries are
+        dropped. The result is handed to the CORS middleware in api/main.py.
+
+        Returns:
+            list[str]: website origins allowed to call the API.
+
+        Example:
+            >>> Settings(allowed_origins="http://localhost:3000, https://x.vercel.app/").origins_list
+            ['http://localhost:3000', 'https://x.vercel.app']
+        """
         return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]
 
     @property
     def using_default_jwt_secret(self) -> bool:
-        """True when JWT_SECRET_KEY wasn't set — fine locally, unsafe online."""
+        """
+        True when JWT_SECRET_KEY wasn't set — fine locally, unsafe online.
+
+        The built-in default secret starts with "dev-only-secret". Anyone who
+        reads the source code knows it and could forge login tokens, so the app
+        logs a warning at startup (api/main.py) when this is True on Render.
+
+        Returns:
+            bool: True if the default development secret is still in use.
+
+        Example:
+            >>> Settings(jwt_secret_key="dev-only-secret-x").using_default_jwt_secret
+            True
+        """
         return self.jwt_secret_key.startswith("dev-only-secret")
 
     @property
     def max_upload_bytes(self) -> int:
-        """MAX_UPLOAD_MB converted to bytes (1 MB = 1,048,576 bytes)."""
+        """
+        MAX_UPLOAD_MB converted to bytes (1 MB = 1,048,576 bytes).
+
+        Upload size checks compare against the raw byte count of the file, so
+        this saves every caller from repeating the conversion.
+
+        Returns:
+            int: the largest accepted single-file size, in bytes.
+
+        Example:
+            >>> Settings(max_upload_mb=50).max_upload_bytes
+            52428800
+        """
         return self.max_upload_mb * 1024 * 1024
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return the one shared Settings object (created on first call)."""
+    """
+    Return the one shared Settings object (created on first call).
+
+    The `@lru_cache` decorator remembers the result, so environment variables
+    and the `.env` file are read only once per process; later calls return the
+    very same object. Tests that change environment variables must call
+    `get_settings.cache_clear()` to force a fresh read.
+
+    Returns:
+        Settings: the validated application settings.
+
+    Raises:
+        pydantic.ValidationError: on the first call, if an environment value
+            cannot be converted to its declared type (e.g. MAX_UPLOAD_MB=abc).
+
+    Example:
+        >>> from api.core.config import get_settings
+        >>> get_settings() is get_settings()
+        True
+    """
     return Settings()

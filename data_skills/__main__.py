@@ -38,6 +38,28 @@ _ARTIFACT_EXT = {"markdown": "md", "sql": "sql", "mermaid": "mmd", "html": "html
 
 
 def _load(paths: list[str], raw: bool) -> dict[str, pd.DataFrame]:
+    """
+    Read files with the website's safe readers and, unless `raw`, clean each table.
+
+    One file can hold several tables (e.g. an Excel workbook with several sheets);
+    each becomes its own entry. Untrusted formats such as pickle are never read
+    (see api/services/file_reader.py).
+
+    Args:
+        paths: file paths given on the command line.
+        raw: True to skip `clean_dataframe` and keep the data exactly as read.
+
+    Returns:
+        dict[str, pd.DataFrame]: table name (from the reader) -> DataFrame.
+
+    Raises:
+        OSError: a file can't be opened.
+        ValueError: a file's format is not supported or can't be parsed (from read_file).
+
+    Example:
+        >>> tables = _load(["samples/sales.csv"], raw=False)
+        >>> list(tables)   # one table, named after the file
+    """
     tables: dict[str, pd.DataFrame] = {}
     for p in paths:
         for ds in read_file(Path(p).name, Path(p).read_bytes()):
@@ -47,6 +69,32 @@ def _load(paths: list[str], raw: bool) -> dict[str, pd.DataFrame]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """
+    Run the `python -m data_skills` command line: list, describe, or run a skill.
+
+    Commands:
+    - list: print every skill grouped by service, in catalog.json order
+    - describe <skill>: print the skill's options as JSON
+    - run <skill> <files...> [--param NAME=VALUE ...] [--out DIR] [--raw]: read and
+      (unless --raw or the skill wants raw data) clean the files, run the skill,
+      print the summary and findings, and save tables as CSV, artifacts as files
+      (.md, .sql, .mmd, .html, .json by name prefix, else .txt) and result.json to
+      outputs/<skill>/ or --out
+
+    Args:
+        argv: command-line arguments without the program name; None (default) reads sys.argv.
+
+    Returns:
+        int: exit code: 0 on success, 2 when the skill rejects the data or options
+        (the message is printed to stderr).
+
+    Raises:
+        SystemExit: from argparse, for a missing or unknown command.
+
+    Example:
+        python -m data_skills run trend-analysis samples/sales.csv --param value_column=amount
+        # prints the summary and findings, then "Saved N table(s), ... to outputs/trend-analysis/"
+    """
     parser = argparse.ArgumentParser(prog="python -m data_skills", description="Run data skills on files.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="List every skill by category")
