@@ -67,7 +67,7 @@ web/                      Next.js frontend (TypeScript + Tailwind CSS)
   lib/api.ts              every call to the backend
   lib/types.ts            TypeScript shapes of API responses
   lib/session.ts          keeps the login token for the browser tab
-data_skills/              30 skills: README.md (procedure) + skill.py (runnable code)
+data_skills/              31 skills: README.md (procedure) + skill.py (runnable code)
   _core.py, _time.py      shared result types; date ranges and DoD/WoW/MoM math
   registry.py, __main__.py  load/run skills; command line (python -m data_skills)
 samples/                  fictional bakery data for testing (scripts/make_sample_data.py)

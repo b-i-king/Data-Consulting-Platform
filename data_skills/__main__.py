@@ -95,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         python -m data_skills run trend-analysis samples/sales.csv --param value_column=amount
         # prints the summary and findings, then "Saved N table(s), ... to outputs/trend-analysis/"
     """
+    # Windows terminals default to an old code page that can't print "•" or "→";
+    # switch the output to UTF-8 so findings print on every computer.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="python -m data_skills", description="Run data skills on files.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="List every skill by category")

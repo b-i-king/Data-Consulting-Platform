@@ -96,6 +96,9 @@ services the client chose are offered; the rest are badges from
 | `web/components/explore/WarehouseLoad.tsx` | Data Engineering "Load into database": preview, why, accept | Changing the load screen |
 | `web/components/workspace/ConsultationPanel.tsx` | Consultant's Consultations card (confirm the free call) | Changing consultation tracking |
 | `web/app/{privacy,terms,storage-terms,data-deletion}/page.tsx` + `web/components/legal/LegalPage.tsx` | Legal pages (from the template) | Changing what you collect or store; storage terms also bump `TERMS_VERSION` in `api/routers/warehouse.py` |
+| `web/lib/seo.ts` + `web/app/{sitemap,robots}.ts` + `web/app/opengraph-image.tsx` | SEO: title, description, keywords, link previews, JSON-LD, sitemap, robots (from the template) | Changing how the business is described to search engines |
+| `web/components/SocialLinks.tsx` | Social media icons in the footer (also Google's `sameAs` list) | Adding or changing a social account |
+| `data_skills/unified-metrics/` | Test bench for the unified (long) metric format, with a round-trip check | Trying the `fact_metric` design on client files (DATA_MODEL.md) |
 | `.github/workflows/vercel_checks.yml` + `web/eslint.config.mjs` | Lint + type check on every PR touching `web/`, reported to Vercel | Adding checks |
 | `api/models/accounts.py` | Validates signup/quote JSON | Adding signup fields |
 | `api/routers/*.py` | HTTP endpoints (thin) | Adding an endpoint |

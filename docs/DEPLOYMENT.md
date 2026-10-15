@@ -122,6 +122,14 @@ ever use Render's Blueprint option instead).
 | `NEXT_PUBLIC_API_URL` | `https://<your-api>.onrender.com` |
 | `NEXT_PUBLIC_BOOKING_URL` | your booking link (fallback) |
 | `NEXT_PUBLIC_SITE_NAME` | your brand name |
+| `NEXT_PUBLIC_SITE_URL` | your public address, e.g. `https://yourdomain.com` — used by the sitemap, link previews and Google (`web/lib/seo.ts`) |
+| `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` | optional: Google Search Console → Add property → HTML tag → the `content="..."` value |
+
+**Getting found on Google** (once the site is live): add the property in
+[Google Search Console](https://search.google.com/search-console), verify with
+the HTML-tag code above (redeploy), then submit `https://<your site>/sitemap.xml`.
+Search wording, keywords and the business details Google reads (JSON-LD) are in
+`web/lib/seo.ts`; social profiles in `web/components/SocialLinks.tsx`.
 
 4. Deploy. Add the resulting URL to `ALLOWED_ORIGINS` on Render.
 

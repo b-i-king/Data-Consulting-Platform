@@ -71,6 +71,7 @@ CASES = [
     ("correlation-analysis", lambda: _load("sales"), {}),
     ("statistical-analysis", lambda: _load("feedback"), {"columns": "csat,nps", "group_column": "store"}),
     ("standard-deviation", lambda: _load("sales"), {"columns": "amount,quantity"}),
+    ("unified-metrics", lambda: _load("sales"), {}),
     ("hypothesis-testing", lambda: _load("sales"), {"outcome": "amount", "group": "store"}),
     ("write-query", lambda: _load("sales"), {"metric": "amount", "group_by": "store", "date_column": "order_date"}),
     ("validate-data", lambda: _load("sales"), {"metric": "amount", "group_by": "store"}),
@@ -122,10 +123,10 @@ def test_skill_runs_and_returns_a_result(skill, build, params):
 
 
 def test_describe_lists_category_and_params():
-    """Check describe() reports a skill's category and options, and that 30 skills are listed."""
+    """Check describe() reports a skill's category and options, and that 31 skills are listed."""
     d = describe("build-dashboard")
     assert d["category"] == "data_visualization" and "range" in d["params"]
-    assert len(list_skills()) == 30
+    assert len(list_skills()) == 31
 
 
 def test_unknown_option_and_file_writing_are_refused(sales):
@@ -325,3 +326,31 @@ def test_dashboard_offers_up_to_nine_filters():
     assert len(r.data["filter_columns"]) == 9                     # 11 candidates, capped at 9
     with pytest.raises(SkillInputError, match="up to 9"):
         run_skill("build-dashboard", df, {"filter_columns": groups[:10], "include_html": False})
+
+
+def test_unified_metrics_round_trip_and_review_loop(sales):
+    """Unified metrics: guesses type/subtype/unit, keeps ids/dates/categories, loses nothing, and obeys metric_map.
+
+    Args:
+        sales: pd.DataFrame, the cleaned sales sample (fixture).
+    """
+    r = run_skill("unified-metrics", sales)
+    defs = {d["source_column"]: d for d in r.tables["metric_definitions"]}
+    assert (defs["unit_price"]["metric_type"], defs["unit_price"]["metric_subtype"], defs["unit_price"]["metric_unit"]) \
+        == ("price", "unit", "usd")
+    assert r.data["round_trip"]["ok"] and r.data["rows_out"] == sales[["quantity", "unit_price", "amount"]].notna().sum().sum()
+    first = r.tables["unified_preview"][0]
+    assert {"row_id", "order_id", "order_date", "store", "metric_type", "metric_value", "source_column"} <= set(first)
+
+    # An unknown name is low confidence and flagged; metric_map fixes it.
+    odd = pd.DataFrame({"day": pd.date_range("2025-01-01", periods=40), "widgets": range(40),
+                        "shipping_cost": [1.5] * 40})
+    r2 = run_skill("unified-metrics", odd)
+    assert r2.data["needs_review"] == ["widgets"]
+    assert {d["source_column"]: d["metric_subtype"] for d in r2.tables["metric_definitions"]}["shipping_cost"] == "shipping"
+    r3 = run_skill("unified-metrics", odd, {"metric_map": {"widgets": {"type": "quantity", "subtype": "widgets", "unit": "count"}}})
+    assert r3.data["needs_review"] == [] and r3.data["round_trip"]["ok"]
+
+    # Expenses: "amount" becomes a cost, flagged for confirmation.
+    exp = run_skill("unified-metrics", _load("expenses"))
+    assert exp.tables["metric_definitions"][0]["metric_type"] == "cost" and exp.data["needs_review"] == ["amount"]

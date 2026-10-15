@@ -145,6 +145,53 @@ erDiagram
 If a source only has monthly totals, load monthly totals — the grain is "the
 smallest the source provides". Record it in `attributes` (e.g. `{"grain": "month"}`).
 
+## Unified metrics (the "unified data" design) — prototype, testing
+
+**Your idea:** after cleaning, IDs, dates and categorical (demographic) columns
+stay as they are, and the *metrics* are pivoted so every client's numbers fit
+the same columns: `metric_type`, `metric_subtype` (optional), `metric_unit`,
+`metric_value` — plus `source_column`, so each value can always be traced back
+to the client's own column. Same information, one shape.
+
+```
+wide (the client's file)                          long (unified)
+order_id | date       | store   | qty | unit_price | amount     order_id | date       | store   | metric_type | metric_subtype | metric_unit | metric_value | source_column
+50001    | 2024-10-11 | Midtown | 3   | 7.00       | 21.00  ->  50001    | 2024-10-11 | Midtown | quantity    |                | count       | 3            | qty
+                                                                 50001    | 2024-10-11 | Midtown | price       | unit           | usd         | 7.00         | unit_price
+                                                                 50001    | 2024-10-11 | Midtown | amount      |                | usd         | 21.00        | amount
+```
+
+**How it compares with today's `fact_event`:** `fact_event` has fixed measure
+columns (`amount`, `quantity`, `score`) and the event type describes the
+*row*. The unified shape describes each *number*, so a file with ten metric
+columns (cost, tax, discount, tip, hours...) needs no new columns. The two can
+live side by side: `fact_event` for events, a `fact_metric` table for
+"everything measured about them". Trade-offs to decide with real files:
+
+| | Wide (`fact_event`) | Long (`fact_metric`) |
+|---|---|---|
+| New kind of metric | needs a column (or `attributes`) | just a new `metric_type` value |
+| Rows | one per event | one per event **per metric** (3 metrics = 3× rows) |
+| "Revenue minus cost" | one row, simple | filter + pivot (a view can hide it) |
+| Mixed units in one column | not possible | `metric_unit` keeps them apart — never sum across units |
+
+**Test it before building it** — the `unified-metrics` skill (Data Engineering)
+is the test bench. It stores nothing:
+
+```bash
+python -m data_skills run unified-metrics samples/sales.csv
+python -m data_skills run unified-metrics samples/expenses.csv --param 'metric_map={"amount": {"type": "cost", "subtype": "operating", "unit": "usd"}}'
+```
+
+For each file it reports every column's role, the guessed type / subtype / unit
+with a confidence, the columns that **need a person's decision** (the cases that
+are hard to automate — e.g. "amount" in an expenses file is a cost), a preview
+of the unified rows, a **round-trip check** (pivot back to wide, compare every
+cell: proves no information is lost), the editable `json_metric_map`, and the
+proposed `fact_metric` table (`sql_proposed_table`). Run it on several real
+client files; once the type/unit list and the review rules hold up, add
+`fact_metric` to `db/warehouse.sql` and a load step after `fact_event`.
+
 ## Loading data safely
 
 - `(client_id, source_id, source_record_id)` is unique, so re-loading the same

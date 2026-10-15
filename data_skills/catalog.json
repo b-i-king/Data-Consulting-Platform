@@ -58,7 +58,8 @@
       "skills": [
         { "id": "er-diagram", "label": "ER diagrams", "source": "project" },
         { "id": "data-dictionary-creator", "label": "Data dictionaries", "source": "rosehill", "primary": true },
-        { "id": "sql-queries", "label": "Warehouse-ready SQL", "source": "anthropic-data" }
+        { "id": "sql-queries", "label": "Warehouse-ready SQL", "source": "anthropic-data" },
+        { "id": "unified-metrics", "label": "Unified metrics test bench (long format)", "source": "project" }
       ]
     },
     {

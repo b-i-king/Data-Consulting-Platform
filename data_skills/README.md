@@ -13,7 +13,7 @@ the way we clean, analyze, and deliver data **consistent and reproducible**,
 whether the work is done by the web app, by you, by Claude, or by a future
 consultant on the team.
 
-All 30 skills live in this folder (editable copies), so the project works the
+All 31 skills live in this folder (editable copies), so the project works the
 same on any machine. Each skill belongs to **exactly one** service category.
 The assignment lives in [`catalog.json`](catalog.json), and
 `tests/test_skills_catalog.py` fails if a skill is missing or listed twice, and
@@ -113,6 +113,7 @@ with a price and an **Add** button.
 | [`er-diagram`](er-diagram/README.md) | project | Verified ER diagrams (Mermaid) with key checks |
 | [`data-dictionary-creator`](data-dictionary-creator/README.md) | Rosehill | Column-by-column documentation |
 | [`sql-queries`](sql-queries/README.md) | Anthropic | Correct, performant SQL across warehouse dialects |
+| [`unified-metrics`](unified-metrics/README.md) | Project | Test bench: metric columns → rows (type, subtype, unit, value), round-trip check that nothing is lost |
 
 ### 6. Data Science & Machine Learning — *predict*
 | Skill | Source | Use it to… |
