@@ -94,8 +94,9 @@ def test_guest_analyze_then_signup_then_download():
     assert len(df) == 2
     assert "X-Amount-USD" in res.headers
 
-    # 5. The charge never goes above the total the client confirmed.
-    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV)),
+    # 5. The charge never goes above the total the client confirmed. (Different
+    # data: the exact same result again would be a free repeat — see test_fair_use.)
+    res = client.post("/api/files/download", headers=headers, files=_files(("sales.csv", CSV + b"Cy,7\n")),
                       data={"file_format": "csv", "confirmed_amount_usd": "0.25"})
     assert res.status_code == 200
     assert res.headers["X-Amount-USD"] == "0.25"

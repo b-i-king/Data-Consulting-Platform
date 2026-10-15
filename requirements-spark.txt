@@ -1,0 +1,15 @@
+# OPTIONAL big-data engine (PySpark). NOT needed to run the platform.
+#
+# pandas is the data engine (requirements.txt). Install this file only on a
+# machine that will run Spark jobs, e.g. for a client whose data is too big for
+# pandas or lives in a cloud warehouse. See docs/SPARK.md.
+#
+#   pip install -r requirements.txt -r requirements-spark.txt
+#
+# REQUIREMENT: Spark 4.0 runs on the Java Virtual Machine and needs Java 17 or
+# 21 installed (check with `java -version`). It is NOT installed on the Render
+# web service on purpose: PySpark is ~300 MB and wants several GB of RAM.
+#
+# Then switch it on with the environment variable SPARK_ENABLED=true.
+
+pyspark==4.0.4

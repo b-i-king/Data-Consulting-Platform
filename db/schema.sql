@@ -144,6 +144,11 @@ CREATE TABLE IF NOT EXISTS usage_events (
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS consultant_id UUID REFERENCES consultants (id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_account ON usage_events (account_id, created_at DESC);
+-- Fair use (api/services/fair_use.py): a one-way SHA-256 fingerprint of the
+-- downloaded table. It can't be turned back into data; it only tells us when the
+-- same account downloads the exact same result again (not charged twice).
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS data_fingerprint TEXT;
+CREATE INDEX IF NOT EXISTS idx_usage_events_fingerprint ON usage_events (account_id, data_fingerprint);
 
 -- ── Project interests ────────────────────────────────────────────────────────
 -- Services a client said they'd like a consultant's help with ("Projects with
@@ -247,6 +252,28 @@ CREATE TABLE IF NOT EXISTS intake_responses (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Data connections (connectors such as QuickBooks) ────────────────────────
+-- One row per connector a client has set up (Data Engineering). Holds only the
+-- SCHEDULE and status — the pulled data itself goes to the warehouse schema
+-- (db/warehouse.sql). refresh_frequency ids and prices: api/services/pricing.py
+-- REFRESH_OPTIONS; rules: api/services/connections.py.
+CREATE TABLE IF NOT EXISTS data_connections (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id         UUID NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,     -- the client (plan holder)
+    consultant_id      UUID REFERENCES consultants (id) ON DELETE SET NULL,          -- who set it up, if a consultant
+    connector          TEXT NOT NULL,                       -- 'quickbooks', 'gusto', ...
+    refresh_frequency  TEXT NOT NULL DEFAULT 'daily'
+                       CHECK (refresh_frequency IN ('manual', 'weekly', 'daily', 'hourly', 'live')),
+    status             TEXT NOT NULL DEFAULT 'pending'      -- pending = schedule chosen, not connected yet
+                       CHECK (status IN ('pending', 'connected', 'paused', 'error', 'disconnected')),
+    last_synced_at     TIMESTAMPTZ,                         -- last successful pull
+    next_sync_at       TIMESTAMPTZ,                         -- when the scheduler pulls next (NULL = manual)
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (account_id, connector)                          -- one connection per connector per client
+);
+CREATE INDEX IF NOT EXISTS idx_data_connections_due ON data_connections (next_sync_at) WHERE status = 'connected';
+
 -- ── Row Level Security ──────────────────────────────────────────────────────
 -- WHO CAN SEE WHAT is enforced by the API (api/services/consultants.py):
 --   * a client sees only their own account (and team)
@@ -265,3 +292,4 @@ ALTER TABLE consulting_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_events     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE intake_responses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE data_connections ENABLE ROW LEVEL SECURITY;

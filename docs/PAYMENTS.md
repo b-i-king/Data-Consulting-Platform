@@ -74,3 +74,17 @@ Stripe ──► webhook (cancel_at_period_end, then deleted) ──► plan off
 - Every package includes Data Cleaning, so subscribers' cleaning downloads are free.
 - AI isn't charged until it launches (`billable` in `pricing.py`): it's left out
   of the Stripe line items until then.
+
+## Fair use
+
+- At most `DAILY_DOWNLOAD_LIMIT` (default 20) cleaned-data downloads per client
+  account in a rolling `DOWNLOAD_WINDOW_HOURS` (24); over that the download
+  endpoint answers 429 with the time they can try again.
+- Downloading the exact same cleaned data again inside the window is free
+  (`X-Repeat-Download: 1`, amount $0.00). Sameness is a one-way SHA-256
+  fingerprint saved in `usage_events.data_fingerprint`, never the data.
+- Connector refresh add-ons (hourly, live) are priced in `pricing.py` but not
+  sold through Stripe until connectors launch ([PRICING.md](PRICING.md#connected-data-how-often-it-refreshes)).
+
+Code: [`api/services/fair_use.py`](../api/services/fair_use.py), tests in
+`tests/test_fair_use.py`.

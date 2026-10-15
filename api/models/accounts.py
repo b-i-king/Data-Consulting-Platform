@@ -454,3 +454,9 @@ class ConsultingHoursIn(BaseModel):
     service_id: str | None = Field(default=None, max_length=60)
 
 
+
+
+class RefreshIn(BaseModel):
+    """How often a connector should pull new data (an id from pricing.REFRESH_OPTIONS)."""
+
+    refresh_frequency: Literal["manual", "weekly", "daily", "hourly", "live"]
