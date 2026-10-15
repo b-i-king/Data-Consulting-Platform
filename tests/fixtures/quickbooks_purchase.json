@@ -1,0 +1,142 @@
+{
+  "QueryResponse": {
+    "Purchase": [
+      {
+        "AccountRef": {
+          "value": "35",
+          "name": "Checking"
+        },
+        "PaymentType": "Check",
+        "EntityRef": {
+          "value": "56",
+          "name": "Peachtree Flour Supply",
+          "type": "Vendor"
+        },
+        "Credit": false,
+        "TotalAmt": 412.5,
+        "PurchaseEx": {
+          "any": [
+            {
+              "name": "{http://schema.intuit.com/finance/v3}NameValue",
+              "declaredType": "com.intuit.schema.finance.v3.NameValue",
+              "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+              "value": {
+                "Name": "TxnType",
+                "Value": "3"
+              },
+              "nil": false,
+              "globalScope": true,
+              "typeSubstituted": false
+            }
+          ]
+        },
+        "domain": "QBO",
+        "sparse": false,
+        "Id": "252",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-09-03T08:15:00-07:00",
+          "LastUpdatedTime": "2026-09-03T08:15:00-07:00"
+        },
+        "CustomField": [],
+        "DocNumber": "2043",
+        "TxnDate": "2026-09-03",
+        "CurrencyRef": {
+          "value": "USD",
+          "name": "United States Dollar"
+        },
+        "PrivateNote": "Monthly flour order",
+        "Line": [
+          {
+            "Id": "1",
+            "Description": "50 lb bags of bread flour",
+            "Amount": 412.5,
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "AccountBasedExpenseLineDetail": {
+              "AccountRef": {
+                "value": "78",
+                "name": "Supplies & Materials"
+              },
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "NON"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "AccountRef": {
+          "value": "41",
+          "name": "Business Visa"
+        },
+        "PaymentType": "CreditCard",
+        "EntityRef": {
+          "value": "61",
+          "name": "Midtown Restaurant Depot",
+          "type": "Vendor"
+        },
+        "Credit": false,
+        "TotalAmt": 186.75,
+        "domain": "QBO",
+        "sparse": false,
+        "Id": "253",
+        "SyncToken": "2",
+        "MetaData": {
+          "CreateTime": "2026-09-05T15:40:12-07:00",
+          "LastUpdatedTime": "2026-09-08T11:02:09-07:00"
+        },
+        "CustomField": [],
+        "TxnDate": "2026-09-05",
+        "CurrencyRef": {
+          "value": "USD",
+          "name": "United States Dollar"
+        },
+        "DepartmentRef": {
+          "value": "2",
+          "name": "Midtown"
+        },
+        "Line": [
+          {
+            "Id": "1",
+            "Description": "Cake boxes, 10 inch (case of 50)",
+            "Amount": 124.0,
+            "DetailType": "ItemBasedExpenseLineDetail",
+            "ItemBasedExpenseLineDetail": {
+              "ItemRef": {
+                "value": "31",
+                "name": "Cake Box 10in"
+              },
+              "UnitPrice": 62,
+              "Qty": 2,
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "NON"
+              }
+            }
+          },
+          {
+            "Id": "2",
+            "Description": "Parchment paper rolls",
+            "Amount": 62.75,
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "AccountBasedExpenseLineDetail": {
+              "AccountRef": {
+                "value": "78",
+                "name": "Supplies & Materials"
+              },
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "NON"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "startPosition": 1,
+    "maxResults": 2,
+    "totalCount": 2
+  },
+  "time": "2026-10-01T09:14:02.560-07:00"
+}

@@ -453,12 +453,91 @@ export interface BarChartSpec {
   value_label: string;
 }
 
+// Chart specs built by data_skills/_core.py (histogram_chart, box_stats/box_chart,
+// scatter_chart, heatmap_chart); drawn by web/components/charts/ChartView.tsx.
+export interface HistogramChartSpec {
+  type: "histogram";
+  title: string;
+  /** Bin boundaries, one more than `counts`: bin i covers bin_edges[i] to bin_edges[i + 1]. */
+  bin_edges: number[];
+  counts: number[];
+  x_label: string;
+  y_label: string;
+}
+
+/** One box of a box plot (1.5 × IQR rule). */
+export interface BoxStats {
+  name: string;
+  n: number;
+  whisker_low: number;
+  q1: number;
+  median: number;
+  q3: number;
+  whisker_high: number;
+  lower_fence: number;
+  upper_fence: number;
+  /** The most extreme outliers (at most 50); `outlier_count` is the full number. */
+  outliers: number[];
+  outlier_count: number;
+}
+
+export interface BoxChartSpec {
+  type: "box";
+  title: string;
+  boxes: BoxStats[];
+  value_label: string;
+  group_label: string;
+}
+
+export interface ScatterChartSpec {
+  type: "scatter";
+  title: string;
+  points: { x: number; y: number }[];
+  x_label: string;
+  y_label: string;
+}
+
+export interface HeatmapChartSpec {
+  type: "heatmap";
+  title: string;
+  rows: string[];
+  columns: string[];
+  /** One list per row; values in [-1, 1], null = no value. */
+  values: (number | null)[][];
+  min: number;
+  max: number;
+  value_label: string;
+}
+
+export type ChartSpec = LineChartSpec | BarChartSpec | HistogramChartSpec | BoxChartSpec | ScatterChartSpec | HeatmapChartSpec;
+
+// eda-report's `data.report` (see data_skills/eda-report/skill.py)
+export interface EdaReportSection {
+  id: string;
+  /** The headline, e.g. "Missing Values". */
+  title: string;
+  /** Plain-English paragraph explaining the charts for this data. */
+  explanation: string;
+  bullets: string[];
+  charts: ChartSpec[];
+  /** Name of a table in SkillResult.tables to show in this section, if any. */
+  table: string | null;
+  /** False when the section could not apply (the explanation says why). */
+  applicable: boolean;
+}
+
+export interface EdaReport {
+  title: string;
+  subtitle: string;
+  sections: EdaReportSection[];
+}
+
 export interface SkillResult {
   skill: string;
   summary: string;
   findings: string[];
   tables: Record<string, Record<string, Cell>[]>;
-  charts: (LineChartSpec | BarChartSpec)[];
+  charts: ChartSpec[];
   artifacts: Record<string, string>;
   data: Record<string, unknown>;
   runtime_seconds: number;
@@ -652,4 +731,39 @@ export interface MyServices {
   /** A live plan includes Data Cleaning: downloads cost nothing extra. */
   downloads_included: boolean;
   consulting: { rate_per_hour_usd: number; free_minutes: number; hours_bought: number };
+}
+
+// ── Connected data (GET /api/connections, api/routers/connections.py) ────────
+export type RefreshFrequency = "manual" | "weekly" | "daily" | "hourly" | "live";
+
+/** One refresh choice (api/services/pricing.py REFRESH_OPTIONS). */
+export interface RefreshOption {
+  id: RefreshFrequency;
+  label: string;
+  description: string;
+  interval_minutes: number | null;
+  refresh_now_gap_minutes: number;
+  monthly_usd: number;
+  billable: boolean;
+  included: boolean;
+  default: boolean;
+  price_label: string;
+}
+
+export interface DataConnection {
+  connector: string;
+  name: string;
+  available: boolean;
+  refresh_frequency: RefreshFrequency;
+  status: "not_set_up" | "pending" | "connected" | "paused" | "error" | "disconnected";
+  last_synced_at: string | null;
+  next_sync_at: string | null;
+}
+
+export interface ConnectionsInfo {
+  options: RefreshOption[];
+  connectors: DataConnection[];
+  /** True when the client has Data Engineering. */
+  can_connect: boolean;
+  addon_total_usd: number;
 }

@@ -135,9 +135,9 @@ SALES = (__import__("pathlib").Path(__file__).resolve().parents[1] / "samples" /
 
 
 def test_list_skills():
-    """Check that GET /api/skills lists all 30 skills, spread across the service categories."""
+    """Check that GET /api/skills lists all 31 skills, spread across the service categories."""
     skills = client.get("/api/skills").json()
-    assert len(skills) == 30
+    assert len(skills) == 31
     assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
 
 

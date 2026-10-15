@@ -10,6 +10,9 @@ import type {
   BillingInterval,
   CheckoutResult,
   ConsultantClient,
+  ConnectionsInfo,
+  DataConnection,
+  RefreshFrequency,
   AnalyzeResponse,
   SkillInfo,
   SkillResult,
@@ -154,6 +157,26 @@ export const openBillingPortal = (token: string) => postJson<{ url: string }>("/
 /** Test mode only: switch the subscription off. */
 export const cancelPlanTestMode = (token: string) => postJson<{ ok: boolean }>("/api/billing/cancel", {}, token);
 
+// ── Connected data (api/routers/connections.py) ──────────────────────────────
+
+/** Refresh choices, the client's connectors, and whether they can connect (Data Engineering). */
+export async function getConnections(token: string): Promise<ConnectionsInfo> {
+  const res = await apiFetch(`${API_URL}/api/connections`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Choose how often a connector pulls new data (manual, weekly, daily, hourly, live). */
+export async function setRefresh(token: string, connector: string, frequency: RefreshFrequency): Promise<{ connectors: DataConnection[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/refresh`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify({ refresh_frequency: frequency }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
 /** Consultants: the clients assigned to me (the "Working on" picker). */
 export async function getMyClients(token: string): Promise<{ consultant: { id: string; name: string }; clients: ConsultantClient[] }> {
   const res = await apiFetch(`${API_URL}/api/consultant/clients`, { headers: { Authorization: `Bearer ${token}` } });
@@ -235,7 +258,7 @@ export async function downloadCleaned(opts: {
   format: "csv" | "xlsx";
   /** The total the person confirmed; the server never charges more than this. */
   confirmedAmountUsd?: number;
-}): Promise<{ amountUsd: string | null }> {
+}): Promise<{ amountUsd: string | null; repeat: boolean }> {
   const res = await apiFetch(`${API_URL}/api/files/download`, {
     method: "POST",
     headers: authHeaders(opts.token), // a consultant downloads for the client they are working on
@@ -263,5 +286,6 @@ export async function downloadCleaned(opts: {
   a.remove();
   URL.revokeObjectURL(url);
 
-  return { amountUsd: res.headers.get("X-Amount-USD") };
+  // repeat = the exact same data was downloaded recently, so this copy was free.
+  return { amountUsd: res.headers.get("X-Amount-USD"), repeat: res.headers.get("X-Repeat-Download") === "1" };
 }

@@ -96,12 +96,15 @@ services the client chose are offered; the rest are badges from
 | `api/data/naics_sectors.json` | NAICS sectors & subsectors for the funnel | Regenerate with `scripts/build_naics_reference.py` |
 | `db/warehouse.sql` | Client-data star schema (opt-in) | Adding event types or dimensions (see DATA_MODEL.md) |
 | `api/services/cleaning.py` | Cleaning pipeline | Adding a cleaning step |
+| `api/services/spark_engine.py` | Optional PySpark engine: pandas-vs-Spark choice, JDBC reads, Spark cleaning + "one row per field" ([SPARK.md](SPARK.md)) | Big data / cloud-warehouse connectors |
 | `api/services/sample_size.py` | Adequacy snapshot | Adding rules of thumb |
 | `api/services/pricing.py` | Services & prices | Changing packages/prices |
 | `api/services/intake.py` | Questionnaire choices | Launching a connector |
 | `api/services/account_store.py` | Account, consultant, subscription and usage storage | Changing tables |
 | `db/schema.sql` | Database tables ([DATABASE.md](DATABASE.md)) | Any table change (also update `account_store.py` and DATABASE.md) |
 | `api/services/billing.py` + `api/routers/billing.py` | Stripe: plans, Checkout, webhook, portal, consulting hours | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
+| `api/services/fair_use.py` | Download limit per 24 h and free repeats (one-way data fingerprint) | Changing fair-use rules ([PRICING.md](PRICING.md)) |
+| `api/services/connections.py` + `api/routers/connections.py` | Connectors and how often they refresh (schedule rules, "Refresh now" gap) | Adding a connector or refresh choice |
 | `api/services/consultants.py` + `api/routers/consultants.py` | Consultants, their clients, the "acting as" access rule | Consultant features |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |

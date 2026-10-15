@@ -65,6 +65,7 @@ CASES = [
     ("discovery-call-prep", lambda: {"sales.csv": _load("sales", clean=False)}, {"services": "data_visualization"}),
     ("sample-size", lambda: _load("sales"), {"unit_column": "customer_id", "group_column": "store"}),
     ("data-enrichment", lambda: _load("customers"), {}),
+    ("eda-report", lambda: _load("sales"), {}),
     ("explore-data", lambda: _load("sales"), {}),
     ("analyze", lambda: _load("sales"), {"metric": "amount", "dimension": "product"}),
     ("trend-analysis", lambda: _load("sales"), {"value_column": "amount", "segment_column": "category"}),
@@ -122,10 +123,10 @@ def test_skill_runs_and_returns_a_result(skill, build, params):
 
 
 def test_describe_lists_category_and_params():
-    """Check describe() reports a skill's category and options, and that 30 skills are listed."""
+    """Check describe() reports a skill's category and options, and that 31 skills are listed."""
     d = describe("build-dashboard")
     assert d["category"] == "data_visualization" and "range" in d["params"]
-    assert len(list_skills()) == 30
+    assert len(list_skills()) == 31
 
 
 def test_unknown_option_and_file_writing_are_refused(sales):
@@ -325,3 +326,60 @@ def test_dashboard_offers_up_to_nine_filters():
     assert len(r.data["filter_columns"]) == 9                     # 11 candidates, capped at 9
     with pytest.raises(SkillInputError, match="up to 9"):
         run_skill("build-dashboard", df, {"filter_columns": groups[:10], "include_html": False})
+
+
+EDA_SECTIONS = ["Data Overview", "Summary Statistics", "Missing Values", "Duplicate Values", "Data Distributions",
+                "Univariate Analysis", "Bivariate Analysis", "Multivariate Analysis", "Outliers", "Key Takeaways"]
+
+
+def test_eda_report_sections_charts_and_html(sales):
+    """Check the EDA report's headlines and order, that every section explains itself, and the HTML download.
+
+    Args:
+        sales: fixture, the cleaned sales sample.
+    """
+    r = run_skill("eda-report", sales)
+    sections = r.data["report"]["sections"]
+    assert [s["title"] for s in sections] == EDA_SECTIONS
+    assert all(s["explanation"].strip() for s in sections)
+    assert not any("Step" in s["title"] for s in sections)          # headlines, not step numbers
+    by_id = {s["id"]: s for s in sections}
+    assert [c["type"] for c in by_id["distributions"]["charts"]] == ["histogram"] * 3
+    assert {c["type"] for c in by_id["bivariate"]["charts"]} == {"box", "scatter"}
+    assert by_id["multivariate"]["charts"][0]["type"] == "heatmap"
+    assert len(by_id["bivariate"]["charts"][1]["points"]) <= 500     # scatter is sampled
+    assert 3 <= len(by_id["takeaways"]["bullets"]) <= 6 and r.findings == by_id["takeaways"]["bullets"]
+    # The flat chart list is every section's charts, in report order.
+    assert r.charts == [c for s in sections for c in s["charts"]]
+    # Outlier counts follow the 1.5 x IQR rule.
+    q1, q3 = sales["amount"].quantile([0.25, 0.75])
+    expected = int(((sales["amount"] < q1 - 1.5 * (q3 - q1)) | (sales["amount"] > q3 + 1.5 * (q3 - q1))).sum())
+    row = next(o for o in r.tables["outliers"] if o["column"] == "amount")
+    assert row["below"] + row["above"] == expected
+    page = r.artifacts["html_report"]
+    assert page.startswith("<!doctype html>") and "<script" not in page and "prefers-color-scheme: dark" in page
+    for title in EDA_SECTIONS:
+        assert f"<h2>{title}</h2>" in page
+
+
+def test_eda_report_handles_awkward_tables():
+    """Check tiny, all-text, constant and empty-column tables still get all ten sections, with reasons."""
+    import json
+    import numpy as np
+    tables = [
+        pd.DataFrame({"amount": [1.0], "store": ["Midtown"]}),                           # one row
+        pd.DataFrame({"name": ["a", "b", "c", "a"] * 5, "note": list("abcdefghijklmnopqrst")}),  # all text
+        pd.DataFrame({"amount": [5.0] * 10, "store": ["a", "b"] * 5}),                  # constant number
+        pd.DataFrame({"amount": [np.nan] * 5 + [1, 2, 3, 4, 5.0], "empty": [np.nan] * 10}),  # NaNs
+    ]
+    for df in tables:
+        r = run_skill("eda-report", df)
+        sections = r.data["report"]["sections"]
+        assert [s["title"] for s in sections] == EDA_SECTIONS
+        for s in sections:
+            assert s["explanation"]
+            if not s["applicable"]:
+                assert s["explanation"].startswith("Not applicable because")
+        json.dumps(r.to_dict())
+    text_only = run_skill("eda-report", tables[1]).data["report"]["sections"]
+    assert not {s["id"]: s for s in text_only}["summary_statistics"]["applicable"]

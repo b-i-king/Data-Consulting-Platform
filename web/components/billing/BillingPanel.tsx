@@ -8,6 +8,8 @@
 //                     monthly or yearly -> Stripe Checkout, or — if they already
 //                     subscribe — the subscription's tools change in place
 //                     (Stripe prorates the difference).
+//   Connected data    DataRefresh: how often each connector (QuickBooks) pulls
+//                     new data — daily by default, hourly/live are add-ons.
 //   Consulting        the free 30-minute first consultation (booking link), and
 //                     prepaid hours at the hourly rate -> Stripe Checkout.
 //
@@ -23,6 +25,7 @@ import { buyConsultingHours, cancelPlanTestMode, openBillingPortal, startCheckou
 import { fmtUsd } from "@/lib/format";
 import type { BillingInterval, MyServices } from "@/lib/types";
 import { Card, ConfirmDialog, ErrorBox, TotalRow } from "@/components/wizard/ui";
+import DataRefresh from "./DataRefresh";
 import PackageBuilder, { normalizePackage, packageTotal } from "./PackageBuilder";
 
 export default function BillingPanel(props: {
@@ -140,6 +143,8 @@ export default function BillingPanel(props: {
       ) : (
         <p className="text-sm text-ink-muted">Your team&apos;s owner manages the package.</p>
       )}
+
+      <DataRefresh token={props.token} canChange={plan.can_add} />
 
       <Card>
         <h2 className="font-semibold">Talk to a consultant</h2>

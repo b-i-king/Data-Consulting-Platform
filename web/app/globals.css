@@ -55,6 +55,12 @@
   --color-chart-current: #a07c1e;
   --color-chart-previous: #4f6fb8;
 
+  /* Diverging scale for heatmaps (correlations): cool = negative, warm =
+     positive. Cells blend these into --color-surface with color-mix, so 0 is
+     the card color and only strong values stand out (Heatmap.tsx). */
+  --color-div-neg: #2f6fd0;
+  --color-div-pos: #c0462e;
+
   --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
 
   /* Fonts are loaded in app/layout.tsx with next/font. */
@@ -93,6 +99,8 @@
     --color-on-consultant: #0e1117;
     --color-chart-current: #a68a2c;
     --color-chart-previous: #6f8fd8;
+    --color-div-neg: #6f9ff0;
+    --color-div-pos: #f08a6f;
     --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
     color-scheme: dark;
   }
@@ -125,6 +133,8 @@
       --color-on-consultant: #0e1117;
       --color-chart-current: #a68a2c;
       --color-chart-previous: #6f8fd8;
+      --color-div-neg: #6f9ff0;
+      --color-div-pos: #f08a6f;
       --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
       color-scheme: dark;
     }

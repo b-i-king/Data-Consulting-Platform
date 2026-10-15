@@ -13,7 +13,7 @@ the way we clean, analyze, and deliver data **consistent and reproducible**,
 whether the work is done by the web app, by you, by Claude, or by a future
 consultant on the team.
 
-All 30 skills live in this folder (editable copies), so the project works the
+All 31 skills live in this folder (editable copies), so the project works the
 same on any machine. Each skill belongs to **exactly one** service category.
 The assignment lives in [`catalog.json`](catalog.json), and
 `tests/test_skills_catalog.py` fails if a skill is missing or listed twice, and
@@ -29,7 +29,7 @@ License texts: [`/licenses`](../../licenses).
 ## Run a skill
 
 ```bash
-python -m data_skills list                                    # all 30, by category
+python -m data_skills list                                    # all 31, by category
 python -m data_skills describe trend-analysis                 # its options
 python -m data_skills run build-dashboard samples/sales.csv   # -> outputs/build-dashboard/
 ```
@@ -51,6 +51,7 @@ listing the skill's options. Try everything on the sample data: see
 | File | Purpose |
 |---|---|
 | `_core.py` | `SkillSpec` (id, options), `SkillResult` (summary, findings, tables, charts, artifacts), shared helpers |
+| `_report.py` | Renders a sectioned report (headlines, explanations, charts) as one self-contained HTML file with inline SVG charts (used by `eda-report`) |
 | `_time.py` | Date ranges (last 4 weeks … year to date) and DoD/WoW/MoM math — see [`docs/DASHBOARDS.md`](../docs/DASHBOARDS.md) |
 | `registry.py` | Finds and loads each `skill.py`, checks options, runs it |
 | `__main__.py` | The command line (`python -m data_skills …`) |
@@ -89,6 +90,7 @@ with a price and an **Add** button.
 ### 3. Data Exploration & Analysis — *answer questions and find trends*
 | Skill | Source | Use it to… |
 |---|---|---|
+| [`eda-report`](eda-report/README.md) | project | **Start here:** an EDA report for the client: overview, statistics, missing values, duplicates, distributions, relationships, outliers, each with charts and a plain-English explanation (downloadable HTML) |
 | [`explore-data`](explore-data/README.md) | Anthropic | Profile a new dataset in depth |
 | [`analyze`](analyze/README.md) | Anthropic | Answer business questions, from quick lookups to full reports |
 | [`trend-analysis`](trend-analysis/README.md) | Rosehill | Growth rates, seasonality, segment shifts |

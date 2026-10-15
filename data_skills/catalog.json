@@ -31,7 +31,8 @@
       "id": "data_exploration_analysis",
       "name": "Data Exploration & Analysis",
       "skills": [
-        { "id": "explore-data", "label": "Dataset profiling", "source": "anthropic-data", "primary": true },
+        { "id": "eda-report", "label": "EDA report (summary of your data)", "source": "project", "primary": true },
+        { "id": "explore-data", "label": "Dataset profiling", "source": "anthropic-data" },
         { "id": "analyze", "label": "Answers to business questions", "source": "anthropic-data" },
         { "id": "trend-analysis", "label": "Key trends & growth rates", "source": "rosehill" },
         { "id": "correlation-analysis", "label": "What moves together (correlations)", "source": "rosehill" },

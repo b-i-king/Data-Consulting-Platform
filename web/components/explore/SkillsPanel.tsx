@@ -314,8 +314,11 @@ export default function SkillsPanel(props: {
                       color: j === 0 ? "var(--color-chart-current)" : "var(--color-chart-previous)",
                     }))}
                   />
-                ) : (
+                ) : c.type === "bar" ? (
                   <BarChart categories={c.categories} values={c.values} valueLabel={c.value_label} />
+                ) : (
+                  // Histogram / box / scatter / heatmap: drawn by the EDA report view (in progress).
+                  <p className="text-sm text-ink-muted">This chart type is shown in the EDA report view.</p>
                 )}
               </Card>
             ))}

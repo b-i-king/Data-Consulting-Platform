@@ -42,7 +42,10 @@ api/                      FastAPI backend (Python)
   services/pipeline.py      glues the above together in order
   services/skills_runner.py cleans uploads, then hands them to a data skill
   services/pricing.py       service catalog, runtime billing, quotes
+  services/spark_engine.py  optional PySpark engine for big / cloud-warehouse data (off by default)
   services/entitlements.py  which services an account has (drives the workspace)
+  services/fair_use.py      download limit + free repeats (fingerprints, never data)
+  services/connections.py   connector refresh schedules (daily default, add-ons)
   services/validation.py    signup input rules: names, business names, emails
   services/locations.py     city search for the signup location picker
   services/intake.py        questionnaire answer choices
@@ -67,7 +70,7 @@ web/                      Next.js frontend (TypeScript + Tailwind CSS)
   lib/api.ts              every call to the backend
   lib/types.ts            TypeScript shapes of API responses
   lib/session.ts          keeps the login token for the browser tab
-data_skills/              30 skills: README.md (procedure) + skill.py (runnable code)
+data_skills/              31 skills: README.md (procedure) + skill.py (runnable code)
   _core.py, _time.py      shared result types; date ranges and DoD/WoW/MoM math
   registry.py, __main__.py  load/run skills; command line (python -m data_skills)
 samples/                  fictional bakery data for testing (scripts/make_sample_data.py)
@@ -174,6 +177,18 @@ mode. Full design: [PAYMENTS.md](PAYMENTS.md); every table: [DATABASE.md](DATABA
 
 Without `DATABASE_URL`, accounts live in memory so you can run everything
 locally in two commands. In production, always set `DATABASE_URL`.
+
+## Engines: pandas now, PySpark later
+
+pandas is the data engine for everything the platform does today: a whole
+table in one machine's memory, simple and fast for uploads. PySpark is set up
+in advance (`api/services/spark_engine.py`, off by default, not installed on
+Render) for clients whose data is too big for pandas or lives in a cloud
+warehouse. `choose_engine(rows, columns, source)` keeps pandas unless Spark is
+enabled **and** the table is above `SPARK_MIN_CELLS` (50,000,000 cells) or the
+source is BigQuery / Snowflake / Databricks / Redshift / a large Postgres. The
+planned path is to run Spark jobs on a managed service near the client's
+warehouse, not inside the web service. Details: [SPARK.md](SPARK.md).
 
 ## Hosting and cost (as of this writing — verify current pricing)
 
