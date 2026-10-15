@@ -19,7 +19,8 @@ It gives the rest of the backend six small building blocks:
   * to_pandas_safely() / from_pandas() — move data between the two engines,
                            with a row cap so a huge table never blows memory
   * clean_with_spark()   — the first pandas cleaning steps, written for Spark
-  * melt_to_unified()    — "one row per field" (the warehouse.unified_data shape)
+  * melt_to_unified()    — keep IDs/dates/categories, one row per metric
+                           (the warehouse.unified_data shape)
 
 WHY PYSPARK IS OPTIONAL
 -----------------------
@@ -534,95 +535,96 @@ def clean_with_spark(
 
 def melt_to_unified(
     sdf: "SparkDataFrame",
-    id_cols: Iterable[str],
-    value_cols: Iterable[str] | None = None,
+    keep_cols: Iterable[str],
+    metric_cols: Iterable[str] | None = None,
     *,
-    record_id_col: str = "record_id",
-    field_col: str = "field_name",
+    metric_meta: dict[str, dict] | None = None,
     drop_nulls: bool = True,
 ) -> "SparkDataFrame":
     """
-    Reshape a wide table to "one row per field" (the warehouse.unified_data shape).
+    Reshape a wide table to the unified shape (warehouse.unified_data): the
+    kept columns stay as they are, and each METRIC becomes its own row.
 
-    Like pandas' `df.melt()`: each record's columns become separate rows, so
-    tables with different columns can share ONE long table. Output columns:
+    The Spark twin of api/services/unified.py `dataframe_to_unified`, for
+    tables too big for pandas. Like pandas' `df.melt(id_vars=keep_cols)`:
 
-      record_id     text   — the id column(s); several are joined with "|"
-      field_name    text   — the original column name
-      value_text    text   — the value as text (always filled for a kept row)
-      value_number  double — the value as a number, or null if it isn't one
-      value_date    date   — the value as a date (ISO YYYY-MM-DD text only), else null
+      kept columns   — IDs, dates, categories, unchanged on every row
+      field_name     text   — the metric's unified name, e.g. "line_amount"
+      source_field   text   — the original column name, e.g. "amount"
+      metric_type    text   — e.g. "amount"     } from the shared field map,
+      metric_subtype text   — e.g. "line"       } else guessed from the name
+      metric_unit    text   — e.g. "usd"        } (unified.describe_metric_column)
+      metric_value   double — the number
 
-    Typed copies let the warehouse sum numbers and filter dates without
-    re-parsing text. Numbers must be plain ("1234.56"; "$1,234.56" stays text
-    only — clean it first). Dates are recognized in ISO form ("2026-10-15").
+    The loader packs the kept columns into the `attributes` JSON column
+    (F.to_json(F.struct(*keep_cols))) when it writes the table.
 
-    Uses `DataFrame.unpivot` (Spark 3.4+). Every value is cast to text first,
-    because unpivot needs one common type for the value column.
+    Uses `DataFrame.unpivot` (Spark 3.4+). Metric columns are cast to double
+    first, because unpivot needs one common type for the value column; text
+    that isn't a number becomes null (clean "$1,234.56" first).
 
     Args:
         sdf: SparkDataFrame: the wide table.
-        id_cols: Iterable[str]: column(s) that identify a record (at least one).
-        value_cols: Iterable[str] | None: columns to melt; None = every other column.
-        record_id_col: str: name of the output record id column.
-        field_col: str: name of the output field name column.
-        drop_nulls: bool: drop rows whose value is null (missing fields aren't stored).
+        keep_cols: Iterable[str]: columns kept as they are (at least one, e.g. the ID).
+        metric_cols: Iterable[str] | None: columns to melt; None = every number
+            column not in keep_cols.
+        metric_meta: dict | None: {column: {"field_name", "type", "subtype", "unit"}}
+            to override the description of some metrics (a person's review).
+        drop_nulls: bool: drop rows whose value is null (no row = no value).
 
     Returns:
-        SparkDataFrame: columns record_id, field_name, value_text, value_number, value_date.
+        SparkDataFrame: the kept columns, then field_name, source_field,
+        metric_type, metric_subtype, metric_unit, metric_value.
 
     Raises:
-        ValueError: if no id column is given, a column is missing, or nothing is left to melt.
+        ValueError: if no column is kept, a column is missing, or there is no metric to melt.
 
     Example:
-        >>> # order_id | amount | order_date        record_id | field_name | value_text | value_number | value_date
-        >>> # 1        | 9.5    | 2026-10-15   ->   1         | amount     | 9.5        | 9.5          | null
-        >>> #                                        1         | order_date | 2026-10-15 | null         | 2026-10-15
-        >>> melt_to_unified(sdf, ["order_id"]).columns          # doctest: +SKIP
-        ['record_id', 'field_name', 'value_text', 'value_number', 'value_date']
+        >>> # order_id | store   | amount        order_id | store   | field_name  | source_field | metric_type | metric_subtype | metric_unit | metric_value
+        >>> # 1        | Midtown | 9.5      ->   1        | Midtown | line_amount | amount       | amount      | line           | usd         | 9.5
+        >>> melt_to_unified(sdf, ["order_id", "store"]).columns          # doctest: +SKIP
+        ['order_id', 'store', 'field_name', 'source_field', 'metric_type', 'metric_subtype', 'metric_unit', 'metric_value']
     """
     from pyspark.sql import functions as F
+    from pyspark.sql.types import NumericType
 
-    id_cols = list(id_cols)
-    if not id_cols:
-        raise ValueError("Give at least one id column that identifies each record.")
-    missing = [c for c in id_cols + list(value_cols or []) if c not in sdf.columns]
+    from api.services.unified import describe_metric_column
+
+    keep_cols = list(keep_cols)
+    if not keep_cols:
+        raise ValueError("Give at least one column to keep as it is (an ID, a date or a category).")
+    missing = [c for c in keep_cols + list(metric_cols or []) if c not in sdf.columns]
     if missing:
         raise ValueError(f"Columns not found: {missing}")
-    if value_cols is None:
-        value_cols = [c for c in sdf.columns if c not in id_cols]
-    value_cols = list(value_cols)
-    if not value_cols:
-        raise ValueError("No value columns left to melt.")
+    if metric_cols is None:
+        metric_cols = [f.name for f in sdf.schema.fields
+                       if f.name not in keep_cols and isinstance(f.dataType, NumericType)]
+    metric_cols = list(metric_cols)
+    if not metric_cols:
+        raise ValueError("No metric (number) columns left to melt.")
 
-    # One text record id: a single id as is; several joined with "|".
-    if len(id_cols) == 1:
-        rid = F.col(id_cols[0]).cast("string")
-    else:
-        rid = F.concat_ws("|", *[F.col(c).cast("string") for c in id_cols])
+    # Each metric column's description: the shared map / a guess, then the person's overrides.
+    meta = {c: {**describe_metric_column(c), **(metric_meta or {}).get(c, {})} for c in metric_cols}
 
-    # Every value as text, so unpivot has one common type.
-    wide = sdf.select(
-        rid.alias(record_id_col),
-        *[F.col(c).cast("string").alias(c) for c in value_cols],
-    )
+    wide = sdf.select(*keep_cols, *[F.col(c).cast("double").alias(c) for c in metric_cols])
     long = wide.unpivot(
-        ids=[record_id_col], values=value_cols,
-        variableColumnName=field_col, valueColumnName="value_text",
+        ids=keep_cols, values=metric_cols,
+        variableColumnName="source_field", valueColumnName="metric_value",
     )
     if drop_nulls:
-        long = long.where(F.col("value_text").isNotNull())
+        long = long.where(F.col("metric_value").isNotNull())
 
-    # try_cast gives null (instead of an error) when the text isn't a number/date,
-    # whatever Spark's ANSI mode is (it is on by default in Spark 4).
-    # Dates: only text that STARTS like an ISO date (YYYY-MM-DD) is cast,
-    # because Spark would otherwise read a plain number such as "2026" as
-    # the date 2026-01-01.
-    looks_like_date = F.col("value_text").rlike(r"^\d{4}-\d{2}-\d{2}")
+    def lookup(key: str):
+        """A column that looks up meta[source_field][key] (a small literal map, one entry per metric column)."""
+        pairs = [x for c in metric_cols for x in (F.lit(c), F.lit(meta[c].get(key)).cast("string"))]
+        return F.create_map(*pairs)[F.col("source_field")]
+
     return long.select(
-        record_id_col,
-        field_col,
-        "value_text",
-        F.expr("try_cast(value_text AS DOUBLE)").alias("value_number"),
-        F.when(looks_like_date, F.expr("try_cast(value_text AS DATE)")).alias("value_date"),
+        *keep_cols,
+        lookup("field_name").alias("field_name"),
+        "source_field",
+        lookup("type").alias("metric_type"),
+        lookup("subtype").alias("metric_subtype"),
+        lookup("unit").alias("metric_unit"),
+        "metric_value",
     )

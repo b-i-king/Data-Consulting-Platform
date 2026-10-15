@@ -454,7 +454,8 @@ export interface BarChartSpec {
 }
 
 // Chart specs built by data_skills/_core.py (histogram_chart, box_stats/box_chart,
-// scatter_chart, heatmap_chart); drawn by web/components/charts/ChartView.tsx.
+// scatter_chart, heatmap_chart); drawn by web/components/charts/ChartView.tsx
+// (the EDA report view, web/components/explore/EdaReport.tsx, uses it too).
 export interface HistogramChartSpec {
   type: "histogram";
   title: string;

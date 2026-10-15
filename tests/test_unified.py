@@ -1,11 +1,15 @@
 """
-Tests for the unified "one row per field" data layer (api/services/unified.py).
+Tests for the unified data layer (api/services/unified.py): IDs, dates and
+categories kept as they are, every metric pivoted into its own row.
 
-They cover the owner's two promises:
-1. Any source fits one long table: QuickBooks Online JSON (fixtures shaped like
-   real API v3 responses, fictional bakery data) and uploaded files both turn
-   into the same rows, and those rows pivot back into the original table.
-2. No duplicate data: loading the same data again inserts nothing and changes
+They cover the owner's promises:
+1. Any source fits one shape: QuickBooks Online JSON (fixtures shaped like real
+   API v3 responses, fictional bakery data) and uploaded files both turn into
+   the same rows — metric_type / subtype / unit / value plus attributes — and
+   those rows pivot back into the original table, cell for cell.
+2. Metrics are described consistently: the field map first, then a guess from
+   the name with a confidence; expenses make "amount" a cost.
+3. No duplicate data: loading the same data again inserts nothing and changes
    nothing; a changed value is an update; identical rows count once.
 It also checks that the Python field maps and the warehouse.field_map seed in
 db/warehouse.sql stay identical.
@@ -21,12 +25,17 @@ import pytest
 from api.services.unified import (
     FIELD_MAPS,
     KEY_COLUMNS,
+    NO_METRIC,
     QUICKBOOKS_ENTITIES,
     UNIFIED_COLUMNS,
+    attributes_json,
+    classify_metric,
     dataframe_to_unified,
     flatten_quickbooks,
+    plan_columns,
     plan_upsert,
     quickbooks_response_to_unified,
+    round_trip,
     snake_case,
     unified_to_wide,
     value_hash,
@@ -46,19 +55,25 @@ def _invoice_130() -> dict:
     return _load("quickbooks_invoice.json")["QueryResponse"]["Invoice"][0]
 
 
-def _value(rows: pd.DataFrame, line: int, field: str):
-    """Return the one stored value of `field` on `line` (whichever value_* column holds it)."""
+def _metric(rows: pd.DataFrame, line: int, field: str) -> pd.Series:
+    """Return the one metric row of `field` on `line`."""
     row = rows[(rows["line_number"] == line) & (rows["field_name"] == field)]
     assert len(row) == 1, f"expected one {field!r} on line {line}, got {len(row)}"
-    row = row.iloc[0]
-    return row[{"text": "value_text", "number": "value_number", "date": "value_date",
-                "timestamp": "value_timestamp", "boolean": "value_bool"}[row["value_type"]]]
+    return row.iloc[0]
+
+
+def _attr(rows: pd.DataFrame, line: int, field: str):
+    """Return attribute `field` of `line` (the same on every row of the line)."""
+    on_line = rows[rows["line_number"] == line]
+    values = {json.dumps(a.get(field), default=str) for a in on_line["attributes"]}
+    assert len(values) == 1, f"{field!r} differs between rows of line {line}"
+    return on_line["attributes"].iloc[0].get(field)
 
 
 # ── QuickBooks ──────────────────────────────────────────────────────────────
 
-def test_flatten_invoice_header_and_lines():
-    """An invoice becomes header rows (line 0) plus rows per Line item, with mapped names and typed values."""
+def test_flatten_invoice_metrics_and_attributes():
+    """An invoice: metrics become rows with type/subtype/unit; names, dates and IDs ride along as attributes."""
     rows = pd.DataFrame(flatten_quickbooks("Invoice", _invoice_130()))
 
     assert set(rows["record_id"]) == {"Invoice:130"}
@@ -68,49 +83,76 @@ def test_flatten_invoice_header_and_lines():
     # source_modified_at = MetaData.LastUpdatedTime, in UTC.
     assert str(rows["source_modified_at"].iloc[0]) == "2026-09-15 20:05:47+00:00"
 
-    assert _value(rows, 0, "customer_name") == "Blue Door Cafe"
-    assert _value(rows, 0, "total_amount") == 181.44
-    assert str(_value(rows, 0, "due_date")) == "2026-10-14"
-    assert _value(rows, 1, "item_name") == "Sourdough Loaf"
-    assert _value(rows, 1, "quantity") == 12
-    assert _value(rows, 2, "line_amount") == 72.0
-    assert _value(rows, 3, "line_detail_type") == "SubTotalLineDetail"
+    total = _metric(rows, 0, "total_amount")
+    assert (total["metric_type"], total["metric_subtype"], total["metric_unit"], total["metric_value"]) \
+        == ("amount", "total", "usd", 181.44)
+    price = _metric(rows, 1, "unit_price")
+    assert (price["metric_type"], price["metric_subtype"], price["metric_value"]) == ("price", "unit", 8.0)
+    assert _metric(rows, 1, "quantity")["metric_value"] == 12
+    assert _metric(rows, 2, "line_amount")["metric_value"] == 72.0
+
+    # Not metrics: kept as they are, on every row of their line.
+    assert _attr(rows, 0, "customer_name") == "Blue Door Cafe"
+    assert str(_attr(rows, 0, "due_date")) == "2026-10-14"
+    assert _attr(rows, 1, "item_name") == "Sourdough Loaf"
+    assert _attr(rows, 1, "line_num") == 1                       # a position, not a measure
+    assert _attr(rows, 3, "line_detail_type") == "SubTotalLineDetail"
+    assert not (rows["field_name"] == "line_num").any()
 
     # API bookkeeping keys are not business data.
-    assert not rows["source_field"].isin(["domain", "sparse"]).any()
-    # The unique key holds: no field appears twice on one line of one record.
+    assert not any("domain" in a or "sparse" in a for a in rows["attributes"])
+    # The unique key holds: no metric appears twice on one line of one record.
     assert not rows.duplicated(subset=KEY_COLUMNS).any()
-    assert list(pd.DataFrame(rows).columns) == UNIFIED_COLUMNS
+    assert list(rows.columns) == UNIFIED_COLUMNS
 
 
 def test_unknown_quickbooks_fields_are_kept_and_flagged():
-    """Fields no map knows are kept under a snake_case name with mapped=False, so nothing is lost."""
+    """Fields no map knows are kept: text as an attribute, numbers as metrics described by a guess (mapped=False)."""
     rows = pd.DataFrame(flatten_quickbooks("Invoice", _invoice_130()))
-    custom = rows[rows["source_field"] == "CustomField[0].StringValue"].iloc[0]
-    assert custom["field_name"] == "custom_field_string_value"
-    assert custom["value_text"] == "6-8 AM"
-    assert not custom["mapped"]
-    assert rows.loc[rows["field_name"] == "customer_name", "mapped"].all()
+    assert _attr(rows, 0, "custom_field_string_value") == "6-8 AM"
+    tax_percent = rows[rows["source_field"].str.endswith("TaxPercent")].iloc[0]
+    assert (tax_percent["metric_type"], tax_percent["metric_unit"], tax_percent["mapped"]) == ("tax", "percent", False)
+    assert rows.loc[rows["field_name"] == "total_amount", "mapped"].all()
 
 
-def test_purchase_maps_to_expense_and_aligns_names():
-    """Purchases are transaction/expense; vendor, category and location names line up with other sources."""
+def test_purchase_is_an_expense_so_amounts_are_costs():
+    """Purchases are transaction/expense: their amounts are costs; vendor, category and location line up."""
     long = quickbooks_response_to_unified(_load("quickbooks_purchase.json"))
     assert set(long["record_id"]) == {"Purchase:252", "Purchase:253"}
     assert set(zip(long["event_type"], long["event_subtype"])) == {("transaction", "expense")}
     second = long[long["record_id"] == "Purchase:253"]
-    assert _value(second, 0, "payee_name") == "Midtown Restaurant Depot"
-    assert _value(second, 0, "location_name") == "Midtown"         # DepartmentRef.name
-    assert _value(second, 1, "item_name") == "Cake Box 10in"        # item-based line
-    assert _value(second, 2, "expense_category") == "Supplies & Materials"   # account-based line
+    assert _metric(second, 0, "total_amount")["metric_type"] == "cost"
+    assert _metric(second, 1, "line_amount")["metric_subtype"] == "line"
+    assert _attr(second, 0, "payee_name") == "Midtown Restaurant Depot"
+    assert _attr(second, 0, "location_name") == "Midtown"           # DepartmentRef.name
+    assert _attr(second, 1, "item_name") == "Cake Box 10in"          # item-based line
+    assert _attr(second, 2, "expense_category") == "Supplies & Materials"   # account-based line
+
+
+def test_other_currency_replaces_usd():
+    """A record in Canadian dollars gets unit 'cad', so amounts in different currencies are never summed."""
+    invoice = {"Id": "9", "TxnDate": "2026-09-01", "TotalAmt": 50, "CurrencyRef": {"value": "CAD"}}
+    rows = pd.DataFrame(flatten_quickbooks("Invoice", invoice))
+    assert _metric(rows, 0, "total_amount")["metric_unit"] == "cad"
+
+
+def test_line_without_numbers_keeps_its_attributes():
+    """A description-only line has no metric; one NO_METRIC row keeps its text."""
+    invoice = {"Id": "9", "TxnDate": "2026-09-01",
+               "Line": [{"Description": "Thank you!", "DetailType": "DescriptionOnly"}]}
+    rows = pd.DataFrame(flatten_quickbooks("Invoice", invoice))
+    note = rows[rows["line_number"] == 1]
+    assert list(note["field_name"]) == [NO_METRIC]
+    assert note["metric_value"].isna().all() and note["metric_type"].isna().all()
+    assert _attr(rows, 1, "line_description") == "Thank you!"
 
 
 def test_second_list_item_gets_numbered_name():
     """A 2nd LinkedTxn on one record gets linked_txn_id_2 instead of colliding with the 1st."""
     invoice = {"Id": "9", "TxnDate": "2026-09-01",
                "LinkedTxn": [{"TxnId": "1", "TxnType": "Payment"}, {"TxnId": "2", "TxnType": "Payment"}]}
-    names = {r["field_name"] for r in flatten_quickbooks("Invoice", invoice)}
-    assert {"linked_txn_id", "linked_txn_id_2"} <= names
+    attrs = flatten_quickbooks("Invoice", invoice)[0]["attributes"]
+    assert {"linked_txn_id", "linked_txn_id_2"} <= set(attrs)
 
 
 def test_unknown_entity_and_missing_id_are_rejected():
@@ -122,17 +164,18 @@ def test_unknown_entity_and_missing_id_are_rejected():
 
 
 def test_quickbooks_wide_has_one_row_per_line():
-    """Pivoting a QuickBooks response back gives one row per record + line."""
+    """Pivoting a QuickBooks response back gives one row per record + line, with metrics and attributes."""
     wide = unified_to_wide(quickbooks_response_to_unified(_load("quickbooks_invoice.json")))
     assert len(wide) == 7          # invoice 130: 4 rows, invoice 131: 3 rows
     header = wide[(wide["record_id"] == "Invoice:130") & (wide["line_number"] == 0)].iloc[0]
     assert header["total_amount"] == 181.44
+    assert header["customer_name"] == "Blue Door Cafe"
     assert str(header["transaction_date"].date()) == "2026-09-14"
 
 
 def test_every_entity_uses_an_existing_event_type():
     """Each QuickBooks entity points at a (type, subtype) pair seeded in dim_event_type."""
-    sql = (ROOT / "db" / "warehouse.sql").read_text()
+    sql = (ROOT / "db" / "warehouse.sql").read_text(encoding="utf-8")
     seeded = set(re.findall(r"\('(\w+)',\s*'(\w+)',\s*'(?:amount|quantity|score|count)'", sql))
     for event_type, event_subtype, _ in QUICKBOOKS_ENTITIES.values():
         assert (event_type, event_subtype) in seeded
@@ -145,34 +188,94 @@ SALES = pd.DataFrame({
     "order_date": pd.to_datetime(["2026-09-01", "2026-09-01", "2026-09-02"]),
     "product": ["Sourdough Loaf", "Cupcake Box (6)", "Rye Bread"],
     "quantity": [3, 2, 1],
-    "amount": [21.0, 36.0, 6.5],
+    "amount": [21.0, 36.0, None],
     "loyalty_member": [True, False, True],
     "note": ["", "gift", None],
 })
 
 
-def test_file_round_trip_long_to_wide():
-    """A cleaned file -> long -> wide gives back the same table (empty cells come back empty)."""
+def test_plan_columns_roles_names_and_metrics():
+    """Each column gets a role and a unified name; metrics get type/subtype/unit with a confidence."""
+    plan = {p["column"]: p for p in plan_columns(SALES)}
+    assert {c: p["role"] for c, p in plan.items()} == {
+        "order_id": "id", "order_date": "date", "product": "category", "quantity": "metric",
+        "amount": "metric", "loyalty_member": "category", "note": "category"}
+    assert plan["amount"]["field_name"] == "line_amount"
+    assert (plan["amount"]["metric_type"], plan["amount"]["metric_subtype"], plan["amount"]["metric_unit"]) \
+        == ("amount", "line", "usd")
+    assert plan["amount"]["confidence"] == "mapped"
+    assert plan["product"]["field_name"] == "item_name" and plan["product"]["mapped"]
+    # Not in any map: kept under its own (snake_case) name, flagged unmapped.
+    assert plan["note"]["field_name"] == "note" and not plan["note"]["mapped"]
+
+
+def test_text_dates_from_cleaning_are_dates():
+    """The cleaning step keeps dates as ISO text; a date-named column of them is still a date."""
+    text = SALES.assign(order_date=SALES["order_date"].dt.strftime("%Y-%m-%d"))
+    plan = {p["column"]: p for p in plan_columns(text)}
+    assert plan["order_date"]["role"] == "date"
+    long = dataframe_to_unified(text, event_type="transaction", event_subtype="income",
+                                date_column="order_date", id_column="order_id")
+    assert str(long["event_date"].iloc[0]) == "2026-09-01"
+    assert round_trip(text, long)["ok"]
+
+
+def test_classify_metric_guesses_from_the_name():
+    """Unmapped metric names: type from a known word, unit word wins, the other words are the subtype."""
+    shipping = classify_metric("shipping_cost")
+    assert (shipping["type"], shipping["subtype"], shipping["unit"]) == ("cost", "shipping", "usd")
+    assert classify_metric("discount_pct")["unit"] == "percent"
+    assert classify_metric("csat")["type"] == "score"
+    assert classify_metric("widgets")["confidence"] == "low"
+
+
+def test_expense_columns_make_amount_a_cost_to_confirm():
+    """A vendor column means money going out: amount -> cost, flagged medium (a person confirms)."""
+    expenses = pd.DataFrame({"expense_date": ["2026-09-01"], "vendor": ["Depot"], "amount": [12.5]})
+    amount = plan_columns(expenses)[-1]
+    assert (amount["metric_type"], amount["confidence"]) == ("cost", "medium")
+    # A chosen event makes it certain.
+    certain = plan_columns(expenses, event_type="transaction", event_subtype="expense")[-1]
+    assert (certain["metric_type"], certain["confidence"]) == ("cost", "mapped")
+
+
+def test_metric_map_overrides_and_marks_mapped():
+    """A person's metric_map wins and the metric counts as mapped."""
+    odd = pd.DataFrame({"widgets": [1, 2]})
+    guess = plan_columns(odd)[0]
+    assert guess["confidence"] == "low" and not guess["mapped"]
+    fixed = plan_columns(odd, metric_map={"widgets": {"type": "quantity", "subtype": "widgets", "unit": "count"}})[0]
+    assert (fixed["metric_type"], fixed["confidence"], fixed["mapped"]) == ("quantity", "set by you", True)
+
+
+def test_file_round_trip_every_cell():
+    """A cleaned file -> unified rows -> wide gives back the same table, every column (blanks stay blank)."""
     long = dataframe_to_unified(SALES, event_type="transaction", event_subtype="income",
                                 date_column="order_date", id_column="order_id")
     assert set(long["record_id"]) == {"50001", "50002", "50003"}
     assert set(long["line_number"]) == {0}
-    assert long.loc[long["source_field"] == "product", "field_name"].iloc[0] == "item_name"
-    assert not long.loc[long["source_field"] == "note", "mapped"].iloc[0]
+    # 3 quantities + 2 amounts (the blank amount makes no row).
+    assert sorted(long["field_name"].value_counts().items()) == [("line_amount", 2), ("quantity", 3)]
+    first = long.iloc[0]["attributes"]
+    assert first["reference_number"] == 50001 and first["item_name"] == "Sourdough Loaf"
+    assert "memo" not in first                                       # empty text = no value
 
     wide = unified_to_wide(long, use_source_names=True)
     assert list(wide.columns) == ["record_id", "line_number"] + list(SALES.columns)
-
-    def normalized(values):
-        """Missing and empty text both mean "no value"; 3 == 3.0 and Timestamps compare by value."""
-        return [None if (v is None or v == "" or (not isinstance(v, str) and pd.isna(v))) else v
-                for v in values]
-
-    for column in SALES.columns:
-        assert normalized(wide[column].tolist()) == normalized(SALES[column].tolist()), column
-    # And the numbers really are numbers again.
-    assert wide["amount"].sum() == pytest.approx(63.5)
+    check = round_trip(SALES, long)
+    assert check == {"ok": True, "cells_checked": 21, "mismatches": 0, "examples": []}
+    assert wide["amount"].sum() == pytest.approx(57.0)
     assert pd.api.types.is_datetime64_any_dtype(wide["order_date"])
+
+
+def test_round_trip_reports_a_mismatch():
+    """If a value changed between the file and the rows, the round trip says where."""
+    long = dataframe_to_unified(SALES, event_type="transaction", event_subtype="income",
+                                date_column="order_date", id_column="order_id")
+    long.loc[long["field_name"] == "quantity", "metric_value"] = 99
+    check = round_trip(SALES, long)
+    assert not check["ok"] and check["mismatches"] == 3
+    assert check["examples"][0]["column"] == "quantity"
 
 
 def test_rows_without_id_get_a_stable_content_hash():
@@ -203,21 +306,36 @@ def test_identical_rows_collapse_unless_asked_to_keep():
 def test_repeated_ids_become_line_numbers():
     """A file with one row per invoice line (ID repeats) numbers the lines 1, 2, ..."""
     lines = pd.DataFrame({"invoice_number": ["1037", "1037", "1038"], "amount": [96.0, 72.0, 65.0]})
-    long = dataframe_to_unified(lines, event_type="invoice", event_subtype="sent",
-                                date_column=None, id_column="invoice_number")
+    long = dataframe_to_unified(lines, event_type="invoice", event_subtype="sent", id_column="invoice_number")
     pairs = set(zip(long["record_id"], long["line_number"]))
     assert pairs == {("1037", 1), ("1037", 2), ("1038", 1)}
 
 
 def test_two_columns_on_one_field_are_refused():
     """Two columns that align to the same field would break the unique key, so it is an error."""
-    both = pd.DataFrame({"store": ["Midtown"], "location": ["Decatur"]})
+    both = pd.DataFrame({"store": ["Midtown"], "location": ["Decatur"], "amount": [1.0]})
     with pytest.raises(ValueError, match="location_name"):
-        dataframe_to_unified(both, event_type="transaction", event_subtype="income", date_column=None)
+        dataframe_to_unified(both, event_type="transaction", event_subtype="income")
     # Renaming one through source_field_map fixes it.
     ok = dataframe_to_unified(both, event_type="transaction", event_subtype="income",
-                              date_column=None, source_field_map={"location": "region"})
-    assert set(ok["field_name"]) == {"location_name", "region"}
+                              source_field_map={"location": "region"})
+    assert set(ok["attributes"].iloc[0]) == {"location_name", "region"}
+
+
+def test_blank_text_is_none_not_nan():
+    """A metric with no subtype holds None (the database refuses NaN, a float, in a TEXT column)."""
+    long = dataframe_to_unified(SALES, event_type="transaction", event_subtype="income",
+                                date_column="order_date", id_column="order_id")
+    quantity = long[long["field_name"] == "quantity"]
+    assert all(v is None for v in quantity["metric_subtype"])
+
+
+def test_attributes_json_writes_dates_as_text():
+    """The database copy of attributes has ISO dates, so SQL can cast them."""
+    long = dataframe_to_unified(SALES, event_type="transaction", event_subtype="income",
+                                date_column="order_date", id_column="order_id")
+    as_json = json.loads(attributes_json(long.iloc[0]["attributes"]))
+    assert as_json["transaction_date"] == "2026-09-01" and as_json["loyalty_member"] is True
 
 
 # ── No duplicate data ───────────────────────────────────────────────────────
@@ -240,21 +358,35 @@ def test_same_batch_twice_is_all_unchanged():
     assert len(again["unchanged"]) == len(batch)
 
 
-def test_changed_value_is_an_update_and_cleared_value_is_stale():
-    """Editing one invoice in QuickBooks: a new balance is an update, a removed memo is stale."""
+def test_changed_value_or_attribute_is_an_update_and_cleared_metric_is_stale():
+    """Editing an invoice in QuickBooks: a new balance or memo is an update; a removed discount is stale."""
     stored = quickbooks_response_to_unified(_load("quickbooks_invoice.json")).assign(
         row_id=lambda d: range(1, len(d) + 1))          # as if read back from the database
     edited = _load("quickbooks_invoice.json")
     invoice = edited["QueryResponse"]["Invoice"][0]
     invoice["Balance"] = 0                             # the customer paid
-    del invoice["CustomerMemo"]                         # memo cleared
+    del invoice["TxnTaxDetail"]                         # tax removed (the TotalTax metric disappears)
     plan = plan_upsert(quickbooks_response_to_unified(edited), stored)
 
-    assert list(plan["update"]["field_name"]) == ["balance_due"]
-    assert plan["update"]["value_number"].iloc[0] == 0
+    # Line 0's attributes did not change, but its metric rows did (balance) or vanished (tax).
+    changed = plan["update"][plan["update"]["record_id"] == "Invoice:130"]
+    assert "balance_due" in set(changed["field_name"])
+    assert changed.loc[changed["field_name"] == "balance_due", "metric_value"].iloc[0] == 0
     assert "row_id" in plan["update"].columns           # the loader knows which row to update
-    assert list(plan["stale"]["field_name"]) == ["customer_memo"]
+    assert "tax_amount" in set(plan["stale"]["field_name"])
     assert len(plan["insert"]) == 0
+    # Lines 1-3 of the invoice did not change at all.
+    assert set(changed["line_number"]) == {0}
+
+
+def test_corrected_attribute_updates_every_row_of_the_line():
+    """A corrected customer name changes the row_hash of every metric row of that line."""
+    stored = quickbooks_response_to_unified(_load("quickbooks_invoice.json"))
+    edited = _load("quickbooks_invoice.json")
+    edited["QueryResponse"]["Invoice"][0]["CustomerRef"]["name"] = "Blue Door Café"
+    plan = plan_upsert(quickbooks_response_to_unified(edited), stored)
+    header = stored[(stored["record_id"] == "Invoice:130") & (stored["line_number"] == 0)]
+    assert len(plan["update"]) == len(header)
 
 
 def test_duplicate_rows_in_one_batch_insert_once():
@@ -280,20 +412,31 @@ def test_newest_copy_wins_inside_a_batch():
     batch = pd.DataFrame(flatten_quickbooks("Invoice", new) + flatten_quickbooks("Invoice", old))
     plan = plan_upsert(batch, None)
     total = plan["insert"][plan["insert"]["field_name"] == "total_amount"]
-    assert list(total["value_number"]) == [12.0]
+    assert list(total["metric_value"]) == [12.0]
 
 
 # ── Python maps and SQL seed stay in sync ───────────────────────────────────
 
 def test_field_map_matches_sql_seed():
-    """Every (system, source_field) -> (field_name, value_type) pair is the same in Python and SQL."""
-    sql = (ROOT / "db" / "warehouse.sql").read_text()
+    """Every (system, source_field) -> (name, value_type, metric type/subtype/unit) is the same in Python and SQL."""
+    sql = (ROOT / "db" / "warehouse.sql").read_text(encoding="utf-8")
     block = sql[sql.index("INSERT INTO field_map"):]
     block = block[:block.index("ON CONFLICT")]
-    seeded = {(s, src): (name, kind) for s, src, name, kind in
-              re.findall(r"\('(\w+)',\s*'([^']+)',\s*'(\w+)',\s*'(\w+)'", block)}
-    in_python = {(system, src): pair for system, fmap in FIELD_MAPS.items() for src, pair in fmap.items()}
+    value = r"\s*(NULL|'[^']*')"
+    rows = re.findall(r"\('(\w+)',\s*'([^']+)',\s*'(\w+)',\s*'(\w+)'," + value + "," + value + "," + value, block)
+    unquote = lambda v: None if v == "NULL" else v.strip("'")           # noqa: E731
+    seeded = {(s, src): (name, kind, unquote(mt), unquote(ms), unquote(mu))
+              for s, src, name, kind, mt, ms, mu in rows}
+    in_python = {(system, src): spec for system, fmap in FIELD_MAPS.items() for src, spec in fmap.items()}
     assert seeded == in_python
+
+
+def test_every_mapped_metric_has_a_unit_and_is_a_number():
+    """A metric in the field map always says what it is in, and only number fields are metrics."""
+    for fmap in FIELD_MAPS.values():
+        for src, (name, kind, mtype, _sub, unit) in fmap.items():
+            if mtype is not None:
+                assert kind == "number" and unit, src
 
 
 def test_snake_case():

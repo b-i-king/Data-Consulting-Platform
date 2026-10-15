@@ -142,20 +142,26 @@ def test_to_pandas_safely_caps_rows(spark_settings):
 
 
 def test_melt_to_unified(spark_settings):
-    """One row per field, with typed number/date copies and nulls dropped."""
+    """Kept columns stay as they are; one row per metric value, described like unified.py does; nulls dropped."""
     pdf = pd.DataFrame({
         "order_id": [1, 2],
+        "store": ["Midtown", "Decatur"],
         "amount": [9.5, None],
-        "order_date": ["2026-10-15", "2026-10-16"],
-        "note": ["rush", "2026"],
+        "widgets": [3, 4],
     })
-    long = se.melt_to_unified(se.from_pandas(pdf, spark_settings), ["order_id"])
-    assert long.columns == ["record_id", "field_name", "value_text", "value_number", "value_date"]
-    rows = {(r.record_id, r.field_name): r for r in long.collect()}
-    assert len(rows) == 5                                   # order 2's missing amount dropped
-    assert rows[("1", "amount")].value_number == 9.5
-    assert str(rows[("1", "order_date")].value_date) == "2026-10-15"
-    assert rows[("1", "note")].value_number is None
-    assert rows[("2", "note")].value_date is None           # "2026" is not read as a date
+    long = se.melt_to_unified(se.from_pandas(pdf, spark_settings), ["order_id", "store"])
+    assert long.columns == ["order_id", "store", "field_name", "source_field", "metric_type",
+                            "metric_subtype", "metric_unit", "metric_value"]
+    rows = {(r.order_id, r.source_field): r for r in long.collect()}
+    assert len(rows) == 3                                   # order 2's missing amount dropped
+    amount = rows[(1, "amount")]
+    described = (amount.field_name, amount.metric_type, amount.metric_subtype, amount.metric_unit, amount.metric_value)
+    assert described == ("line_amount", "amount", "line", "usd", 9.5)
+    assert rows[(2, "widgets")].store == "Decatur"         # kept columns ride along
+    assert rows[(2, "widgets")].metric_unit == "number"     # no known word: a guess to review
+    fixed = se.melt_to_unified(se.from_pandas(pdf, spark_settings), ["order_id", "store"],
+                               metric_meta={"widgets": {"type": "quantity", "unit": "count"}})
+    assert {r.metric_unit for r in fixed.collect() if r.source_field == "widgets"} == {"count"}
     with pytest.raises(ValueError):
         se.melt_to_unified(se.from_pandas(pdf, spark_settings), [])
+
