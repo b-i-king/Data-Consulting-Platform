@@ -756,6 +756,10 @@ export interface ConsultantClient {
   industry_other: string | null;
   /** One-time analysis or monthly help (null for clients a consultant added by hand). */
   consultant_plan: ConsultantPlan | null;
+  /** What they'd like help with (service ids picked on "Your needs"): the picker's "Help with" filter. */
+  interested_services: string[];
+  /** Last sign-in (ISO), or null: for "Recently active" sorting. */
+  last_login_at: string | null;
 }
 
 /** GET /api/locations — one city in the location picker. */

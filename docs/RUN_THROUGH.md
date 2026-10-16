@@ -286,7 +286,11 @@ Made a mistake? The card's **History** has **undo** on a confirmed free call.
    "« First step" (answers kept); every page but the first and the last has "Skip to download".
    With a cleaned file it goes straight to Next steps (just download); on the cloud or app path,
    or before uploading, it goes to Upload first and then straight to the download.
-7. **Duplicates:** upload an export of invoices QuickBooks already synced → the preview says
+7. **Finding a client (consultants):** with two or more clients, the purple "Working on" box has
+   "Help with" (the projects clients asked for, with counts), "One-time / Monthly" and "A to Z /
+   Recently active" above the search box; clicking the box lists everyone, typing narrows it
+   (names, email, location, or what they need help with).
+8. **Duplicates:** upload an export of invoices QuickBooks already synced → the preview says
    "N of these records are already stored from QuickBooks Online"; accept with "load only the new
    records" → only the new ones are stored.
 

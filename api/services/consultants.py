@@ -366,7 +366,9 @@ def client_summary(acc: dict) -> dict:
 
     Returns:
         dict: {"id", "label", "person", "email", "account_type", "company_name",
-            "location", "naics_sector", "industry_other", "consultant_plan"}.
+            "location", "naics_sector", "industry_other", "consultant_plan",
+            "interested_services" (what they'd like help with — service ids, for the
+            picker's "Help with" filter), "last_login_at" (ISO or None, for "recently active")}.
 
     Example:
         >>> client_summary({"id": 7, "first_name": "Ana", "last_name": "Diaz",
@@ -386,6 +388,9 @@ def client_summary(acc: dict) -> dict:
         "naics_sector": acc.get("naics_sector"),
         "industry_other": acc.get("industry_other"),
         "consultant_plan": acc.get("consultant_plan"),   # "one_time" or "monthly"
+        # Projects picked on "Your needs" ("Projects with a consultant"): the picker filters on them.
+        "interested_services": list(acc.get("interested_services") or []),
+        "last_login_at": acc["last_login_at"].isoformat() if acc.get("last_login_at") else None,
     }
 
 
