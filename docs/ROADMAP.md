@@ -117,7 +117,8 @@ budget. When the AI can't answer, offer the consultant (free 30 minutes). Flip
 
 ### 8. Consultant workflow
 - ✅ Consultants table, "do it for me" signup, "Working on" client picker
-  (searchable), "Add a client", every tool unlocked, downloads billed to the client.
+  (searchable), "Add a client", downloads billed to the client. Tools follow
+  the client's package; admins get everything free.
 - ✅ Free 30-minute first consultation, then $80/hour sessions booked and paid on
   Cal.com (Data Strategy & Discovery is paid from the first hour).
 - ✅ Consultation tracking: Cal.com webhook (booked / rescheduled / canceled /

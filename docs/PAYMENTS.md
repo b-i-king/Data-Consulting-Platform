@@ -17,6 +17,16 @@ and prices live in `pricing.py` and Stripe (no plans table). Prices: [PRICING.md
 Card details are typed on **Stripe's own page** (Checkout), so they never touch
 our server. The webhook is the only thing that turns a plan on or off.
 
+## Admins, consultants and deleted accounts
+
+- **Admins** (`ADMIN_EMAILS`) never pay: every tool and every download is free,
+  and `POST /api/billing/checkout` refuses them (`billing.ADMIN_FREE`).
+- **Consultants** pay for their own package like any client; working on a
+  client, the client's package applies.
+- **Delete my account** (`DELETE /api/accounts/me`) calls
+  `billing.cancel_everything` first: each live Stripe subscription is canceled
+  at once and the Stripe customer deleted, so the card is never charged again.
+
 ## Test mode (today)
 
 With no `STRIPE_SECRET_KEY`, the site runs in **test mode**: choosing a plan

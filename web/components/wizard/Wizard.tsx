@@ -269,6 +269,7 @@ export default function Wizard() {
 
       {step === 5 && analysis && (
         <StepAccount
+          location={location}
           defaultType={accountType ?? "individual"}
           industry={industry}
           serviceIds={serviceIds}

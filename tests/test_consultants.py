@@ -215,14 +215,14 @@ def test_a_signed_in_client_can_choose_a_consultant_later():
     plan = client.post("/api/accounts/consultant", headers=_auth(sam["access_token"]),
                        json={"consultant_plan": "monthly"}).json()
     assert plan["account"]["consultant_name"] == "Brandon" and plan["account"]["consultant_plan"] == "monthly"
-    # Now consultant-managed: every available tool, including Data Engineering (to store data).
-    assert "data_engineering" in plan["active"]
+    # A consultant doesn't unlock tools: the client's package does.
+    assert plan["active"] == ["data_cleaning"]
 
 
-def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
+def test_done_for_you_clients_go_to_the_default_consultant_and_pay_for_tools():
     """
-    Check that a "done for you" client is assigned to the default consultant and gets every
-    available tool, while a do-it-yourself client gets only Data Cleaning.
+    Check that a "done for you" client is assigned to the default consultant, but tools still
+    come from their package: without one, only Data Cleaning — same as a do-it-yourself client.
     """
     _consultant()
     opts = client.get("/api/intake/options").json()
@@ -232,8 +232,11 @@ def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
     acc = res.json()["account"]
     assert acc["wants_consultant"] and acc["consultant_name"] == "Brandon"
     plan = client.get("/api/accounts/services", headers=_auth(res.json()["access_token"])).json()
-    available = [s["id"] for s in plan["services"] if s["available"]]
-    assert plan["active"] == available                       # every available service
+    assert plan["active"] == ["data_cleaning"]               # no package yet
+    client.post("/api/billing/checkout", headers=_auth(res.json()["access_token"]),
+                json={"plan_ids": ["data_engineering"], "interval": "month"})   # test mode: on at once
+    plan = client.get("/api/accounts/services", headers=_auth(res.json()["access_token"])).json()
+    assert "data_engineering" in plan["active"]
 
     diy = _signup("sam@example.com", "Sam").json()
     assert diy["account"]["consultant_name"] is None
@@ -241,20 +244,32 @@ def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
     assert plan["active"] == ["data_cleaning"]
 
 
-def test_consultants_see_all_seven_services_including_ai_preview():
+def test_admins_get_everything_free_consultants_get_what_the_client_pays_for():
     """
-    Check that a consultant sees every service, including AI (not launched yet), in their own
-    workspace AND in a client's, while the client themselves still sees only launched services.
+    An admin gets all seven services free (AI as a preview) in their own workspace AND a
+    client's, downloads included, and can't buy anything. A consultant gets only what the
+    client's package pays for, and needs their own package for their own data.
     """
-    token = _consultant()
-    every = [s["id"] for s in client.get("/api/accounts/services", headers=_auth(token)).json()["services"]]
-    mine = client.get("/api/accounts/services", headers=_auth(token)).json()
+    admin = _consultant()
+    every = [s["id"] for s in client.get("/api/accounts/services", headers=_auth(admin)).json()["services"]]
+    mine = client.get("/api/accounts/services", headers=_auth(admin)).json()
     assert mine["active"] == every and "ai" in mine["active"] and len(every) == 7
-    ana = _signup("ana@example.com", "Ana", wants_consultant=True).json()
-    acting = client.get("/api/accounts/services", headers=_auth(token, ana["account"]["id"])).json()
-    assert "ai" in acting["active"]
-    own = client.get("/api/accounts/services", headers=_auth(ana["access_token"])).json()
-    assert "ai" not in own["active"]
+    assert mine["admin"] and mine["downloads_included"]
+    buy = client.post("/api/billing/checkout", headers=_auth(admin), json={"plan_ids": ["data_visualization"], "interval": "month"})
+    assert buy.status_code == 400 and "free" in buy.json()["detail"]
+
+    kim = _consultant("kim@example.com", "Kim")
+    ana = _signup("ana@example.com", "Ana", wants_consultant=True,
+                  consultant_id=next(c["id"] for c in client.get("/api/accounts/consultants").json()["consultants"]
+                                     if c["name"] == "Kim")).json()
+    client.post("/api/billing/checkout", headers=_auth(ana["access_token"]),
+                json={"plan_ids": ["data_visualization"], "interval": "month"})
+    acting = client.get("/api/accounts/services", headers=_auth(kim, ana["account"]["id"])).json()
+    assert acting["active"] == ["data_cleaning", "data_visualization"] and not acting["admin"]
+    own = client.get("/api/accounts/services", headers=_auth(kim)).json()
+    assert own["active"] == ["data_cleaning"]                # Kim's own data: her own package
+    # The admin, working on Kim's client, still gets everything.
+    assert "ai" in client.get("/api/accounts/services", headers=_auth(admin, ana["account"]["id"])).json()["active"]
 
 
 def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
@@ -267,14 +282,15 @@ def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
         assert waiting["consultant_name"] is None            # nobody set up yet
     token = _consultant()
     clients = client.get("/api/consultant/clients", headers=_auth(token)).json()
-    assert len(clients["clients"]) == 3 and clients["load"]["full"]   # capacity 3: the 4th still waits
+    assert clients["load"]["clients"] == 3 and clients["load"]["full"]   # capacity 3: the 4th still waits
+    assert len(clients["clients"]) == 4          # the admin still SEES every client (and can open them)
 
 
 def test_the_access_rule():
     """
     Check the access rule: a consultant can act for their own client but not another
-    consultant's; a client can never act as anyone or list clients; each consultant sees only
-    their own clients.
+    consultant's (an admin can act for any client); a client can never act as anyone or list
+    clients; each consultant sees only their own clients.
     """
     brandon = _consultant()
     other = _consultant("second@example.com", "Avery")
@@ -287,8 +303,9 @@ def test_the_access_rule():
     # A consultant works on their own client...
     res = client.get("/api/accounts/services", headers=_auth(brandon, mine_id))
     assert res.status_code == 200 and res.json()["acting"] and res.json()["account"]["email"] == "ana@example.com"
-    # ...but not on another consultant's client,
-    assert client.get("/api/accounts/services", headers=_auth(brandon, theirs_id)).status_code == 403
+    # ...but not on another consultant's client (Avery can't open Brandon's) — the admin can.
+    assert client.get("/api/accounts/services", headers=_auth(other, mine_id)).status_code == 403
+    assert client.get("/api/accounts/services", headers=_auth(brandon, theirs_id)).status_code == 200
     # and a client can never act as anyone else.
     assert client.get("/api/accounts/services", headers=_auth(mine["access_token"], theirs_id)).status_code == 403
     # Clients can't list clients.
@@ -332,3 +349,57 @@ def test_other_industry_is_saved_and_empty_means_nothing():
         "company_name": "Al Co", "industry_other": "x", "industry_supersector": "service_providing",
         "naics_sector": "44-45"})
     assert both.status_code == 422
+
+
+def test_the_consultant_directory_is_paged():
+    """GET /api/accounts/consultants: pages of consultants, those with room first, filter by name."""
+    _consultant()
+    for name in ["Kim", "Lee", "Max"]:
+        _consultant(f"{name.lower()}@example.com", name)
+    first = client.get("/api/accounts/consultants?page=1&page_size=2").json()
+    assert (first["total"], first["pages"], len(first["consultants"])) == (4, 2, 2)
+    assert first["consultants"][0]["name"] == "Brandon"             # the default consultant first
+    second = client.get("/api/accounts/consultants?page=2&page_size=2").json()
+    assert {c["name"] for c in first["consultants"] + second["consultants"]} == {"Brandon", "Kim", "Lee", "Max"}
+    assert [c["name"] for c in client.get("/api/accounts/consultants?q=ki").json()["consultants"]] == ["Kim"]
+
+
+def test_delete_my_account_removes_everything():
+    """
+    DELETE /api/accounts/me (type your email): a business owner takes the team, the package,
+    consents and stored data with them; a deleted consultant's clients wait for a new one.
+    """
+    from api.services import warehouse_store
+
+    _consultant()
+    kim = _consultant("kim@example.com", "Kim")
+    kim_id = next(c["id"] for c in client.get("/api/accounts/consultants").json()["consultants"] if c["name"] == "Kim")
+    owner = client.post("/api/accounts/signup", json={
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Ann",
+        "last_name": "Ko", "email": "ann@example.com", "company_name": "Ko Bakery", "wants_consultant": True,
+        "consultant_id": kim_id, "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}]}).json()
+    t = owner["access_token"]
+    client.post("/api/billing/checkout", headers=_auth(t), json={"plan_ids": ["data_engineering"], "interval": "month"})
+    csv = b"order_id,amount\n" + b"".join(f"{i},{i}.5\n".encode() for i in range(40))
+    upload = [("files", ("o.csv", csv, "text/csv"))]
+    fp = client.post("/api/warehouse/preview", headers=_auth(t), files=upload).json()["fingerprint"]
+    client.post("/api/warehouse/load", headers=_auth(t), files=upload, data={"fingerprint": fp, "consent": "true"})
+    assert any(k[0] == owner["account"]["id"] for k in warehouse_store._stored)
+
+    wrong = client.request("DELETE", "/api/accounts/me", headers=_auth(t), json={"confirm_email": "nope@example.com"})
+    assert wrong.status_code == 400
+    gone = client.request("DELETE", "/api/accounts/me", headers=_auth(t), json={"confirm_email": "ANN@example.com"})
+    assert gone.status_code == 200 and gone.json() == {"deleted": 2}          # owner + colleague
+    emails = {a["email"] for a in account_store._accounts.values()}
+    assert "ann@example.com" not in emails and "bo@example.com" not in emails
+    ann_id = owner["account"]["id"]
+    assert not any(k[0] == ann_id for k in warehouse_store._stored)
+    assert not any(sub["account_id"] == ann_id for sub in account_store._subscriptions.values())
+    assert client.get("/api/accounts/me", headers=_auth(t)).status_code == 401
+
+    # A consultant deletes their account: their clients go back to waiting.
+    sam = _signup("sam@example.com", "Sam", wants_consultant=True, consultant_id=kim_id).json()
+    assert sam["account"]["consultant_name"] == "Kim"
+    client.request("DELETE", "/api/accounts/me", headers=_auth(kim), json={"confirm_email": "kim@example.com"})
+    me = client.get("/api/accounts/me", headers=_auth(sam["access_token"])).json()
+    assert me["consultant_name"] is None and me["wants_consultant"]

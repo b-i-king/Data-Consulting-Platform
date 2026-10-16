@@ -169,3 +169,12 @@
     radial-gradient(60% 80% at 15% 0%, color-mix(in srgb, var(--color-brand) 18%, transparent), transparent 70%),
     radial-gradient(50% 60% at 90% 10%, color-mix(in srgb, var(--color-cat-strategy) 14%, transparent), transparent 70%);
 }
+
+/* First-time guide (components/ui/Tour.tsx): the part of the page the current
+   step is about gets a gold outline that follows the theme. */
+.tour-target {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 4px;
+  border-radius: 1rem;
+  transition: outline-color 0.2s;
+}

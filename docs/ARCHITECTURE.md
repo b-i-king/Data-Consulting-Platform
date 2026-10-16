@@ -218,6 +218,17 @@ links (`consultations.links_for`: own consultant → default consultant →
 and each booking is saved with their `consultant_id` — so paid sessions are paid
 to them on Cal.com and counted per consultant here.
 
+**Combining tables before storing.** Files with the same columns are stacked
+automatically by the cleaning step. For the rest, the load preview offers
+"Combine with another table": stack (append rows) or join on a shared ID
+(`api/services/combine.py`; a key that repeats on both sides is refused).
+
+**Keeping stored data current.** Settings → "Update your most recent upload"
+replaces the latest stored file (same name; rows no longer in it are removed).
+Connector data (QuickBooks, ...) is edited in that app, never here. "Delete my
+account" removes the account and everything in it (a business owner's team
+too); Stripe billing is canceled first.
+
 **Sharing data with the consultant.** Files are never kept after a visit, so on
 the guest flow's "Next steps" a consultant client is offered **Share your data
 with <consultant>**: the Data Engineering load (preview, storage consent, accept)
@@ -238,9 +249,12 @@ consultant, linked to their account; `is_default` marks who new "do it for me"
 clients go to), and on `accounts`: `wants_consultant` (boolean) and
 `consultant_id` (NULL unless `wants_consultant` is true — enforced by a CHECK).
 Clients can tick "I'd like a consultant to do this for me" at signup, or the
-consultant creates their account ("Add a client"). Consultant-managed clients
-and consultants get every available service; everyone else gets the tools in
-their subscription package (Data Cleaning is always open). Projects picked on
+consultant creates their account ("Add a client"). **Admins** get every
+service free (AI as a preview), in their own workspace and any client's, and
+can open any client. **Everyone else pays for tools**: a consultant working on
+a client gets exactly what that client's package pays for, and needs their own
+package for their own data; a "done for you" client pays for the tools here and
+for the consultant's time on Cal.com (Data Cleaning is always open). Projects picked on
 "Your needs" are interest the consultant sees, not unlocks.
 Downloads a consultant makes are billed to the client (`usage_events.consultant_id`
 records who did it). **Client data is still never stored** — the consultant

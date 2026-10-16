@@ -45,8 +45,9 @@ Every signed-in request names who it's for:
   * no `X-Acting-As` header -> the caller's own account.
   * `X-Acting-As: <client account id>` -> allowed ONLY when the caller is a
     consultant AND that client (or their business's team owner) is assigned to
-    them (accounts.consultant_id). Anyone else gets 403 — a client can never act
-    as another client, and a consultant can never open someone else's client.
+    them (accounts.consultant_id) — or the caller is an ADMIN (any client,
+    just in case). Anyone else gets 403 — a client can never act as another
+    client, and a consultant can never open someone else's client.
 The database repeats the safe default (RLS on, no public access); see db/schema.sql.
 Before real clients, add two-factor sign-in for consultants (Supabase MFA) —
 docs/ROADMAP.md.
@@ -58,7 +59,7 @@ from fastapi import HTTPException, status
 
 from api.core.config import get_settings
 from api.services import account_store
-from api.services.entitlements import plan_holder_id
+from api.services.entitlements import is_admin, plan_holder_id
 
 MAX_CAPACITY = 10   # the most clients one consultant can take (same CHECK in db/schema.sql)
 ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without a database, it may "
@@ -240,6 +241,33 @@ async def directory() -> list[dict]:
     return sorted(rows, key=lambda c: not c["is_default"])
 
 
+async def directory_page(page: int = 1, page_size: int = 8, q: str = "") -> dict:
+    """
+    One page of the consultant directory (the "pick your consultant" panel).
+
+    Consultants with room come first (default consultant first among them),
+    then full ones; `q` filters by first name.
+
+    Args:
+        page: int, 1-based page number (out-of-range pages come back empty).
+        page_size: int, consultants per page (1 to 50).
+        q: str, part of a first name ("" = everyone).
+
+    Returns:
+        dict: {"consultants": [load(...), ...], "page", "page_size", "total", "pages"}.
+
+    Example:
+        >>> (await directory_page(1, 8))["total"]
+        12
+    """
+    page_size = max(1, min(page_size, 50))
+    everyone = [c for c in await directory() if q.strip().lower() in c["name"].lower()]
+    everyone.sort(key=lambda c: (c["full"], not c["is_default"], c["name"].lower()))
+    start = (max(page, 1) - 1) * page_size
+    return {"consultants": everyone[start:start + page_size], "page": max(page, 1), "page_size": page_size,
+            "total": len(everyone), "pages": max(1, -(-len(everyone) // page_size))}
+
+
 async def default_consultant() -> dict | None:
     """
     Find the default consultant: the first ADMIN_EMAILS address's consultant row.
@@ -363,11 +391,12 @@ def client_summary(acc: dict) -> dict:
 
 async def acting_context(token: dict, acting_as: str | None) -> dict:
     """
-    Decide who this request is for: {"account", "consultant", "acting"}.
+    Decide who this request is for: {"account", "consultant", "acting", "admin"}.
 
       account    the account whose plan, team and billing apply
       consultant the caller's consultant row (None for clients)
       acting     True when a consultant is working on a client's account
+      admin      True when the CALLER is an admin (every tool free, any client)
 
     THE ACCESS RULE: with no `acting_as` (or the caller's own id) the request is
     for the caller. Otherwise the caller must be a consultant AND the client's plan
@@ -379,7 +408,7 @@ async def acting_context(token: dict, acting_as: str | None) -> dict:
         acting_as: str | None, the client account id from the `X-Acting-As` header.
 
     Returns:
-        dict: {"account": dict, "consultant": dict | None, "acting": bool}.
+        dict: {"account": dict, "consultant": dict | None, "acting": bool, "admin": bool}.
 
     Raises:
         HTTPException: 401 if the caller's account no longer exists (ACCOUNT_GONE);
@@ -395,16 +424,19 @@ async def acting_context(token: dict, acting_as: str | None) -> dict:
     if me is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
     consultant = await account_store.get_consultant_by_account(str(me["id"]))
+    admin = is_admin(me)
     if not acting_as or acting_as == str(me["id"]):
-        return {"account": me, "consultant": consultant, "acting": False}
+        return {"account": me, "consultant": consultant, "acting": False, "admin": admin}
     if consultant is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only consultants can work on another account.")
     client = await account_store.get_account(acting_as)
     if client is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That client was not found.")
+    if admin:
+        return {"account": client, "consultant": consultant, "acting": True, "admin": True}
     # A business's consultant is set on its team owner; colleagues follow the owner.
     holder_id = await plan_holder_id(client)
     holder = client if holder_id == str(client["id"]) else await account_store.get_account(holder_id)
     if not holder or str(holder.get("consultant_id") or "") != str(consultant["id"]):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="That client isn't assigned to you.")
-    return {"account": client, "consultant": consultant, "acting": True}
+    return {"account": client, "consultant": consultant, "acting": True, "admin": False}

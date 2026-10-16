@@ -282,3 +282,68 @@ def test_ai_can_be_added_only_after_data_is_stored():
     after = client.post("/api/billing/checkout", headers=_h(client_token),
                         json={"plan_ids": ["data_engineering", "ai"], "interval": "month"})
     assert after.status_code == 200, after.text
+
+
+CUSTOMERS = ("customer_id,customer_name,city\n" + "".join(f"{100 + i},Customer {i},{['Atlanta', 'Macon'][i % 2]}\n"
+                                                         for i in range(7))).encode()
+
+
+def test_combine_join_and_union_before_loading():
+    """
+    Two different tables in one upload: JOIN them on customer_id (each sales row gets the
+    customer's name and city), or STACK them; a key that repeats on both sides is refused.
+    """
+    from api.services import combine
+
+    sales = _sales_df()
+    customers = pd.read_csv(pd.io.common.BytesIO(CUSTOMERS))
+    joined, name = combine.combine(sales, "sales.csv", [("customers.csv", customers)],
+                                   {"mode": "join", "left_on": "customer_id", "right_on": "customer_id"})
+    assert name == "sales.csv + customers.csv" and len(joined) == len(sales)
+    assert joined.loc[0, "customer_name"] == "Customer 0" and "city" in joined.columns
+    stacked, _ = combine.combine(sales, "sales.csv", [("customers.csv", customers)], {"mode": "union"})
+    assert len(stacked) == len(sales) + len(customers) and set(stacked["source_table"]) == {"sales.csv", "customers.csv"}
+    with pytest.raises(ValueError, match="repeats rows"):
+        combine.combine(sales, "a", [("b", sales)], {"mode": "join", "left_on": "customer_id"})
+    with pytest.raises(ValueError, match="isn't a column"):
+        combine.combine(sales, "a", [("b", customers)], {"mode": "join", "left_on": "nope"})
+
+    # Through the API: the preview and the load use the joined table.
+    coach = _signup("coach@example.com", "Coach")["access_token"]
+    h = _h(coach, _signup("ana@example.com", wants_consultant=True)["account"]["id"])
+    files = _files() + _files(CUSTOMERS, "customers.csv")
+    spec = '{"mode": "join", "groups": [1], "left_on": "customer_id", "right_on": "customer_id"}'
+    preview = client.post("/api/warehouse/preview", headers=h, files=files, data={"group_id": "0", "combine": spec}).json()
+    assert preview["source_name"] == "sales.csv + customers.csv", preview
+    assert "customer_name" in [c["column"] for c in preview["column_plan"]]
+    ok = client.post("/api/warehouse/load", headers=h, files=files,
+                     data={"group_id": "0", "combine": spec, "fingerprint": preview["fingerprint"], "consent": "true"})
+    assert ok.status_code == 200 and ok.json()["summary"]["sources"][0]["source_name"] == "sales.csv + customers.csv"
+
+
+def test_update_the_most_recent_upload_replaces_it():
+    """
+    "Update my most recent upload": the new file REPLACES the latest stored file (rows that
+    are gone disappear too) under the same name; any other source is refused.
+    """
+    coach = _signup("coach@example.com", "Coach")["access_token"]
+    h = _h(coach, _signup("ana@example.com", wants_consultant=True)["account"]["id"])
+
+    def load(body, name="sales.csv", replace=""):
+        data = {"replace_source": replace} if replace else {}
+        fp = client.post("/api/warehouse/preview", headers=h, files=_files(body, name), data=data).json()["fingerprint"]
+        return client.post("/api/warehouse/load", headers=h, files=_files(body, name),
+                           data={**data, "fingerprint": fp, "consent": "true"})
+
+    load(SALES)
+    summary = client.get("/api/warehouse/summary", headers=h).json()["warehouse"]
+    assert summary["latest_upload"] == "sales.csv"
+    before = summary["records"]
+    smaller = b"\n".join(SALES.split(b"\n")[:36]) + b"\n"          # header + 35 lines
+    res = load(smaller, "sales_fixed.csv", replace="sales.csv")
+    assert res.status_code == 200, res.text
+    after = res.json()["summary"]
+    assert [s["source_name"] for s in after["sources"]] == ["sales.csv"]   # same name, replaced
+    assert after["records"] < before
+    bad = client.post("/api/warehouse/preview", headers=h, files=_files(), data={"replace_source": "other.csv"})
+    assert bad.status_code == 400 and "most recent" in bad.json()["detail"]

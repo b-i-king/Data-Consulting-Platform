@@ -92,6 +92,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/auth.py` | Passwords: Supabase Auth, or local scrypt hashes | Sign-in rules, Google/Apple later |
 | `api/services/consultations.py` + `api/routers/consultations.py` | Free consultation → paid link; Cal.com webhook; consultant confirmation | Booking / consultation rules |
 | `api/services/warehouse_loader.py` | Plans a load: mapping, steps with "why", previews, fingerprint (pandas only) | Changing how files fit the warehouse |
+| `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
 | `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |
 | `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (the `fact.account_data` shape) | Changing how data is stored, or adding a source |

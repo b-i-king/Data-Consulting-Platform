@@ -13,17 +13,34 @@
 //   * CLIENTS: "Work as a consultant" — send a request; an admin approves or
 //     denies (status shown here). Approval switches this workspace to
 //     consultant mode on its next load.
+//   * EVERYONE with stored data (the account holder, their consultant working
+//     on them, or an admin): "Update your most recent upload" — pick the
+//     corrected file; it REPLACES the latest stored file (same name), after the
+//     usual preview. Data from connected apps (QuickBooks, ...) is edited in
+//     that app, not here.
+//   * YOUR OWN ACCOUNT (never shown while working on a client): "Delete my
+//     account" — type your email; the account and EVERYTHING in it is deleted
+//     (a business owner's whole team too). Cannot be undone.
 //
 // Server side: api/routers/consultants.py (settings), api/routers/accounts.py
-// (consultant-request).
+// (consultant-request, DELETE /me), api/routers/warehouse.py (replace_source).
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { API_URL, getConsultantSettings, newWebhookSecret, requestConsultantRole, saveConsultantSettings } from "@/lib/api";
-import type { Account, ConsultantSettings } from "@/lib/types";
+import { useMemo, useEffect, useState } from "react";
+import {
+  API_URL,
+  analyzeFiles,
+  deleteMyAccount,
+  getConsultantSettings,
+  newWebhookSecret,
+  requestConsultantRole,
+  saveConsultantSettings,
+} from "@/lib/api";
+import type { Account, AnalyzeResponse, CleaningInput, ConsultantSettings, WarehouseCounts } from "@/lib/types";
 import { LoadBar } from "@/components/consultants/ConsultantPicker";
-import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import WarehouseLoad from "@/components/explore/WarehouseLoad";
+import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
 export default function SettingsPanel(props: {
   token: string;
@@ -31,9 +48,165 @@ export default function SettingsPanel(props: {
   onAccount: (a: Account) => void;
   /** Consultants: told when "finish setting up" is done (or needed again). */
   onSetupNeeded?: (needed: boolean) => void;
+  /** True when a consultant (or admin) is working on a client: their stored data, not my account. */
+  acting: boolean;
+  /** Whose workspace is on screen (the client when acting). */
+  workspaceName: string;
+  /** What's stored for the workspace's account (null while loading). */
+  stored: WarehouseCounts | null;
+  /** The workspace's plan includes Data Engineering (storing and replacing data). */
+  canStore: boolean;
+  /** The plan holder (or their consultant) may replace data; team members may not. */
+  canChange: boolean;
+  onStoredChanged: (counts: WarehouseCounts) => void;
+  /** The account was deleted: sign out and go home. */
+  onDeleted: () => void;
 }) {
   const isConsultant = props.account.role === "consultant";
-  return isConsultant ? <ConsultantSetup token={props.token} onSetupNeeded={props.onSetupNeeded} /> : <AskToConsult {...props} />;
+  return (
+    <div className="space-y-5">
+      {!props.acting &&
+        (isConsultant ? <ConsultantSetup token={props.token} onSetupNeeded={props.onSetupNeeded} /> : <AskToConsult {...props} />)}
+      {props.stored?.latest_upload && props.canStore && props.canChange && (
+        <UpdateLatestUpload
+          token={props.token}
+          latest={props.stored.latest_upload}
+          name={props.workspaceName}
+          onStoredChanged={props.onStoredChanged}
+        />
+      )}
+      {!props.acting && <DeleteAccount token={props.token} account={props.account} onDeleted={props.onDeleted} />}
+    </div>
+  );
+}
+
+/** "Update your most recent upload": pick the corrected file; it replaces the stored one after a preview. */
+function UpdateLatestUpload(props: {
+  token: string;
+  latest: string;
+  name: string;
+  onStoredChanged: (counts: WarehouseCounts) => void;
+}) {
+  const [files, setFiles] = useState<File[]>([]);
+  const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const input: CleaningInput = useMemo(
+    () => ({ files, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }),
+    [files],
+  );
+
+  async function pick(chosen: File[]) {
+    setBusy(true);
+    setError(null);
+    setDone(false);
+    try {
+      setFiles(chosen);
+      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }));
+    } catch (e) {
+      setAnalysis(null);
+      setError(e instanceof Error ? e.message : "We couldn't read that file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="max-w-4xl">
+      <h2 className="font-semibold">Update your most recent upload</h2>
+      <p className="mt-1 text-sm text-ink-muted">
+        Fixed something in <strong>{props.latest}</strong>? Choose the corrected file: after the usual preview it
+        replaces the stored one (same name), and rows no longer in the file are removed. Data from connected apps
+        (QuickBooks, ...) is edited in that app, then refreshed — not here.
+      </p>
+      <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
+        {busy ? "Cleaning your file…" : "Choose the corrected file"}
+        <input type="file" className="sr-only" disabled={busy} onChange={(e) => e.target.files?.length && pick(Array.from(e.target.files))} />
+      </label>
+      <ErrorBox message={error} />
+      {done && <p className="mt-3 text-sm text-good" role="status">Updated. ✓</p>}
+      {analysis && analysis.groups[0] && !done && (
+        <div className="mt-5">
+          <WarehouseLoad
+            key={`replace-${files.map((f) => f.name).join()}`}
+            token={props.token}
+            input={input}
+            groupId={analysis.groups[0].group_id}
+            clientName={props.name}
+            canDelete={false}
+            replaceSource={props.latest}
+            onStoredChanged={props.onStoredChanged}
+            onLoaded={() => setDone(true)}
+            compact
+          />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** "Delete my account": type your email to confirm; everything goes. */
+function DeleteAccount(props: { token: string; account: Account; onDeleted: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const owner = props.account.team_role === "owner";
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteMyAccount(props.token, typed);
+      props.onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't delete the account.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="max-w-xl border-bad/40">
+      <h2 className="font-semibold text-bad">Delete my account</h2>
+      <p className="mt-1 text-sm text-ink-muted">
+        Deletes your account and everything in it: stored data, your package (billing stops), downloads history,
+        consultations and connectors.
+        {owner && " As your business's owner, your colleagues' accounts are deleted too."} This can&apos;t be undone.
+      </p>
+      <Button variant="secondary" className="mt-4" onClick={() => setAsking(true)}>
+        Delete my account…
+      </Button>
+      {asking && (
+        <ConfirmDialog
+          title="Delete your account for good?"
+          confirmLabel={busy ? "Deleting…" : "Delete everything"}
+          onConfirm={() => {
+            if (busy) return;
+            if (typed.trim().toLowerCase() !== props.account.email) setError("Type your email address exactly to confirm.");
+            else remove();
+          }}
+          onCancel={() => {
+            setAsking(false);
+            setTyped("");
+          }}
+        >
+          <p>
+            Type <strong>{props.account.email}</strong> to confirm. Everything is deleted at once and can&apos;t be brought
+            back.
+          </p>
+          <input
+            className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            aria-label="Your email address"
+            autoComplete="off"
+          />
+          <ErrorBox message={error} />
+        </ConfirmDialog>
+      )}
+    </Card>
+  );
 }
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-consultant";

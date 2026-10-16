@@ -418,7 +418,8 @@ export default function AuthForm({
                   {consultants.find((c) => c.id === pick)?.name ?? "whoever has room"} (chosen on Your needs).
                 </p>
               ) : (
-                <ConsultantPicker consultants={consultants} value={pick} onChange={setPick} plan={plan} onPlan={setPlan} />
+                // The consultant panel slides in as soon as the box is ticked.
+                <ConsultantPicker consultants={consultants} value={pick} onChange={setPick} plan={plan} onPlan={setPlan} autoOpen />
               ))}
           </div>
         )}

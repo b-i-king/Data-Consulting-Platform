@@ -9,6 +9,19 @@
 
 import Link from "next/link";
 import { categoryColor } from "@/lib/categories";
+import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
+
+// The first-visit guide for this page (components/ui/Tour.tsx).
+const HOME_TOUR: TourStep[] = [
+  { target: "home-start", title: "Start here — no account needed",
+    body: "Start as a guest: tell us a little about you, upload a file, and see it cleaned in minutes. You only make an account when you want to download or keep going." },
+  { target: "home-how", title: "How it works",
+    body: "Four steps: about you, upload, clean, then choose what's next — just download, do it yourself with a monthly package, or have a consultant do it." },
+  { target: "home-services", title: "The seven services",
+    body: "Data Cleaning is always included. The others (dashboards, analysis, storage, ML, AI) open with a package or with a consultant." },
+  { target: "home-signin", title: "Coming back?",
+    body: "Sign in with your email and password to open your workspace: your tools, your stored data and your dashboards." },
+];
 
 const STEPS = [
   { title: "Tell us about you", body: "Individual or business, and where your data lives today." },
@@ -30,6 +43,7 @@ const CATEGORIES = [
 export default function Home() {
   return (
     <div className="space-y-16">
+      <Tour id="home" steps={HOME_TOUR} />
       <section className="hero-glow -mx-4 space-y-6 rounded-3xl px-4 pb-10 pt-10 sm:px-8">
         <span className="inline-block rounded-full border border-line bg-surface px-3 py-1 font-mono text-xs text-ink-muted">
           Start free as a guest · no account needed
@@ -42,7 +56,7 @@ export default function Home() {
           for the processing time you use, and bring in a consultant when you&apos;re ready.
         </p>
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3" data-tour="home-start">
             <Link
               href="/start"
               className="rounded-full bg-brand px-6 py-2.5 font-semibold text-on-brand hover:bg-brand-strong"
@@ -55,9 +69,10 @@ export default function Home() {
             >
               See services
             </a>
+            <TourButton id="home" />
           </div>
           {/* Returning visitors and people ready for an account: sign in by email. */}
-          <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3 text-sm" data-tour="home-signin">
             <span className="text-ink-muted">Or, with your email address:</span>
             <Link href="/signin" className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand">
               Sign in
@@ -72,7 +87,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section aria-labelledby="how" className="space-y-4">
+      <section aria-labelledby="how" className="space-y-4" data-tour="home-how">
         <h2 id="how" className="text-xl font-semibold">
           How it works
         </h2>
@@ -87,7 +102,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="services" aria-labelledby="services-title" className="space-y-4">
+      <section id="services" aria-labelledby="services-title" className="space-y-4" data-tour="home-services">
         <h2 id="services-title" className="text-xl font-semibold">
           Services
         </h2>

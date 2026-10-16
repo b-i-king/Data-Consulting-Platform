@@ -38,6 +38,7 @@ from api.core.security import get_current_account
 from api.models.accounts import ConsultantSettingsIn, SignupIn
 from api.routers.accounts import create_client_account
 from api.services import account_store, consultants
+from api.services.entitlements import is_admin
 
 router = APIRouter(prefix="/consultant")
 
@@ -95,10 +96,16 @@ async def my_clients(token: Annotated[dict, Depends(get_current_account)]):
     """
     consultant = await _me(token)
     clients = await account_store.list_clients(str(consultant["id"]))
+    assigned = len(clients)                      # the fill bar counts only MY clients
+    me = await account_store.get_account(token["sub"])
+    if is_admin(me):
+        # An admin can open ANY client (just in case): theirs first, then everyone else.
+        mine = {str(c["id"]) for c in clients}
+        clients += [c for c in await account_store.list_all_clients() if str(c["id"]) not in mine]
     return {
         "consultant": {"id": str(consultant["id"]), "name": consultant["display_name"]},
         "clients": [consultants.client_summary(c) for c in clients],
-        "load": consultants.load({**consultant, "client_count": len(clients)}),
+        "load": consultants.load({**consultant, "client_count": assigned}),
     }
 
 
