@@ -7,8 +7,21 @@ Consultant endpoints (consultants only — everyone else gets 403).
                                    it to me (for clients who'd rather not sign
                                    up themselves). Same fields as signup.
                                    Refused when I'm at my capacity.
-    GET  /api/consultant/settings  my capacity and how full I am
-    PUT  /api/consultant/settings  change my capacity (1 to 10 clients)
+    GET  /api/consultant/settings  my capacity, how full I am, my Cal.com links
+                                   and my Cal.com webhook (URL path + secret)
+    PUT  /api/consultant/settings  change my capacity (1 to 10) and/or my links
+    POST /api/consultant/settings/webhook-secret   make (or replace) my webhook secret
+
+CAL.COM, PER CONSULTANT
+-----------------------
+A new consultant finishes setting up in Settings:
+  1. "Your booking links": their FREE 30-minute Cal.com link and their PAID
+     session link (paid on their own Cal.com + Stripe, so they're paid directly).
+     Their clients then see these links (api/services/consultations.py links_for).
+  2. "Your Cal.com webhook": the app makes a secret; they create a webhook in
+     Cal.com -> Settings -> Developer -> Webhooks with the subscriber URL
+     <API>/api/consultations/calcom-webhook/<their consultant id> and that
+     secret. Bookings then arrive signed, and are recorded as theirs.
 
 To then work on a client, the website sends `X-Acting-As: <client id>` with
 the signed-in requests (see api/services/consultants.py for the access rule).
@@ -16,12 +29,13 @@ the signed-in requests (see api/services/consultants.py for the access rule).
 
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import get_current_account
-from api.models.accounts import CapacityIn, SignupIn
+from api.models.accounts import ConsultantSettingsIn, SignupIn
 from api.routers.accounts import create_client_account
 from api.services import account_store, consultants
 
@@ -137,42 +151,104 @@ async def my_settings(token: Annotated[dict, Depends(get_current_account)]):
         token: dict, the decoded login token (injected by `get_current_account`).
 
     Returns:
-        dict: {"load": {"id", "name", "capacity", "clients", "percent", "full", ...},
-        "max_capacity": 10}.
+        dict: see `_settings_out` — load, max_capacity, booking links, webhook,
+        setup_needed.
 
     Raises:
         HTTPException: 401 without a valid token; 403 for non-consultants.
 
     Example:
         GET /api/consultant/settings
-        -> 200 {"load": {"capacity": 3, "clients": 1, "percent": 33, ...}, "max_capacity": 10}
+        -> 200 {"load": {"capacity": 3, "clients": 1, "percent": 33, ...}, "max_capacity": 10,
+                "free_booking_url": null, "webhook": {"path": "/api/consultations/calcom-webhook/...",
+                "secret": null}, "setup_needed": true}
     """
     consultant = await _me(token)
+    return await _settings_out(consultant)
+
+
+async def _settings_out(consultant: dict) -> dict:
+    """
+    A consultant's Settings page: capacity, load, Cal.com links and webhook.
+
+    Args:
+        consultant: dict, the consultant's consultants row.
+
+    Returns:
+        dict: {"load", "max_capacity", "free_booking_url", "paid_booking_url",
+        "webhook": {"path", "secret"}, "setup_needed"} — setup_needed is True
+        until the free booking link is saved (the onboarding nudge).
+    """
     count = await account_store.count_clients(str(consultant["id"]))
-    return {"load": consultants.load({**consultant, "client_count": count}), "max_capacity": consultants.MAX_CAPACITY}
+    return {
+        "load": consultants.load({**consultant, "client_count": count}),
+        "max_capacity": consultants.MAX_CAPACITY,
+        "free_booking_url": consultant.get("free_booking_url"),
+        "paid_booking_url": consultant.get("paid_booking_url"),
+        # The website adds its API address in front of the path. The secret is
+        # shown only to this consultant (it signs their own webhook).
+        "webhook": {"path": f"/api/consultations/calcom-webhook/{consultant['id']}",
+                    "secret": consultant.get("calcom_webhook_secret")},
+        "setup_needed": not consultant.get("free_booking_url"),
+    }
 
 
 @router.put("/settings")
-async def change_settings(body: CapacityIn, token: Annotated[dict, Depends(get_current_account)]):
+async def change_settings(body: ConsultantSettingsIn, token: Annotated[dict, Depends(get_current_account)]):
     """
-    PUT /api/consultant/settings — change how many clients I take at once.
+    PUT /api/consultant/settings — change my capacity and/or my Cal.com booking links.
 
-    Lowering it below my current clients drops nobody; I just can't be picked
-    until I have room again.
+    Lowering capacity below my current clients drops nobody; I just can't be
+    picked until I have room again. An empty link clears it (my clients then
+    see the default links).
 
     Args:
-        body: CapacityIn, the new capacity (1 to 10).
+        body: ConsultantSettingsIn, only the fields that change.
         token: dict, the decoded login token (injected by `get_current_account`).
 
     Returns:
-        dict: {"load": {...}, "max_capacity": 10} with the new capacity.
+        dict: the refreshed settings (see `_settings_out`).
 
     Raises:
-        HTTPException: 401 / 403 as above; 422 outside 1..10.
+        HTTPException: 401 / 403 as above; 422 for a capacity outside 1..10 or
+            a link that isn't https://.
 
     Example:
-        PUT /api/consultant/settings  {"capacity": 5}
-        -> 200 {"load": {"capacity": 5, "clients": 1, "percent": 20, ...}, "max_capacity": 10}
+        PUT /api/consultant/settings  {"capacity": 5, "free_booking_url": "https://cal.com/kim/30min"}
+        -> 200 {"load": {"capacity": 5, ...}, "free_booking_url": "https://cal.com/kim/30min", ...}
     """
     consultant = await _me(token)
-    return {"load": await consultants.set_capacity(consultant, body.capacity), "max_capacity": consultants.MAX_CAPACITY}
+    if body.capacity is not None:
+        await consultants.set_capacity(consultant, body.capacity)
+    links = {k: (v or None) for k, v in (("free_booking_url", body.free_booking_url),
+                                         ("paid_booking_url", body.paid_booking_url)) if v is not None}
+    if links:
+        await account_store.set_consultant_cal(str(consultant["id"]), **links)
+    return await _settings_out(await account_store.get_consultant(str(consultant["id"])))
+
+
+@router.post("/settings/webhook-secret")
+async def new_webhook_secret(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/consultant/settings/webhook-secret — make (or replace) my Cal.com webhook secret.
+
+    The secret is 32 random bytes (secrets.token_urlsafe), so it can't be
+    guessed. Paste it into the webhook in Cal.com. Replacing it stops the old
+    one at once: update Cal.com with the new one.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: the refreshed settings, with webhook.secret set.
+
+    Raises:
+        HTTPException: 401 / 403 as above.
+
+    Example:
+        POST /api/consultant/settings/webhook-secret
+        -> 200 {"webhook": {"path": "/api/consultations/calcom-webhook/...", "secret": "q8Yw..."}, ...}
+    """
+    consultant = await _me(token)
+    row = await account_store.set_consultant_cal(str(consultant["id"]), calcom_webhook_secret=secrets.token_urlsafe(32))
+    return await _settings_out(row)

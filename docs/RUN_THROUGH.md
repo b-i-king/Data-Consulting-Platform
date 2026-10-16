@@ -116,6 +116,9 @@ sign-in becomes theirs.
   workspace, pick that client in **Working on**: Data Engineering → **Use my
   stored data** opens the same table. (Skip the share step and nothing is
   stored — files only live in the guest's browser tab.)
+- **Sign in as Consultant** — the **Account | Consultant** switch at the top of
+  sign-in. "Consultant" works only for approved consultants; a client (or
+  someone still waiting for approval) gets a clear message.
 - **Capacity** — in **⚙️ Settings**, set your capacity to 1. Once you have one
   client, the picker shows you red/full and new clients can't pick you.
 
@@ -205,6 +208,32 @@ own. Two ways in, one rule:
    - Secret: a long random string → put the same value in `CALCOM_WEBHOOK_SECRET`.
    - Cal.com can't reach `localhost`, so the webhook works once the API is on
      Render. Locally, use **Add a call by hand**.
+
+**Each consultant's own Cal.com (recommended once you have consultants).**
+A new consultant sees **Finish setting up** in their workspace → **⚙️ Settings**:
+
+1. **Your booking links** — they paste their own free 30-minute link and paid
+   session link (their Cal.com, with Cal.com's Stripe app on the paid event, so
+   they're paid directly). Their clients now see these links.
+2. **Your Cal.com webhook** — they press **Make my webhook secret**, then in
+   Cal.com → Settings → Developer → Webhooks → **New**, paste the
+   **Subscriber URL** shown (`…/api/consultations/calcom-webhook/<their id>`)
+   and the **secret**, tick the triggers listed, and save (Cal.com's **Ping
+   test** should say OK). Bookings through it are saved with their
+   `consultant_id`.
+
+**One webhook covers both events.** Create it once at the *account* level
+(Settings → Developer → Webhooks), not inside each event type — it fires for
+the free and the paid event alike. (If you already added it inside an event
+type, use the same URL and secret on the other one.) The app tells free from
+paid by the link it showed the client, or — for bookings made straight on
+Cal.com — by the booked event's name (`data-consultation` vs
+`paid-data-consultation`), matched against your saved links.
+
+**No environment variables needed.** Once you (the first `ADMIN_EMAILS`
+address) save your links in Settings, guests and every client without their
+own consultant's links see yours. `BOOKING_URL`, `PAID_BOOKING_URL` and
+`CALCOM_WEBHOOK_SECRET` are only a fallback and can stay empty.
 
 **Test it:**
 

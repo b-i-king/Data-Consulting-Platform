@@ -144,7 +144,12 @@ class SignupIn(BaseModel):
     wants_consultant: bool = False
     consultant_id: str | None = Field(default=None, max_length=64)
     consultant_plan: Literal["one_time", "monthly"] | None = None
-    # "I'd like to work as a consultant": waits for an admin's approval.
+    # Who is signing up (the clean choice at the bottom of the form):
+    #   "client"     the default
+    #   "consultant" a REQUEST to be a consultant (waits for an admin)
+    #   "admin"      only works for an ADMIN_EMAILS address (refused otherwise)
+    signup_as: Literal["client", "consultant", "admin"] = "client"
+    # Older name for signup_as="consultant" (still accepted).
     consultant_request: bool = False
     # The Terms of Service + Privacy Policy box. POST /api/accounts/signup
     # refuses a sign-up without it; a consultant adding a client leaves it out.
@@ -375,6 +380,10 @@ class SignupIn(BaseModel):
 class SigninIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+    # The "Account | Consultant" choice at the top of the sign-in form. True =
+    # "I'm signing in as a consultant": refused (after the password checks out)
+    # when this account isn't an approved consultant.
+    as_consultant: bool = False
 
     @field_validator("email", mode="before")
     @classmethod
@@ -494,10 +503,45 @@ class RefreshIn(BaseModel):
     refresh_frequency: Literal["manual", "weekly", "daily", "hourly", "live"]
 
 
-class CapacityIn(BaseModel):
-    """A consultant's own setting: how many clients they take at once."""
+class ConsultantSettingsIn(BaseModel):
+    """
+    A consultant's own settings; send only what changes.
 
-    capacity: int = Field(ge=1, le=10)   # consultants.MAX_CAPACITY
+      capacity          how many clients at once (1 to 10, consultants.MAX_CAPACITY)
+      free_booking_url  their free 30-minute Cal.com link ("" clears it)
+      paid_booking_url  their paid session link ("" clears it)
+    Links must be https:// addresses.
+    """
+
+    capacity: int | None = Field(default=None, ge=1, le=10)
+    free_booking_url: str | None = Field(default=None, max_length=500)
+    paid_booking_url: str | None = Field(default=None, max_length=500)
+
+    @field_validator("free_booking_url", "paid_booking_url")
+    @classmethod
+    def _https(cls, v: str | None) -> str | None:
+        """
+        Keep booking links safe to show clients: https only, no spaces.
+
+        Args:
+            v: str | None, the link as typed ("" = clear it).
+
+        Returns:
+            str | None: the trimmed link, "" to clear, or None for "no change".
+
+        Raises:
+            ValueError: "Use a full https:// link, like https://cal.com/you/30min."
+
+        Example:
+            >>> ConsultantSettingsIn(free_booking_url=" https://cal.com/kim/30min ").free_booking_url
+            'https://cal.com/kim/30min'
+        """
+        if v is None:
+            return None
+        v = v.strip()
+        if v and (not v.lower().startswith("https://") or " " in v or len(v) < 12):
+            raise ValueError("Use a full https:// link, like https://cal.com/you/30min.")
+        return v
 
 
 class ChooseConsultantIn(BaseModel):

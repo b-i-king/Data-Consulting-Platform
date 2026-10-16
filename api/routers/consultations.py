@@ -4,6 +4,9 @@ Consultation endpoints (the free first call, then paid sessions).
     POST /api/consultations/calcom-webhook   Cal.com tells us a booking was made,
                                              rescheduled, canceled, or ended
                                              (signed with CALCOM_WEBHOOK_SECRET)
+    POST /api/consultations/calcom-webhook/{consultant_id}
+                                             the same, from ONE consultant's own
+                                             Cal.com (signed with their secret)
     GET  /api/consultations                  the client's consultations and which
                                              booking link to show (free or paid)
     POST /api/consultations                  CONSULTANT ONLY, working on a client:
@@ -23,7 +26,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from api.core.security import get_acting_context
 from api.models.accounts import ConsultationUpdateIn
-from api.services import consultations
+from api.services import account_store, consultations
 
 router = APIRouter(prefix="/consultations")
 
@@ -56,13 +59,57 @@ async def calcom_webhook(request: Request,
     """
     raw = await request.body()
     consultations.verify_signature(raw, x_cal_signature_256)
+    return await consultations.handle_webhook(_event(raw))
+
+
+def _event(raw: bytes) -> dict:
+    """The webhook body as a dict (400 when it isn't a JSON object)."""
     try:
         event = json.loads(raw or b"{}")
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Webhook body must be JSON.")
     if not isinstance(event, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Webhook body must be a JSON object.")
-    return await consultations.handle_webhook(event)
+    return event
+
+
+@router.post("/calcom-webhook/{consultant_id}")
+async def consultant_calcom_webhook(consultant_id: str, request: Request,
+                                    x_cal_signature_256: Annotated[str | None, Header()] = None):
+    """
+    POST /api/consultations/calcom-webhook/{consultant_id} — one consultant's own Cal.com.
+
+    Each consultant creates this webhook in THEIR Cal.com (Settings -> Developer
+    -> Webhooks), with the URL and secret shown in their workspace Settings.
+    Bookings are saved with their consultant id, so their sessions are theirs.
+
+    Args:
+        consultant_id: str, the consultants row id (in the URL).
+        request: Request, the raw request (the signature covers the exact bytes).
+        x_cal_signature_256: str | None, Cal.com's signature header.
+
+    Returns:
+        dict: {"ok": True, "action": ..., "consultation_id": ...}.
+
+    Raises:
+        HTTPException: 404 for an unknown consultant; 503 when they haven't made
+            a secret yet; 401 for a bad signature; 400 for a body that isn't JSON.
+
+    Example:
+        POST /api/consultations/calcom-webhook/53dec388-...
+        X-Cal-Signature-256: 5f0c...
+        {"triggerEvent": "BOOKING_CREATED", "payload": {"uid": "bk_1", ...}}
+        -> 200 {"ok": true, "action": "booked", "consultation_id": "..."}
+    """
+    try:
+        consultant = await account_store.get_consultant(consultant_id)
+    except ValueError:      # not a valid id
+        consultant = None
+    if consultant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown consultant.")
+    raw = await request.body()
+    consultations.verify_signature(raw, x_cal_signature_256, consultant.get("calcom_webhook_secret") or "")
+    return await consultations.handle_webhook(_event(raw), consultant_id=str(consultant["id"]))
 
 
 @router.get("")

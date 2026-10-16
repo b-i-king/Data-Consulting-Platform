@@ -44,9 +44,11 @@ coding, so **understanding the code matters as much as the code itself**.
 
 ## Git
 
-- Commit finished, tested work to the current feature branch, then push it
-  (`git push -u origin <branch>`). Never push to `main`/`master` directly and
-  never force-push.
+- **Only stage changes** (`git add`) when work is finished and tested. Do NOT
+  commit, push, or open a pull request / merge request on your own — the owner
+  often makes more updates first and does the commit, push and merge request
+  themselves. Do any of those only when the owner explicitly asks for it.
+- Never push to `main`/`master` directly and never force-push.
 
 ## Commands
 

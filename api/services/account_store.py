@@ -609,7 +609,8 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
         cid = str(uuid.uuid4())
         _consultants[cid] = {"id": cid, "account_id": str(account["id"]), "display_name": name,
                              "email": account["email"], "is_default": is_default, "active": True,
-                             "capacity": DEFAULT_CAPACITY, "created_at": _now()}
+                             "capacity": DEFAULT_CAPACITY, "free_booking_url": None, "paid_booking_url": None,
+                             "calcom_webhook_secret": None, "created_at": _now()}
         return _consultants[cid]
     row = await database.pool.fetchrow(
         """INSERT INTO dim.consultants (account_id, display_name, email, is_default)
@@ -782,6 +783,39 @@ async def set_consultant_for(account_id: str, consultant_id: str | None, plan: s
            WHERE id = $1""",
         uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, plan,
     )
+
+
+async def set_consultant_cal(consultant_id: str, **fields) -> dict | None:
+    """
+    Save a consultant's Cal.com settings: booking links and/or webhook secret.
+
+    Only the keys given are written (free_booking_url, paid_booking_url,
+    calcom_webhook_secret); None clears one.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        **fields: any of free_booking_url, paid_booking_url, calcom_webhook_secret.
+
+    Returns:
+        dict | None: the updated consultants row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_consultant_cal(cid, free_booking_url="https://cal.com/kim/30min"))["free_booking_url"]
+        'https://cal.com/kim/30min'
+    """
+    allowed = ("free_booking_url", "paid_booking_url", "calcom_webhook_secret")
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if database.pool is None:
+        row = _consultants.get(consultant_id)
+        if row:
+            row.update(fields)
+        return row
+    if not fields:
+        return await get_consultant(consultant_id)
+    sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+    row = await database.pool.fetchrow(f"UPDATE dim.consultants SET {sets} WHERE id = $1 RETURNING *",
+                                       uuid.UUID(consultant_id), *fields.values())
+    return dict(row) if row else None
 
 
 # ── Roles: admins and consultant requests ──────────────────────────────────────
@@ -1082,8 +1116,9 @@ async def set_subscription_status(subscription_id: str, status: str, cancel_at_p
 # ── Consultations (table dim.consultations; see api/services/consultations.py) ──
 
 _CONSULTATION_FIELDS = ("account_id", "attendee_email", "attendee_name", "kind", "status", "source",
-                        "calcom_booking_uid", "starts_at", "ends_at", "confirmed_by", "confirmed_at", "note")
-_UUID_FIELDS = {"account_id", "confirmed_by"}   # stored as UUID in Postgres
+                        "calcom_booking_uid", "starts_at", "ends_at", "consultant_id", "confirmed_by",
+                        "confirmed_at", "note")
+_UUID_FIELDS = {"account_id", "consultant_id", "confirmed_by"}   # stored as UUID in Postgres
 
 
 def _db_value(field: str, value):

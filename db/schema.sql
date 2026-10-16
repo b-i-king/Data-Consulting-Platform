@@ -124,6 +124,12 @@ CREATE INDEX IF NOT EXISTS idx_accounts_naics      ON dim.accounts (naics_sector
 -- capacity: how many clients they take at once (they set it in the
 -- workspace, 1 to 10; default 3). Clients pick a consultant by name and see
 -- how full they are; a full consultant can't be picked.
+-- Cal.com, per consultant (Settings -> "Your booking links"): their FREE
+-- 30-minute link and their PAID session link (paid through their own Cal.com
+-- + Stripe, so they get paid directly). Their clients see these links instead
+-- of BOOKING_URL / PAID_BOOKING_URL. calcom_webhook_secret: made by the app,
+-- pasted by the consultant into Cal.com -> Settings -> Developer -> Webhooks,
+-- with the subscriber URL /api/consultations/calcom-webhook/<consultant id>.
 CREATE TABLE IF NOT EXISTS dim.consultants (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id    UUID NOT NULL UNIQUE REFERENCES dim.accounts (id) ON DELETE CASCADE,
@@ -132,6 +138,9 @@ CREATE TABLE IF NOT EXISTS dim.consultants (
     is_default    BOOLEAN NOT NULL DEFAULT false,    -- "do it for me" clients who pick nobody go here
     active        BOOLEAN NOT NULL DEFAULT true,
     capacity      INTEGER NOT NULL DEFAULT 3 CHECK (capacity BETWEEN 1 AND 10),   -- MAX_CAPACITY in consultants.py
+    free_booking_url      TEXT,                      -- e.g. 'https://cal.com/kim/30min' (free first consultation)
+    paid_booking_url      TEXT,                      -- e.g. 'https://cal.com/kim/session' (paid on Cal.com)
+    calcom_webhook_secret TEXT,                      -- signs this consultant's Cal.com webhook (NULL = not set up)
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -150,6 +159,9 @@ ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_version TEXT;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 3
     CHECK (capacity BETWEEN 1 AND 10);
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS free_booking_url TEXT;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS paid_booking_url TEXT;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS calcom_webhook_secret TEXT;
 -- The admin's to-do list: who is waiting for a decision.
 CREATE INDEX IF NOT EXISTS idx_accounts_consultant_request ON dim.accounts (consultant_request)
     WHERE consultant_request = 'pending';
@@ -226,6 +238,9 @@ CREATE TABLE IF NOT EXISTS dim.consultations (
     calcom_booking_uid  TEXT UNIQUE,                 -- Cal.com's booking id (NULL for manual rows)
     starts_at           TIMESTAMPTZ,
     ends_at             TIMESTAMPTZ,
+    -- Whose calendar it was booked on (the consultant's own webhook), so each
+    -- consultant's sessions can be counted and paid. NULL = the shared link.
+    consultant_id       UUID REFERENCES dim.consultants (id) ON DELETE SET NULL,
     confirmed_by        UUID REFERENCES dim.consultants (id) ON DELETE SET NULL,
     confirmed_at        TIMESTAMPTZ,
     note                TEXT,
@@ -234,6 +249,7 @@ CREATE TABLE IF NOT EXISTS dim.consultations (
 );
 CREATE INDEX IF NOT EXISTS idx_consultations_account ON dim.consultations (account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_consultations_email   ON dim.consultations (attendee_email);
+ALTER TABLE dim.consultations ADD COLUMN IF NOT EXISTS consultant_id UUID REFERENCES dim.consultants (id) ON DELETE SET NULL;
 
 -- ── dim.usage_events: one row per download (runtime billing) ────────────────
 -- Metadata only — never the data itself.
