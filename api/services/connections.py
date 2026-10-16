@@ -3,8 +3,11 @@ Integrations (connected data sources) and how often they refresh.
 
 Two KINDS, shown as two sections in Settings -> Integrations:
 
-  * BUSINESS TOOLS (QuickBooks first) COPY the client's data into managed
-    storage on a schedule, so they need the Data Engineering tool.
+  * BUSINESS TOOLS (QuickBooks, Xero) are connected with a "Connect" sign-in
+    (api/services/oauth.py). Connected, they give a free LIVE quick look and
+    can be opened in the workspace — read when asked, never stored
+    (api/services/business_tools.py). Storing them on a schedule (history,
+    trends, combining sources) is the Data Engineering sync, coming next.
   * CLOUD STORAGE (a client's own Supabase / PostgreSQL database first) is
     READ WHERE IT LIVES, never copied: the client already manages it. It
     feeds analysis, dashboards, ML and AI; storing is switched off for it.
@@ -35,17 +38,60 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from api.services import oauth
+from api.services.business_tools import daily_budget
 from api.services.pricing import DEFAULT_REFRESH, REFRESH_OPTIONS_BY_ID
 
-# Connectors a client can set a schedule for. "available" False = shown as
-# coming soon: the schedule can be chosen now and starts once it's connected.
+# The integrations. "sign_in": connected with a "Connect" button (OAuth) —
+# offered only once the platform's keys for it are set (oauth.configured), so
+# until then it shows as coming soon. "live": has the free quick look.
+# "stores_data": has a refresh schedule for the (coming) stored sync.
 CONNECTORS: dict[str, dict] = {
     "quickbooks": {"name": "QuickBooks Online", "kind": "business_tool", "available": False, "stores_data": True,
-                   "about": "Invoices, payments, expenses and customers, refreshed on your schedule into your stored data."},
-    "supabase": {"name": "Supabase database", "kind": "cloud_storage", "available": True, "stores_data": False,
-                 "about": "Your own Supabase (or any PostgreSQL) database, read where it lives. Nothing is copied."},
+                   "sign_in": True, "live": True,
+                   "about": "Income, expenses, what customers owe you, top customers — live from QuickBooks, nothing "
+                            "stored. Storing it on your schedule (for history and trends) comes with Data Engineering."},
+    "xero": {"name": "Xero", "kind": "business_tool", "available": False, "stores_data": True,
+             "sign_in": True, "live": True,
+             "about": "Income, expenses, what customers owe you, top customers — live from Xero, nothing stored. "
+                      "Storing it on your schedule (for history and trends) comes with Data Engineering."},
+    "supabase": {"name": "Supabase / PostgreSQL database", "kind": "cloud_storage", "available": True, "stores_data": False,
+                 "sign_in": False, "live": False,
+                 "about": "Your own Supabase database — or any PostgreSQL, such as Amazon RDS / Aurora PostgreSQL, "
+                          "Google Cloud SQL, Azure Database for PostgreSQL or Neon — read where it lives. Nothing is copied."},
 }
 KINDS = {"cloud_storage": "Cloud storage", "business_tool": "Business tools"}
+
+# What's on the way, shown under each section of Settings -> Integrations so
+# clients know their tool is planned. NOT connectors: nothing can be set up
+# for them yet, and they never get a dim.data_connections row. "when":
+#   "soon"  = next in line (the most-asked tools, with well-documented APIs)
+#   "later" = planned after those
+# Cloud storage stays read-where-it-lives; business tools are copied into
+# managed storage like QuickBooks (docs/CONNECTORS.md). Keep the names in step
+# with the questionnaire's options (api/services/intake.py DATA_LOCATIONS).
+# When one is built, move it into CONNECTORS and delete it here.
+COMING_SOON: list[dict] = [
+    {"name": "Snowflake", "kind": "cloud_storage", "when": "soon"},
+    {"name": "Google BigQuery", "kind": "cloud_storage", "when": "soon"},
+    {"name": "Amazon Redshift", "kind": "cloud_storage", "when": "soon"},
+    {"name": "MySQL (incl. Amazon RDS / Aurora MySQL)", "kind": "cloud_storage", "when": "soon"},
+    {"name": "Microsoft SQL Server / Azure SQL", "kind": "cloud_storage", "when": "soon"},
+    {"name": "Databricks", "kind": "cloud_storage", "when": "later"},
+    {"name": "Microsoft Fabric / Azure Synapse", "kind": "cloud_storage", "when": "later"},
+    {"name": "Amazon S3 (files)", "kind": "cloud_storage", "when": "later"},
+    {"name": "Google Drive / Sheets", "kind": "cloud_storage", "when": "later"},
+    {"name": "Square", "kind": "business_tool", "when": "soon"},
+    {"name": "Shopify", "kind": "business_tool", "when": "soon"},
+    {"name": "Stripe", "kind": "business_tool", "when": "soon"},
+    {"name": "Gusto", "kind": "business_tool", "when": "later"},
+    {"name": "FreshBooks", "kind": "business_tool", "when": "later"},
+    {"name": "Wave", "kind": "business_tool", "when": "later"},
+    {"name": "Clover", "kind": "business_tool", "when": "later"},
+    {"name": "Toast", "kind": "business_tool", "when": "later"},
+    {"name": "HubSpot", "kind": "business_tool", "when": "later"},
+    {"name": "Salesforce", "kind": "business_tool", "when": "later"},
+]
 
 # The tool a client needs before any connector can store data for them.
 REQUIRED_SERVICE = "data_engineering"
@@ -193,6 +239,9 @@ def connector_list(connections: list[dict]) -> list[dict]:
 
     Returns:
         list[dict]: [{"connector", "name", "kind", "about", "available", "stores_data",
+        "sign_in" (a "Connect" button is offered), "live" (has the quick look),
+        "calls_today" (API calls made to it today, UTC), "calls_budget" (the most we
+        make to it in a day — business_tools.daily_budget; None when unlimited),
         "refresh_frequency", "status", "display_name", "last_synced_at", "next_sync_at"}, ...]
         (datetimes as ISO strings or None). Saved logins are never included.
 
@@ -201,12 +250,19 @@ def connector_list(connections: list[dict]) -> list[dict]:
         ('daily', 'not_set_up')
     """
     saved = {c["connector"]: c for c in connections}
+    today = datetime.now(timezone.utc).date()
     out = []
     for cid, meta in CONNECTORS.items():
         c = saved.get(cid, {})
         iso = lambda v: v.isoformat() if isinstance(v, datetime) else v   # noqa: E731
+        # Sign-in tools are available once the platform's keys are set; Supabase can
+        # ALSO offer "Sign in with Supabase" (optional keys) next to pasting a connection string.
+        keys = oauth.configured(cid)
         out.append({"connector": cid, "name": meta["name"], "kind": meta["kind"], "about": meta["about"],
-                    "available": meta["available"], "stores_data": meta["stores_data"],
+                    "available": meta["available"] or keys, "stores_data": meta["stores_data"],
+                    "sign_in": keys, "live": meta["live"],
+                    "calls_today": c.get("api_calls_count", 0) if c.get("api_calls_day") == today else 0,
+                    "calls_budget": daily_budget(cid),
                     "refresh_frequency": c.get("refresh_frequency", DEFAULT_REFRESH),
                     "status": c.get("status", "not_set_up"), "display_name": c.get("display_name"),
                     "last_synced_at": iso(c.get("last_synced_at")), "next_sync_at": iso(c.get("next_sync_at"))})

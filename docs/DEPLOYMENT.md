@@ -148,6 +148,10 @@ after each restart (accounts live in memory).
       Supabase → Authentication → URL Configuration → **Redirect URLs** (for
       "Forgot password"). Invite emails are still to do (ROADMAP → Security).
 - [ ] Leave `ALLOW_PRIVATE_DB_HOSTS` unset (it's for local testing of the Supabase integration only).
+- [ ] "Connect" buttons (optional, per tool): set `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET`,
+      `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` (and `QUICKBOOKS_ENVIRONMENT=production`
+      with production keys), `SUPABASE_OAUTH_CLIENT_ID` / `SUPABASE_OAUTH_CLIENT_SECRET`, and register
+      `https://<API>/api/connections/oauth/callback` in each developer site (docs/CONNECTORS.md).
 - [ ] Keep `JWT_SECRET_KEY` fixed: it also encrypts clients' saved database logins (changing it means they reconnect).
 - [ ] Run the latest `db/schema.sql` in Supabase (`python scripts/setup_database.py`).
 - [ ] Cal.com: `BOOKING_URL` (free), `PAID_BOOKING_URL` (paid), webhook + `CALCOM_WEBHOOK_SECRET` ([RUN_THROUGH.md](RUN_THROUGH.md) step 8).

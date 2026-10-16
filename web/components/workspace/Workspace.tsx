@@ -55,6 +55,7 @@ import {
   downloadCleaned,
   getCloudTableFile,
   getCloudTables,
+  getLiveDatasetFile,
   getConsultantSettings,
   getIntakeOptions,
   getMe,
@@ -73,6 +74,7 @@ import type {
   AnalyzeResponse,
   CleaningInput,
   CloudTable,
+  LiveDataset,
   ColumnAction,
   ColumnActions,
   ColumnNames,
@@ -193,7 +195,11 @@ export default function Workspace() {
   const [busy, setBusy] = useState(false);
   // What this client has in managed storage, and their cloud tables (if connected).
   const [stored, setStored] = useState<WarehouseCounts | null>(null);
-  const [cloudTables, setCloudTables] = useState<CloudTable[] | null>(null);
+  const [cloudTables, setCloudTables] = useState<CloudTable[] | null>(null); // only tables with rows
+  const [cloudNote, setCloudNote] = useState<string | null>(null); // "the first 100,000 rows" when cut short
+  const [cloudFrom, setCloudFrom] = useState("From your database"); // or "Live from QuickBooks"
+  // Back from a provider's sign-in (QuickBooks, Xero, Supabase): what happened.
+  const [integrationNotice, setIntegrationNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Consultant mode: my clients, the one I'm working on (null = my own workspace).
   const [options, setOptions] = useState<IntakeOptions | null>(null);
@@ -261,6 +267,18 @@ export default function Workspace() {
       setReturnNote("Payment canceled — nothing was charged.");
       setAccountTab("billing");
     }
+    // Back from "Connect QuickBooks / Xero / Supabase" (api/routers/connections.py oauth_callback).
+    const integration = q.get("integration");
+    if (integration) {
+      const name = { quickbooks: "QuickBooks", xero: "Xero", supabase: "Supabase" }[integration] ?? integration;
+      setIntegrationNotice(
+        q.get("connected") === "1"
+          ? { ok: true, text: `${name} is connected. Nothing is stored — it's read live when you ask.` }
+          : { ok: false, text: q.get("integration_error") ?? `${name} wasn't connected.` },
+      );
+      setAccountTab("integrations");
+      window.history.replaceState(null, "", window.location.pathname); // a refresh won't show it again
+    }
     getIntakeOptions()
       .then((o) => {
         setBookingUrl(o.booking_url);
@@ -309,7 +327,8 @@ export default function Workspace() {
       .then((s) => setStored(s.warehouse))
       .catch(() => setStored(null));
     getCloudTables(session.token)
-      .then((r) => setCloudTables(r.tables))
+      // Empty tables are left out: there's nothing in them to clean or analyze.
+      .then((r) => setCloudTables(r.tables.filter((t) => t.has_rows !== false)))
       .catch(() => setCloudTables(null)); // 404 = no database connected
   }, [session, planAccountId]);
 
@@ -355,9 +374,31 @@ export default function Workspace() {
     setBusy(true);
     setError(null);
     try {
-      await clean([await getCloudTableFile(session.token, t.schema, t.name)], "cloud");
+      const got = await getCloudTableFile(session.token, t.schema, t.name);
+      setCloudNote(got.truncated ? `the first ${fmtInt(got.rows)} rows (the table has more)` : null);
+      setCloudFrom("From your database");
+      await clean([got.file], "cloud");
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't read that table.");
+      setBusy(false);
+    }
+  }
+
+  // QuickBooks / Xero records, read live (never stored) — opened like cloud data:
+  // analysis, dashboards, ML and AI; storing is off for it.
+  async function openLive(connector: string, d: LiveDataset) {
+    if (!session) return;
+    setAccountTab(null);
+    setSection(CLEANING);
+    setBusy(true);
+    setError(null);
+    try {
+      const got = await getLiveDatasetFile(session.token, connector, d.id);
+      setCloudNote(got.truncated ? `the first ${fmtInt(got.rows)} records (there are more)` : null);
+      setCloudFrom(`Live from ${connector === "xero" ? "Xero" : "QuickBooks"}`);
+      await clean([got.file], "cloud");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't read those records.");
       setBusy(false);
     }
   }
@@ -683,7 +724,8 @@ export default function Workspace() {
           {analysis && !accountTab && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-xs text-ink-muted">
-                {cloud ? "From your database" : origin === "stored" ? "Stored data" : "Your files"}: {files.map((f) => f.name).join(", ")}
+                {cloud ? cloudFrom : origin === "stored" ? "Stored data" : "Your files"}: {files.map((f) => f.name).join(", ")}
+                {cloud && cloudNote && ` — ${cloudNote}`}
               </span>
               <Button variant="secondary" onClick={() => { clearData(); goTo(CLEANING); }}>
                 Change data
@@ -776,7 +818,7 @@ export default function Workspace() {
         )}
         {accountTab === "integrations" && (
           <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_add}
-            onOpenTable={openCloud} />
+            onOpenTable={openCloud} onOpenLive={openLive} notice={integrationNotice} />
         )}
         {accountTab === "consultant" && isConsultant && <ConsultantSetup token={session.token} onSetupNeeded={setSetupNeeded} />}
         {accountTab === "admin" && session.account.is_admin && <AdminPanel token={session.token} />}

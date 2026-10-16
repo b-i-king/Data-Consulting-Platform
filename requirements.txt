@@ -37,6 +37,8 @@ rapidfuzz>=3.0.0            # fuzzy name matching (api/services/entity_matching.
 scipy>=1.11.0               # statistical tests, confidence intervals
 scikit-learn>=1.5.0         # predictive modeling, PCA, VIF
 
+# Calling QuickBooks, Xero and Supabase's APIs (api/services/oauth.py) — also used by FastAPI's TestClient
+httpx>=0.27.0
+
 # Tests
 pytest>=8.0.0
-httpx>=0.27.0               # used by FastAPI's TestClient

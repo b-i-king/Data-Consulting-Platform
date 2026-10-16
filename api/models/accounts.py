@@ -550,6 +550,12 @@ class CloudConnectIn(BaseModel):
     connection_string: str = Field(min_length=12, max_length=1000)
 
 
+class SupabaseProjectIn(BaseModel):
+    """After "Sign in with Supabase": the project to read (its ref, e.g. "abcdefghijklmnop")."""
+
+    ref: str = Field(min_length=1, max_length=64)
+
+
 class ForgotPasswordIn(BaseModel):
     """ "Forgot password?": the email to send the reset link to."""
 

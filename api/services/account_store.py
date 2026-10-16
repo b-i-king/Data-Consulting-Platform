@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from api.core import database
 
@@ -1705,7 +1705,8 @@ def business_context_of(account: dict) -> dict:
 # ── Integrations: saved logins (encrypted) ──────────────────────────────────────
 
 async def save_integration(*, account_id: str, connector: str, kind: str, display_name: str,
-                           credentials_encrypted: str | None, consultant_id: str | None = None) -> dict:
+                           credentials_encrypted: str | None, consultant_id: str | None = None,
+                           refresh_frequency: str = "manual") -> dict:
     """
     Create or update an integration as CONNECTED, with its (already encrypted) login.
 
@@ -1715,28 +1716,32 @@ async def save_integration(*, account_id: str, connector: str, kind: str, displa
         kind: str, "cloud_storage" or "business_tool".
         display_name: str, what to show ("db.abcd.supabase.co / postgres").
         credentials_encrypted: str | None, from cloud_sources.encrypt — never plain text.
-        consultant_id: str | None, the consultant who set it up, if any.
+        consultant_id: str | None, the consultant who set it up, if any (an
+            existing row keeps the one it has).
+        refresh_frequency: str, for a NEW row only ("daily" for business tools,
+            whose stored sync has a schedule); an existing row keeps its choice.
 
     Returns:
         dict: the saved data_connections row.
     """
     if database.pool is None:
         row = _connections.setdefault((account_id, connector), {
-            "id": str(uuid.uuid4()), "account_id": account_id, "connector": connector, "refresh_frequency": "manual",
-            "next_sync_at": None, "last_synced_at": None, "created_at": _now()})
+            "id": str(uuid.uuid4()), "account_id": account_id, "connector": connector,
+            "refresh_frequency": refresh_frequency, "next_sync_at": None, "last_synced_at": None,
+            "consultant_id": consultant_id, "created_at": _now()})
         row.update(kind=kind, display_name=display_name, credentials_encrypted=credentials_encrypted,
-                   status="connected", consultant_id=consultant_id, updated_at=_now())
+                   status="connected", updated_at=_now())
         return dict(row)
     row = await database.pool.fetchrow(
         """INSERT INTO dim.data_connections (account_id, consultant_id, connector, refresh_frequency, status,
                                             kind, display_name, credentials_encrypted)
-           VALUES ($1, $2, $3, 'manual', 'connected', $4, $5, $6)
+           VALUES ($1, $2, $3, $7, 'connected', $4, $5, $6)
            ON CONFLICT (account_id, connector) DO UPDATE
                SET status = 'connected', kind = EXCLUDED.kind, display_name = EXCLUDED.display_name,
                    credentials_encrypted = EXCLUDED.credentials_encrypted, updated_at = now()
            RETURNING *""",
         uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, connector, kind,
-        display_name, credentials_encrypted)
+        display_name, credentials_encrypted, refresh_frequency)
     return dict(row)
 
 
@@ -1748,6 +1753,81 @@ async def get_integration(account_id: str, connector: str) -> dict | None:
     row = await database.pool.fetchrow("SELECT * FROM dim.data_connections WHERE account_id = $1 AND connector = $2",
                                        uuid.UUID(account_id), connector)
     return dict(row) if row else None
+
+
+async def count_connected(connector: str) -> int:
+    """
+    How many clients have this integration connected, across the whole platform
+    (Xero's free plan allows 5 connected organizations per app).
+
+    Example:
+        >>> await count_connected("xero")
+        3
+    """
+    if database.pool is None:
+        return sum(1 for (_, cid), c in _connections.items() if cid == connector and c.get("status") == "connected")
+    return await database.pool.fetchval(
+        "SELECT count(*) FROM dim.data_connections WHERE connector = $1 AND status = 'connected'", connector)
+
+
+async def save_api_usage(account_id: str, connector: str, day, count: int) -> None:
+    """Save how many API calls were made to a connection on `day` (UTC) — see CallMeter."""
+    if database.pool is None:
+        row = _connections.get((account_id, connector))
+        if row:
+            row.update(api_calls_day=day, api_calls_count=count)
+        return
+    await database.pool.execute(
+        "UPDATE dim.data_connections SET api_calls_day = $3, api_calls_count = $4 WHERE account_id = $1 AND connector = $2",
+        uuid.UUID(account_id), connector, day, count)
+
+
+_api_usage: dict[tuple[str, date], int] = {}   # (connector, month) -> calls (memory path)
+
+
+async def get_api_usage(connector: str, month: date) -> int:
+    """Calls the whole app made to a tool in a month (dim.api_usage; 0 when none)."""
+    if database.pool is None:
+        return _api_usage.get((connector, month), 0)
+    return await database.pool.fetchval(
+        "SELECT coalesce((SELECT calls FROM dim.api_usage WHERE connector = $1 AND month = $2), 0)", connector, month)
+
+
+async def add_api_usage(connector: str, month: date, calls: int) -> None:
+    """Add calls to a tool's monthly count (one small upsert per request, never per call)."""
+    if calls <= 0:
+        return
+    if database.pool is None:
+        _api_usage[(connector, month)] = _api_usage.get((connector, month), 0) + calls
+        return
+    await database.pool.execute(
+        """INSERT INTO dim.api_usage (connector, month, calls) VALUES ($1, $2, $3)
+           ON CONFLICT (connector, month) DO UPDATE SET calls = dim.api_usage.calls + EXCLUDED.calls""",
+        connector, month, calls)
+
+
+_api_usage: dict[tuple[str, date], int] = {}   # (connector, month) -> calls (memory path)
+
+
+async def get_api_usage(connector: str, month: date) -> int:
+    """Calls the whole app made to a tool in a month (dim.api_usage; 0 when none)."""
+    if database.pool is None:
+        return _api_usage.get((connector, month), 0)
+    return await database.pool.fetchval(
+        "SELECT coalesce((SELECT calls FROM dim.api_usage WHERE connector = $1 AND month = $2), 0)", connector, month)
+
+
+async def add_api_usage(connector: str, month: date, calls: int) -> None:
+    """Add calls to a tool's monthly count (one small upsert per request, never per call)."""
+    if calls <= 0:
+        return
+    if database.pool is None:
+        _api_usage[(connector, month)] = _api_usage.get((connector, month), 0) + calls
+        return
+    await database.pool.execute(
+        """INSERT INTO dim.api_usage (connector, month, calls) VALUES ($1, $2, $3)
+           ON CONFLICT (connector, month) DO UPDATE SET calls = dim.api_usage.calls + EXCLUDED.calls""",
+        connector, month, calls)
 
 
 async def delete_integration(account_id: str, connector: str) -> bool:
@@ -1831,13 +1911,30 @@ async def delete_dashboard_tab(account_id: str, tab_id: str) -> bool:
     return result.endswith(" 1")
 
 
+QUESTION_LOG_KEEP = 500   # newest questions kept per account; older ones are deleted (storage stays small)
+
+
 async def log_question(account_id: str, question: str, answered: bool) -> None:
-    """Remember one question asked of the data (the text only)."""
+    """
+    Remember one question asked of the data (the text only), keeping only the
+    newest QUESTION_LOG_KEEP per account — enough to spot the questions asked
+    most, without the table growing forever.
+    """
     if database.pool is None:
         _questions.append({"account_id": account_id, "question": question, "answered": answered, "asked_at": _now()})
+        mine = [q for q in _questions if q["account_id"] == account_id]
+        for old in mine[:-QUESTION_LOG_KEEP]:   # list order = oldest first
+            _questions.remove(old)
         return
-    await database.pool.execute("INSERT INTO dim.question_log (account_id, question, answered) VALUES ($1, $2, $3)",
-                                uuid.UUID(account_id), question, answered)
+    aid = uuid.UUID(account_id)
+    async with database.pool.acquire() as conn, conn.transaction():
+        await conn.execute("INSERT INTO dim.question_log (account_id, question, answered) VALUES ($1, $2, $3)",
+                           aid, question, answered)
+        # Delete everything older than this account's 500th-newest question (ids only go up).
+        await conn.execute(
+            """DELETE FROM dim.question_log WHERE account_id = $1 AND id < (
+                   SELECT id FROM dim.question_log WHERE account_id = $1
+                   ORDER BY id DESC OFFSET $2 LIMIT 1)""", aid, QUESTION_LOG_KEEP - 1)
 
 
 async def frequent_questions(account_id: str, limit: int = 8) -> list[dict]:

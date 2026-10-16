@@ -141,6 +141,45 @@ class Settings(BaseSettings):
     # private / local address (only for testing with a database on this machine).
     allow_private_db_hosts: bool = Field(default=False, alias="ALLOW_PRIVATE_DB_HOSTS")
 
+    # ── Integrations: "Connect" sign-in buttons (api/services/oauth.py) ──────
+    # Each provider needs ONE pair of keys from its developer site — the keys
+    # belong to the platform, not to each client. A pair left empty simply
+    # hides that "Connect" button (the provider shows as coming soon). Every
+    # provider sends people back to ONE address, registered in each developer
+    # site as the redirect URI:  <API address>/api/connections/oauth/callback
+    #   QuickBooks: developer.intuit.com -> your app -> Keys & credentials
+    #   Xero:       developer.xero.com -> My Apps -> your app -> Configuration
+    #   Supabase:   supabase.com -> your organization -> OAuth Apps (OPTIONAL:
+    #               clients can always paste a connection string instead)
+    quickbooks_client_id: str = Field(default="", alias="QUICKBOOKS_CLIENT_ID")
+    quickbooks_client_secret: str = Field(default="", alias="QUICKBOOKS_CLIENT_SECRET")
+    # "sandbox" works with Intuit's DEVELOPMENT keys (a test company); switch to
+    # "production" when you use the production keys after Intuit's app review.
+    quickbooks_environment: str = Field(default="sandbox", alias="QUICKBOOKS_ENVIRONMENT")
+    # QuickBooks' free Builder tier: 500,000 "CorePlus" (read) calls a MONTH for
+    # the whole app; past that, every client is BLOCKED until next month. The
+    # app stops at 90% (450,000), caps each company at a daily share, and
+    # allows 15 companies — 15 x 1,000 x 30 days = 450,000, so even if every
+    # company used its full share every day, the month would still fit.
+    quickbooks_max_connections: int = Field(default=15, alias="QUICKBOOKS_MAX_CONNECTIONS")
+    quickbooks_daily_call_limit: int = Field(default=1000, alias="QUICKBOOKS_DAILY_CALL_LIMIT")
+    quickbooks_monthly_call_limit: int = Field(default=500_000, alias="QUICKBOOKS_MONTHLY_CALL_LIMIT")
+    xero_client_id: str = Field(default="", alias="XERO_CLIENT_ID")
+    xero_client_secret: str = Field(default="", alias="XERO_CLIENT_SECRET")
+    # Xero's plan limits (developer.xero.com/pricing). Starter (free): 5
+    # connected organizations and 1,000 API calls per organization per day.
+    # The app refuses a 6th connection and stops calling an organization at
+    # 90% of its daily limit (api/services/business_tools.py CallMeter).
+    # Raise both if you move to a paid Xero plan (Core: 50 and 5,000).
+    xero_max_connections: int = Field(default=5, alias="XERO_MAX_CONNECTIONS")
+    xero_daily_call_limit: int = Field(default=1000, alias="XERO_DAILY_CALL_LIMIT")
+    supabase_oauth_client_id: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_ID")
+    supabase_oauth_client_secret: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_SECRET")
+    # This API's public address, for the redirect URI. Render sets
+    # RENDER_EXTERNAL_URL automatically, so on Render nothing needs to be set.
+    public_api_url: str = Field(default="", alias="PUBLIC_API_URL")
+    render_external_url: str = Field(default="", alias="RENDER_EXTERNAL_URL")
+
     # ── Big-data engine (PySpark, optional) ───────────────────────────────────
     # pandas is the data engine. PySpark is an OPTIONAL second engine for data
     # too big for one machine's memory or living in a client's cloud warehouse.
@@ -236,6 +275,18 @@ class Settings(BaseSettings):
             52428800
         """
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def api_base_url(self) -> str:
+        """
+        This API's public address (no trailing "/"): PUBLIC_API_URL, else
+        Render's own RENDER_EXTERNAL_URL, else the local dev server.
+
+        Example:
+            >>> Settings(render_external_url="https://dcp-api.onrender.com/").api_base_url
+            'https://dcp-api.onrender.com'
+        """
+        return (self.public_api_url or self.render_external_url or "http://localhost:8000").rstrip("/")
 
 
 @lru_cache

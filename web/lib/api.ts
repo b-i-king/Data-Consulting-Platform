@@ -10,7 +10,12 @@ import type {
   Account,
   AdminPanelData,
   BusinessContext,
+  CloudSchema,
   CloudTable,
+  CloudTableFile,
+  LiveDataset,
+  QuickLook,
+  SupabaseProject,
   DashboardSuggestion,
   DashboardsInfo,
   BillingInterval,
@@ -554,22 +559,92 @@ export function logQuestion(token: string, question: string, answered: boolean) 
 
 /** Connect the client's own Supabase / PostgreSQL database (read-only; the login is saved encrypted). */
 export const connectSupabase = (token: string, connectionString: string) =>
-  postJson<{ connectors: DataConnection[]; tables: CloudTable[] }>(
+  postJson<{ connectors: DataConnection[]; tables: CloudTable[]; schemas: CloudSchema[] }>(
     "/api/connections/supabase", { connection_string: connectionString }, token);
 
-/** The connected database's tables and views. */
-export async function getCloudTables(token: string): Promise<{ tables: CloudTable[]; max_rows: number }> {
+/** The connected database's tables and views (has_rows: false = empty), and a per-schema count. */
+export async function getCloudTables(
+  token: string,
+): Promise<{ tables: CloudTable[]; schemas: CloudSchema[]; max_rows: number; needs_project: boolean }> {
   const res = await apiFetch(`${API_URL}/api/connections/supabase/tables`, { headers: authHeaders(token) });
   await raiseForStatus(res);
   return res.json();
 }
 
-/** One table of the client's database as a CSV File (read-only, never stored) — opened like any file. */
-export async function getCloudTableFile(token: string, schema: string, name: string): Promise<File> {
-  const q = `schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`;
-  const res = await apiFetch(`${API_URL}/api/connections/supabase/table?${q}`, { headers: authHeaders(token) });
+/** A live CSV read (cloud table or QuickBooks / Xero records) as a File, with how many rows came. */
+async function liveCsv(token: string, path: string, filename: string): Promise<CloudTableFile> {
+  const res = await apiFetch(`${API_URL}${path}`, { headers: authHeaders(token) });
   await raiseForStatus(res);
-  return new File([await res.blob()], `${schema}.${name}.csv`, { type: "text/csv" });
+  return {
+    file: new File([await res.blob()], filename, { type: "text/csv" }),
+    rows: Number(res.headers.get("X-Rows") ?? 0),
+    truncated: res.headers.get("X-Truncated") === "true",
+  };
+}
+
+/**
+ * One table of the client's database as a CSV File (read-only, never stored) —
+ * opened like any file. An empty table is refused by the server (422).
+ */
+export async function getCloudTableFile(token: string, schema: string, name: string): Promise<CloudTableFile> {
+  const q = `schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`;
+  return liveCsv(token, `/api/connections/supabase/table?${q}`, `${schema}.${name}.csv`);
+}
+
+/**
+ * "Connect QuickBooks / Xero / Supabase": the provider's sign-in address. The
+ * page then goes there; the provider sends the person back to /app?integration=...
+ */
+export async function startConnect(token: string, connector: string): Promise<string> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/authorize`, {
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return (await res.json()).url;
+}
+
+/** The free live quick look of a connected QuickBooks / Xero (start/end: ISO dates; default this year). */
+export async function getQuickLook(token: string, connector: string, start?: string, end?: string): Promise<QuickLook> {
+  const q = new URLSearchParams();
+  if (start) q.set("start", start);
+  if (end) q.set("end", end);
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/quick-look?${q}`, {
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** The record types of a connected QuickBooks / Xero (has_rows false = empty). */
+export async function getLiveDatasets(token: string, connector: string): Promise<{ datasets: LiveDataset[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/datasets`, {
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** One QuickBooks / Xero record type as a CSV File — live, never stored — opened like any file. */
+export const getLiveDatasetFile = (token: string, connector: string, id: string) =>
+  liveCsv(token, `/api/connections/${encodeURIComponent(connector)}/dataset?id=${encodeURIComponent(id)}`,
+    `${connector}.${id}.csv`);
+
+/** After "Sign in with Supabase": the client's projects and the one being read. */
+export async function getSupabaseProjects(token: string): Promise<{ projects: SupabaseProject[]; selected: string | null }> {
+  const res = await apiFetch(`${API_URL}/api/connections/supabase/projects`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Pick the Supabase project to read. */
+export async function chooseSupabaseProject(token: string, ref: string): Promise<{ connectors: DataConnection[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/supabase/project`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify({ ref }),
+  });
+  await raiseForStatus(res);
+  return res.json();
 }
 
 /** Disconnect an integration (its saved login is deleted). */

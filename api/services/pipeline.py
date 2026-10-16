@@ -90,6 +90,8 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
       is read, so a huge file is refused without loading it all)
     - each upload is closed after reading, whether it succeeded or not
     - dataset names must be unique (e.g. two "sales.csv" files are refused)
+    - tables with no rows are dropped (no cleaning or analysis is spent on
+      them); if every table is empty the upload is refused with 422
 
     Args:
         files: the files from a FastAPI multipart form (UploadFile objects).
@@ -100,7 +102,8 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
 
     Raises:
         HTTPException: 400 for no files, too many files, an unsupported or
-            unreadable file, or duplicate names; 413 for a file over the size limit.
+            unreadable file, or duplicate names; 413 for a file over the size limit;
+            422 when every table has no rows.
 
     Example:
         datasets = await load_uploads([UploadFile("sales.csv"), UploadFile("refunds.xlsx")])
@@ -131,6 +134,15 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
         finally:
             await upload.close()
+
+    # A table with column names but no rows has nothing to clean or analyze:
+    # drop it here, before any work (and memory) is spent on it.
+    empty = [d.name for d in datasets if len(d.df) == 0]
+    datasets = [d for d in datasets if len(d.df) > 0]
+    if not datasets:
+        raise HTTPException(422,
+                            detail=f"{', '.join(empty)} {'has' if len(empty) == 1 else 'have'} column names "
+                                   "but no rows, so there is nothing to analyze yet.")
 
     # Two files with the same name would collide in the categorizer.
     names = [d.name for d in datasets]

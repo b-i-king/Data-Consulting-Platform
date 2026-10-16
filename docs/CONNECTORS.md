@@ -11,15 +11,66 @@ Settings → **Integrations** has two sections (`api/services/connections.py`):
   **Supabase database** (the client's own Supabase, or any PostgreSQL). The
   client pastes a connection string (ideally a **read-only** user); the server
   checks it (a public host, it connects, it lists tables) and saves it
-  **encrypted** (Fernet, key derived from `JWT_SECRET_KEY`). Each table can then
-  be opened in the workspace — for analysis, dashboards, ML and AI — read in a
-  READ ONLY transaction, up to 100,000 rows, never stored. For cloud data,
+  **encrypted** (Fernet, key derived from `JWT_SECRET_KEY`). Tables are listed
+  **schema by schema, and only tables with data are offered**: PostgreSQL's
+  own free row estimate answers "has rows?" first, and only when it says 0 or
+  "unknown" (and for views) do we ask the table itself with a one-row
+  `EXISTS` check (2-second limit each, at most 300 per listing). Empty tables
+  are hidden and refused if opened (422) — nothing is read, cleaned or
+  analyzed for them. A table with data can be opened in the workspace — for
+  analysis, dashboards, ML and AI — read in a READ ONLY transaction, in chunks
+  of 5,000 rows, stopping at 100,000 rows or the upload size limit
+  (`MAX_UPLOAD_MB`), whichever comes first (the workspace then says "the first
+  N rows"), never stored. For cloud data,
   Data Cleaning is a **report only** (what's missing, what looks off — fix it at
   the source) and "Load into database" is switched off: the client already
   manages that data. Code: `api/services/cloud_sources.py`.
-- **Business tools — copied into managed storage on a schedule.** QuickBooks
-  first (coming soon: needs an Intuit developer app for OAuth), with its refresh
-  schedule (daily by default). Needs Data Engineering.
+  It can also be connected with **"Sign in with Supabase"** (OAuth, when the
+  platform's Supabase OAuth keys are set): no password changes hands; the
+  client picks a project and we read through Supabase's Management API
+  read-only endpoint (`POST /v1/projects/{ref}/database/query/read-only`, run
+  as Supabase's `supabase_read_only_user`) — tables in 5,000-row pages by row
+  address (`ctid`), views in one read capped at 20,000 rows. Same rules:
+  empty tables hidden, never stored.
+- **Business tools — QuickBooks Online and Xero.** ✅ "Connect" sign-in on the
+  tool's own site (OAuth 2.0, read-only scopes; `api/services/oauth.py`). Once
+  connected, two things work **live, never stored** (`api/services/business_tools.py`):
+  - **Quick look** (free with any plan): income, expenses, net income, what
+    customers owe, what the business owes, month by month, top customers, for
+    any dates. QuickBooks: its own Profit and Loss (by month), Sales by
+    Customer and A/R / A/P Aging reports (4 calls). Xero: added up from sales
+    invoices + money received and bills + money spent, before tax, without
+    drafts, voided items and transfers — labeled an **estimate**, because
+    Xero keeps its own P&L and Balance Sheet reports for App Partners.
+  - **Open records in the workspace**: QuickBooks invoices, sales receipts,
+    payments, expenses, bills (one row per transaction line, with the
+    platform's unified column names from `unified.py`); Xero sales invoices,
+    bills, bank transactions, payments, contacts. Empty record types are found
+    with one cheap call each (QuickBooks `COUNT(*)`, Xero a one-item page) and
+    hidden. Up to 20,000 records per open, and no more than the upload limit.
+
+  **Stored sync (Data Engineering) — next:** copy into `fact.account_data` on
+  the refresh schedule (daily by default), for history, trends and combining
+  with other sources. **Design rule (to keep storage and memory low):** pull only what changed since the
+  last sync (QuickBooks Change Data Capture / `MetaData.LastUpdatedTime`), skip
+  entities that return no rows, and load page by page — `row_hash` in
+  `fact.account_data` already skips rows whose content didn't change, and an
+  empty table is never loaded.
+
+**What clients see as planned** (`COMING_SOON` in `api/services/connections.py`,
+shown under each section as "Coming soon" / "Later" — nothing can be set up
+for them yet):
+
+| Section | Coming soon | Later |
+|---|---|---|
+| Cloud storage | Snowflake, Google BigQuery, Amazon Redshift, MySQL (incl. Amazon RDS / Aurora MySQL), Microsoft SQL Server / Azure SQL | Databricks, Microsoft Fabric / Azure Synapse, Amazon S3 (files), Google Drive / Sheets |
+| Business tools | Square, Shopify, Stripe | Gusto, FreshBooks, Wave, Clover, Toast, HubSpot, Salesforce |
+
+Already working through the PostgreSQL connector (no new code): Amazon RDS /
+Aurora PostgreSQL, Google Cloud SQL for PostgreSQL, Azure Database for
+PostgreSQL and Neon — anything that speaks PostgreSQL. To launch one, build
+it, add it to `CONNECTORS`, remove it from `COMING_SOON`, and flip its
+`available` in the questionnaire (`api/services/intake.py`).
 
 Files are still the main way in (every format pandas can safely read — see
 DATA_CLEANING.md).
@@ -32,7 +83,9 @@ What *is* ready, and what each connector will plug into:
 | Fuzzy matching for records with no shared ID (`entity_matching.py`) | ✅ built and tested |
 | Table to store synced data (`fact.account_data`, `source_system` = the connector; QuickBooks fields mapped in `fact.field_map`) | ✅ built and tested |
 | Supabase / PostgreSQL (cloud storage): connect, list tables, read one — encrypted login, read-only | ✅ built and tested |
-| QuickBooks: OAuth sign-in, token storage, scheduled syncs | ❌ not built |
+| "Sign in with Supabase" (OAuth + Management API, read-only) | ✅ built; tested against Supabase's documented API shapes |
+| QuickBooks and Xero: OAuth sign-in, encrypted tokens (refreshed and rotated), live quick look, open records live | ✅ built; tested against the documented API shapes — test with the sandbox / a real organization once keys are set |
+| QuickBooks and Xero: stored sync on the refresh schedule | ❌ not built (next) |
 
 ### A note on the "connectors" in your Claude account
 
@@ -107,3 +160,74 @@ For warehouses (Snowflake, BigQuery, Postgres), the client creates a
 Build from what clients actually pick in the questionnaire (save answers to
 `intake_responses` first — ROADMAP step 4). A typical small-business order:
 Google Sheets → QuickBooks → Square/Shopify → Gusto → Snowflake/BigQuery.
+
+## Setting up the "Connect" buttons (one pair of keys per tool)
+
+Every "Connect" button needs the PLATFORM's own Client ID + Client Secret from
+that tool's developer site — set once on Render, never per client. A tool
+without keys simply shows as "coming soon", so add only the ones you want.
+All of them use the **same redirect URI**:
+
+    https://<your Render API address>/api/connections/oauth/callback
+
+(The API knows its own address from Render's `RENDER_EXTERNAL_URL`; set
+`PUBLIC_API_URL` only if you use a custom domain. Locally it is
+`http://localhost:8000/api/connections/oauth/callback`.)
+
+| Tool | Where | Settings on Render | Notes |
+|---|---|---|---|
+| QuickBooks | developer.intuit.com → Dashboard → Create an app → QuickBooks Online and Payments → scope **Accounting** → Keys & credentials (Development) → add the redirect URI | `QUICKBOOKS_CLIENT_ID`, `QUICKBOOKS_CLIENT_SECRET` (`QUICKBOOKS_ENVIRONMENT` = `sandbox` by default) | Development keys only work with Intuit's free **sandbox company** — test there first. Production keys come after Intuit's app assessment; then set `QUICKBOOKS_ENVIRONMENT=production`. |
+| Xero | developer.xero.com → My Apps → New app → **Web app** → redirect URI → Configuration → generate a secret | `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` | Free **Starter** tier: up to **5 connected organizations** — enough for a friend's business to test. "Disconnect" removes the organization connection at Xero, freeing a slot. Scopes asked (read-only, granular — required for apps made after March 2, 2026): `accounting.invoices.read accounting.payments.read accounting.banktransactions.read accounting.contacts.read offline_access`. |
+| Supabase (optional) | supabase.com → your organization → OAuth Apps → Add → redirect URI → permissions **Projects: read** and **Database: read** | `SUPABASE_OAUTH_CLIENT_ID`, `SUPABASE_OAUTH_CLIENT_SECRET` | Optional: without it, clients paste a connection string (no keys at all). PKCE is used. |
+
+### Xero's plan limits — safeguards
+
+Xero's free **Starter** plan allows **5 connected organizations** and **1,000
+API calls per organization per day** (paid plans: 50+ and 5,000). Going over
+gets the app blocked, so (`api/routers/connections.py`, `CallMeter` in
+`api/services/business_tools.py`):
+
+| Safeguard | How |
+|---|---|
+| Never a 6th connection | "Connect Xero" is refused once `XERO_MAX_CONNECTIONS` (5) organizations are connected platform-wide — checked at Connect AND again when the sign-in comes back (two people could click at once); a sign-in that arrives too late is undone at Xero (connection removed, tokens revoked). The card says "connections are full" instead of a Connect button. Reconnecting your own Xero reuses your spot. |
+| One sign-in = one spot | If the person shares several organizations in Xero's sign-in, we keep the first and disconnect the rest at once. |
+| Disconnect frees a spot | "Disconnect" removes the organization connection at Xero, not just ours. |
+| Never past the daily limit | Each organization gets a budget of 90% of `XERO_DAILY_CALL_LIMIT` (900 of 1,000) per UTC day. Every call is counted and saved on the connection (`api_calls_day` / `api_calls_count`), so a restart doesn't reset it. Xero's own count (the `X-DayLimit-Remaining` header on every answer) wins when it is higher. Past the budget, requests are refused with "used up — starts over at midnight UTC". |
+| Under 60 a minute | At most 55 calls per organization in any 60 seconds; a request waits up to 10 seconds, else is refused. |
+| If Xero still says 429 | The message says which limit; a daily one stops calls for the rest of the day. |
+
+What a Xero action costs: quick look ≈ 3 calls; "Open records in the
+workspace" list = 5 calls; opening one record type = 1 call per 1,000 records.
+So 900 calls a day is a lot of use for one small business. On a paid plan, set
+`XERO_MAX_CONNECTIONS` and `XERO_DAILY_CALL_LIMIT` to the new numbers.
+
+### QuickBooks' limits — safeguards
+
+Intuit's free **Builder** tier (App Partner Program) allows **500,000
+"CorePlus" API calls a month for the whole app** — every read we make (query,
+report, company info) is one. Past that, Intuit doesn't bill you: it
+**blocks** every CorePlus call until the next month and shows the app as
+"Offline" in every client's QuickBooks. Per company it also allows 500 calls a
+minute and 10 at a time. There is no limit on how many companies connect.
+So (same `CallMeter` as Xero):
+
+| Safeguard | How |
+|---|---|
+| Never past the month | The whole app stops at 90% of `QUICKBOOKS_MONTHLY_CALL_LIMIT` (450,000), counted in `dim.api_usage` (one row per tool per month). Clients see "paused until the 1st — uploading an export works meanwhile". |
+| One company can't use everyone's month | Each company gets `QUICKBOOKS_DAILY_CALL_LIMIT` (1,000) calls per UTC day, saved on its connection. |
+| Room for everyone | `QUICKBOOKS_MAX_CONNECTIONS` (15): 15 companies × 1,000 calls × 30 days = 450,000 — even if every company used its full share every day, the month still fits. Same "connections are full" behavior as Xero. |
+| Under 500 a minute | At most 450 calls per company in any 60 seconds (our calls are one at a time, so the 10-at-once limit is never reached). |
+
+What a QuickBooks action costs: quick look = 4 calls (the reports);
+"Open records in the workspace" list = 5 calls; opening one record type = 1
+call per 1,000 records. To allow more companies, raise
+`QUICKBOOKS_MAX_CONNECTIONS` and lower `QUICKBOOKS_DAILY_CALL_LIMIT` so that
+companies × daily × 30 stays under 450,000 — or move to Intuit's paid Silver
+tier and raise `QUICKBOOKS_MONTHLY_CALL_LIMIT`.
+
+**Fewest keys:** Xero only = 2 settings; Xero + QuickBooks = 4; all three = 6.
+Tokens are saved ENCRYPTED (key from `JWT_SECRET_KEY`), refreshed
+automatically before they expire, and the rotated refresh token is saved each
+time. The `state` sent with each sign-in is an encrypted, 15-minute ticket
+(who is connecting, and Supabase's PKCE verifier), so nothing is stored
+between "Connect" and the callback.

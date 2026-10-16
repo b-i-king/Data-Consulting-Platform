@@ -1043,7 +1043,15 @@ export interface DataConnection {
   about: string;
   available: boolean;
   stores_data: boolean;
-  /** What's connected, e.g. "db.abcd.supabase.co / postgres" (never the password). */
+  /** A "Connect" sign-in button is offered (the platform's keys for it are set). */
+  sign_in: boolean;
+  /** Has the free live quick look (QuickBooks, Xero). */
+  live: boolean;
+  /** API calls made to it today (UTC). */
+  calls_today: number;
+  /** The most calls we make to it in a day (Xero 900, QuickBooks 1,000); null = no limit. */
+  calls_budget: number | null;
+  /** What's connected, e.g. "db.abcd.supabase.co / postgres" or "Sam's Bakery" (never a password or token). */
   display_name: string | null;
   refresh_frequency: RefreshFrequency;
   status: "not_set_up" | "pending" | "connected" | "paused" | "error" | "disconnected";
@@ -1051,11 +1059,54 @@ export interface DataConnection {
   next_sync_at: string | null;
 }
 
+/** The free live summary of a connected QuickBooks or Xero (api/services/business_tools.py) — never stored. */
+export interface QuickLook {
+  source: string; // "QuickBooks" | "Xero"
+  company: string;
+  start: string; // ISO dates
+  end: string;
+  currency: string;
+  /** true = added up from records (Xero), not the tool's own report. */
+  estimate: boolean;
+  basis: string;
+  totals: { income: number; expenses: number; net_income: number; owed_to_you: number; you_owe: number };
+  monthly: { month: string; income: number; expenses: number; net: number }[];
+  top_customers: { name: string; amount: number }[];
+  stored: false;
+}
+
+/** A record type of a connected QuickBooks / Xero that can be opened in the workspace. */
+export interface LiveDataset {
+  id: string;
+  name: string;
+  /** false = no records (hidden: nothing to analyze). */
+  has_rows: boolean;
+}
+
+/** A project in the client's Supabase account ("Sign in with Supabase"). */
+export interface SupabaseProject {
+  ref: string;
+  name: string;
+  region: string | null;
+}
+
+/** An integration on the roadmap (api/services/connections.py COMING_SOON). */
+export interface PlannedIntegration {
+  name: string;
+  kind: DataConnection["kind"];
+  /** "soon" = next in line; "later" = planned after those. */
+  when: "soon" | "later";
+}
+
 export interface ConnectionsInfo {
   options: RefreshOption[];
   connectors: DataConnection[];
   /** Section titles: {"cloud_storage": "Cloud storage", "business_tool": "Business tools"}. */
   kinds: Record<string, string>;
+  /** Planned integrations, shown so clients know their tool is on the way (nothing to set up yet). */
+  coming_soon: PlannedIntegration[];
+  /** Connected companies per tool, platform-wide, and the most allowed (Xero 5, QuickBooks 15). */
+  slots: Record<string, { used: number; max: number }>;
   /** True when the client has Data Engineering. */
   can_connect: boolean;
   addon_total_usd: number;
@@ -1068,7 +1119,26 @@ export interface CloudTable {
   schema: string;
   name: string;
   kind: "table" | "view";
+  /** PostgreSQL's own estimate (0 = empty or not known yet). */
   rows_estimate: number;
+  /** Has at least one row? false = empty (hidden: nothing to analyze); null = couldn't tell. */
+  has_rows: boolean | null;
+}
+
+/** One schema of the client's database: how many tables, and how many have data. */
+export interface CloudSchema {
+  schema: string;
+  tables: number;
+  with_rows: number;
+}
+
+/** One cloud table opened as a CSV file (read-only, never stored). */
+export interface CloudTableFile {
+  file: File;
+  /** Rows sent (at most 100,000, and no more than the upload size limit). */
+  rows: number;
+  /** true = the table has more rows than were opened. */
+  truncated: boolean;
 }
 
 // ── Dashboards (api/routers/dashboards.py, api/services/dashboards.py) ────────

@@ -84,7 +84,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD"],
+    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD", "X-Rows", "X-Truncated"],
 )
 
 # Compress responses over 1 KB. The data preview (JSON) and CSV downloads
