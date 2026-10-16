@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { loadSession } from "@/lib/session";
 
 export function StepHeader({ title, subtitle }: { title: string; subtitle?: string }) {
@@ -70,18 +70,42 @@ export function Button({
   );
 }
 
-/** Back / Next row at the bottom of each step. */
+/**
+ * Get Started's extra navigation, given by Wizard.tsx to every step's NavRow
+ * without passing it through each step: "First step" (from the third page on)
+ * and "Skip to download" (every page but the first and the last).
+ */
+export const WizardNavContext = createContext<{ onFirst?: () => void; onSkipToDownload?: () => void }>({});
+
+/**
+ * Previous / Continue row at the bottom of each step. In Get Started it also
+ * shows "First step" and "Skip to download" when the wizard offers them.
+ * The first page passes no onBack, so it has only Continue.
+ */
 export function NavRow({ onBack, children }: { onBack?: () => void; children?: ReactNode }) {
+  const nav = useContext(WizardNavContext);
   return (
-    <div className="mt-8 flex items-center justify-between gap-3">
-      {onBack ? (
-        <Button variant="secondary" onClick={onBack}>
-          Back
-        </Button>
-      ) : (
-        <span />
-      )}
-      <div className="flex gap-3">{children}</div>
+    <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap gap-2">
+        {nav.onFirst && (
+          <Button variant="secondary" onClick={nav.onFirst} title="Back to the first step (your answers are kept)">
+            « First step
+          </Button>
+        )}
+        {onBack && (
+          <Button variant="secondary" onClick={onBack}>
+            ← Previous
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {nav.onSkipToDownload && (
+          <Button variant="secondary" onClick={nav.onSkipToDownload} title="Just download your cleaned data">
+            Skip to download
+          </Button>
+        )}
+        {children}
+      </div>
     </div>
   );
 }

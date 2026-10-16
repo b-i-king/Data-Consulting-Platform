@@ -26,6 +26,8 @@
 --        │      ──< dim.dashboard_tabs        the client's own dashboard tabs (saved questions)
 --        │      ──< dim.question_log          questions asked of the data (to suggest dashboard tabs)
 --        │      ──< fact.account_data         the stored data (one row per metric)
+--        │      ──< fact.entities             each customer / vendor / item / location, ONCE
+--        │                                    ──< fact.entity_sources  how each source refers to it
 --        ├─ team_id ──> dim.teams             businesses: owner + colleagues
 --        └─ consultant_id ──> dim.consultants who manages this client
 --   fact.field_map                            shared lookup, not per account
@@ -353,6 +355,10 @@ ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS credentials_encrypted 
 -- each day: api_calls_day says which day api_calls_count belongs to.
 ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS api_calls_day DATE;
 ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS api_calls_count INTEGER NOT NULL DEFAULT 0;
+-- The stored sync's progress (api/services/sync.py): per record type, the newest
+-- "last changed" time already stored — the next sync asks only for what changed
+-- after it. {"Invoice": "2026-10-16T12:00:00+00:00", ...}
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}';
 
 -- ── dim.api_usage: API calls the whole app made to a tool, per month ────────
 -- QuickBooks' free Builder tier allows 500,000 read calls a MONTH for the
@@ -409,8 +415,8 @@ CREATE INDEX IF NOT EXISTS idx_question_log_account ON dim.question_log (account
 -- The unified-metrics skill writes ready-to-run rows for a client's new columns.
 -- Paths use dots for nesting and leave out list positions: 'Line.Amount' is
 -- the Amount of every item in a QuickBooks Line list.
--- KEEP IN SYNC with QUICKBOOKS_FIELD_MAP / FILE_UPLOAD_FIELD_MAP in
--- api/services/unified.py (tests/test_unified.py compares the two).
+-- KEEP IN SYNC with QUICKBOOKS_FIELD_MAP / FILE_UPLOAD_FIELD_MAP / XERO_FIELD_MAP in
+-- api/services/unified.py (tests/test_unified.py compares them).
 CREATE TABLE IF NOT EXISTS fact.field_map (
     field_map_id    SERIAL PRIMARY KEY,
     system          TEXT NOT NULL,           -- 'quickbooks', 'file_upload', ... (= account_data.source_system)
@@ -520,7 +526,49 @@ INSERT INTO fact.field_map (system, source_field, field_name, value_type, metric
     ('file_upload', 'store', 'location_name', 'text', NULL, NULL, NULL, 'Same as QuickBooks Location'),
     ('file_upload', 'location', 'location_name', 'text', NULL, NULL, NULL, NULL),
     ('file_upload', 'memo', 'memo', 'text', NULL, NULL, NULL, NULL),
-    ('file_upload', 'notes', 'memo', 'text', NULL, NULL, NULL, NULL)
+    ('file_upload', 'notes', 'memo', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'InvoiceID', 'source_record_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'BankTransactionID', 'source_record_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'PaymentID', 'source_record_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'InvoiceNumber', 'reference_number', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Reference', 'reference_note', 'text', NULL, NULL, NULL, 'Xero Reference: a PO number or note (not the invoice number)'),
+    ('xero', 'Type', 'xero_type', 'text', NULL, NULL, NULL, 'ACCREC / ACCPAY, RECEIVE / SPEND'),
+    ('xero', 'PaymentType', 'xero_type', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Status', 'status', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'DateString', 'transaction_date', 'date', NULL, NULL, NULL, 'Also copied to event_date'),
+    ('xero', 'DueDateString', 'due_date', 'date', NULL, NULL, NULL, NULL),
+    ('xero', 'CurrencyCode', 'currency', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'CurrencyRate', 'exchange_rate', 'number', 'rate', 'exchange', 'ratio', NULL),
+    ('xero', 'LineAmountTypes', 'line_amount_types', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'SubTotal', 'subtotal_amount', 'number', 'amount', 'subtotal', 'usd', NULL),
+    ('xero', 'TotalTax', 'tax_amount', 'number', 'tax', NULL, 'usd', NULL),
+    ('xero', 'Total', 'total_amount', 'number', 'amount', 'total', 'usd', NULL),
+    ('xero', 'AmountDue', 'balance_due', 'number', 'balance', 'due', 'usd', NULL),
+    ('xero', 'AmountPaid', 'amount_paid', 'number', 'amount', 'paid', 'usd', NULL),
+    ('xero', 'AmountCredited', 'amount_credited', 'number', 'amount', 'credited', 'usd', NULL),
+    ('xero', 'Amount', 'payment_amount', 'number', 'amount', 'payment', 'usd', 'Payments: the amount paid'),
+    ('xero', 'Contact.ContactID', 'customer_source_id', 'text', NULL, NULL, NULL, 'On bills / money spent / bill payments this becomes vendor_source_id'),
+    ('xero', 'Contact.Name', 'customer_name', 'text', NULL, NULL, NULL, 'On bills / money spent / bill payments this becomes vendor_name'),
+    ('xero', 'Contact.EmailAddress', 'customer_email', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Invoice.InvoiceID', 'linked_txn_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Invoice.InvoiceNumber', 'linked_reference_number', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Invoice.Contact.ContactID', 'customer_source_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'Invoice.Contact.Name', 'customer_name', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'BankAccount.AccountID', 'payment_account_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'BankAccount.Name', 'payment_account_name', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'IsReconciled', 'is_reconciled', 'boolean', NULL, NULL, NULL, NULL),
+    ('xero', 'UpdatedDateUTC', 'source_updated_at', 'timestamp', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.LineItemID', 'line_source_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.Description', 'line_description', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.Quantity', 'quantity', 'number', 'quantity', NULL, 'count', NULL),
+    ('xero', 'LineItems.UnitAmount', 'unit_price', 'number', 'price', 'unit', 'usd', NULL),
+    ('xero', 'LineItems.LineAmount', 'line_amount', 'number', 'amount', 'line', 'usd', NULL),
+    ('xero', 'LineItems.TaxAmount', 'line_tax_amount', 'number', 'tax', 'line', 'usd', NULL),
+    ('xero', 'LineItems.DiscountRate', 'discount_percent', 'number', 'discount', NULL, 'percent', NULL),
+    ('xero', 'LineItems.ItemCode', 'item_source_id', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.Item.Name', 'item_name', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.AccountCode', 'account_code', 'text', NULL, NULL, NULL, NULL),
+    ('xero', 'LineItems.TaxType', 'tax_code', 'text', NULL, NULL, NULL, NULL)
 ON CONFLICT (system, source_field) DO UPDATE
     SET field_name = EXCLUDED.field_name,         value_type = EXCLUDED.value_type,
         metric_type = EXCLUDED.metric_type,       metric_subtype = EXCLUDED.metric_subtype,
@@ -586,6 +634,49 @@ CREATE INDEX IF NOT EXISTS idx_account_data_source     ON fact.account_data (acc
 -- Fast filters on categories: WHERE attributes @> '{"location_name": "Midtown"}'
 CREATE INDEX IF NOT EXISTS idx_account_data_attributes ON fact.account_data USING gin (attributes jsonb_path_ops);
 
+-- ── fact.entities: each customer, vendor, product, payee, location — ONCE ──
+-- Before this, a customer's name, email and address were copied onto every
+-- metric row of every invoice, and the same customer from two sources was two
+-- unrelated pieces of text. Now each real customer is ONE row here (its
+-- details merged from every source), each source's way of naming it is a row
+-- in fact.entity_sources, and account_data's attributes hold only the link
+-- ({"customer_link": 12}). Matching: api/services/entities.py (same email or
+-- phone, the same normalized name, or a fuzzy name match; 80-91 waits for a
+-- person). See docs/DATA_MODEL.md -> "Entities".
+CREATE TABLE IF NOT EXISTS fact.entities (
+    entity_id     BIGSERIAL PRIMARY KEY,
+    account_id    UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- whose (RLS filters on it)
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('customer', 'vendor', 'item', 'payee', 'location')),
+    display_name  TEXT,                                -- the first name seen: "Blue Door Cafe"
+    details       JSONB NOT NULL DEFAULT '{}',         -- {"customer_email": "...", "bill_city": "..."}: once
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_entities_account ON fact.entities (account_id, entity_type);
+
+-- ── fact.entity_sources: how each source refers to an entity ─────────────────
+-- "QuickBooks customer 58" and "sales.csv: blue door cafe" -> the same entity.
+-- account_data rows point HERE (not at the entity), so merging two customers
+-- later re-points one row and no stored metric changes.
+CREATE TABLE IF NOT EXISTS fact.entity_sources (
+    link_id              BIGSERIAL PRIMARY KEY,
+    account_id           UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
+    entity_id            BIGINT NOT NULL REFERENCES fact.entities (entity_id) ON DELETE CASCADE,
+    entity_type          TEXT NOT NULL,
+    source_system        TEXT NOT NULL,                -- 'quickbooks', 'xero', 'file_upload'
+    source_key           TEXT NOT NULL,                -- 'id:58' (the source's ID) or 'name:blue door cafe'
+    source_id            TEXT,                         -- the source's own ID, when it has one
+    source_label         TEXT,                         -- the name as this source writes it
+    match_method         TEXT NOT NULL CHECK (match_method IN ('new', 'email', 'phone', 'name', 'fuzzy',
+                                                               'review', 'confirmed')),
+    match_score          SMALLINT,                     -- 0-100 for name matches
+    -- A possible match a PERSON should confirm (score 80-91): "Is this the same customer?"
+    suggested_entity_id  BIGINT REFERENCES fact.entities (entity_id) ON DELETE SET NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (account_id, entity_type, source_system, source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_sources_entity ON fact.entity_sources (entity_id);
+
 
 -- ############################################################################
 -- Row Level Security
@@ -623,6 +714,21 @@ BEGIN
         CREATE POLICY one_account ON fact.account_data
             USING (account_id = NULLIF(current_setting('app.account_id', true), '')::uuid);
     END IF;
+END $$;
+-- The same rule for the entity tables (they hold client data too).
+DO $$
+DECLARE t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['entities', 'entity_sources']
+    LOOP
+        EXECUTE format('ALTER TABLE fact.%I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('ALTER TABLE fact.%I FORCE ROW LEVEL SECURITY', t);
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'fact' AND tablename = t
+                       AND policyname = 'one_account') THEN
+            EXECUTE format('CREATE POLICY one_account ON fact.%I USING '
+                           '(account_id = NULLIF(current_setting(''app.account_id'', true), '''')::uuid)', t);
+        END IF;
+    END LOOP;
 END $$;
 
 

@@ -49,9 +49,16 @@ Settings → **Integrations** has two sections (`api/services/connections.py`):
     with one cheap call each (QuickBooks `COUNT(*)`, Xero a one-item page) and
     hidden. Up to 20,000 records per open, and no more than the upload limit.
 
-  **Stored sync (Data Engineering) — next:** copy into `fact.account_data` on
-  the refresh schedule (daily by default), for history, trends and combining
-  with other sources. **Design rule (to keep storage and memory low):** pull only what changed since the
+  **Stored sync (Data Engineering) — ✅ built** (`api/services/sync.py`):
+  "Store your records" on the card (or "Turn on the stored sync" at the end
+  of Get Started) stores the full history once, then only what changed
+  (QuickBooks `MetaData.LastUpdatedTime`, Xero `If-Modified-Since`), on the
+  refresh schedule (daily by default; `python scripts/run_syncs.py` as a
+  Render Cron Job). Customers / vendors / products go to `fact.entities`,
+  matched with the client's other sources; records also found in uploaded
+  files are reported; voided Xero records are removed. Every call is counted
+  by the CallMeter, so a sync stops cleanly at the day's allowance and
+  carries on the next day. **Design rule (to keep storage and memory low):** pull only what changed since the
   last sync (QuickBooks Change Data Capture / `MetaData.LastUpdatedTime`), skip
   entities that return no rows, and load page by page — `row_hash` in
   `fact.account_data` already skips rows whose content didn't change, and an
@@ -85,7 +92,7 @@ What *is* ready, and what each connector will plug into:
 | Supabase / PostgreSQL (cloud storage): connect, list tables, read one — encrypted login, read-only | ✅ built and tested |
 | "Sign in with Supabase" (OAuth + Management API, read-only) | ✅ built; tested against Supabase's documented API shapes |
 | QuickBooks and Xero: OAuth sign-in, encrypted tokens (refreshed and rotated), live quick look, open records live | ✅ built; tested against the documented API shapes — test with the sandbox / a real organization once keys are set |
-| QuickBooks and Xero: stored sync on the refresh schedule | ❌ not built (next) |
+| QuickBooks and Xero: stored sync on the refresh schedule (incremental, entities, duplicates reported) | ✅ built; tested against the documented API shapes and on PostgreSQL |
 
 ### A note on the "connectors" in your Claude account
 
@@ -231,3 +238,28 @@ automatically before they expire, and the rotated refresh token is saved each
 time. The `state` sent with each sign-in is an encrypted, 15-minute ticket
 (who is connecting, and Supabase's PKCE verifier), so nothing is stored
 between "Connect" and the callback.
+
+## Get Started paths and "Add another source"
+
+**Get Started** (`web/components/wizard/Wizard.tsx`) takes one of three paths
+after "Where is your data?" — each with the workspace's rules:
+
+| Path | Steps after "Your data" |
+|---|---|
+| Files on my computer | Upload → Clean & preview → Your needs → Next steps (sign up) |
+| Cloud storage (Supabase / PostgreSQL) | Account → Connect & choose a table → Preview (read-only report) → Your needs (no "just download") → Next steps (workspace opens on the table) |
+| Business apps (QuickBooks, Xero) | Account → Connect → Quick look (free; optional record preview) → Your needs → Next steps ("Turn on the stored sync") |
+
+The account comes first on the last two (a connection is saved on it). The
+provider's sign-in returns to `/start` (`return_to=start`), and the wizard
+picks up at "Connect" from what it saved in the tab's sessionStorage. A
+"coming soon" choice (Snowflake, Square...) offers a consultation or the file
+path. QuickBooks / Xero show "connect now" only when the platform's keys are
+set (`intake.data_locations()`). The free quick look covers the **last 12
+months**; full history is the stored sync.
+
+**Add another source** (workspace, next to "Change data"): a file, stored
+data, a database table or QuickBooks / Xero records open together in the tab
+— same-column tables stacked, others as tabs, with how they relate (a shared
+ID, or names matched). The stricter rule wins: any cloud or live source makes
+it all report-only, with storing off. Nothing new is stored.

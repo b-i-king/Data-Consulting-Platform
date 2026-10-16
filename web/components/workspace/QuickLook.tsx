@@ -5,7 +5,8 @@
 // LIVE and NEVER STORED: every view asks QuickBooks / Xero again
 // (GET /api/connections/{connector}/quick-look, api/services/business_tools.py).
 // QuickBooks numbers are its own reports; Xero's are added up from invoices
-// and bank transactions, so they're labeled an estimate.
+// and bank transactions, so they're labeled an estimate. FREE for the last 12
+// months (the server moves an earlier start up); longer history = the stored sync.
 
 "use client";
 
@@ -67,7 +68,7 @@ export default function QuickLook(props: { token: string; connector: string }) {
       <div className="flex flex-wrap items-end gap-2 text-sm">
         <label className="space-y-1">
           <span className="block text-xs text-ink-muted">From</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)}
+          <input type="date" value={start} min={data?.earliest} onChange={(e) => setStart(e.target.value)}
             className="rounded-xl border border-line bg-surface px-2 py-1" />
         </label>
         <label className="space-y-1">
@@ -132,6 +133,10 @@ export default function QuickLook(props: { token: string; connector: string }) {
             </div>
           )}
           <p className="text-xs text-ink-muted">{data.basis}</p>
+          <p className={`text-xs ${data.history_limited ? "font-semibold text-warn" : "text-ink-muted"}`}>
+            The free quick look covers the last 12 months (from {fmtDate(data.earliest)}). For your full history and
+            trends over the years, store your data on a schedule with Data Engineering.
+          </p>
         </>
       )}
     </div>

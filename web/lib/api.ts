@@ -13,8 +13,10 @@ import type {
   CloudSchema,
   CloudTable,
   CloudTableFile,
+  EntityMatch,
   LiveDataset,
   QuickLook,
+  SyncResult,
   SupabaseProject,
   DashboardSuggestion,
   DashboardsInfo,
@@ -362,11 +364,15 @@ export async function loadToWarehouse(
   c: LoadChoices,
   fingerprint: string,
   consent: boolean,
+  /** "Load only the new records": skip what another source already stored (the preview's duplicates). */
+  skipDuplicates = false,
 ): Promise<LoadResult> {
   const res = await apiFetch(`${API_URL}/api/warehouse/load`, {
     method: "POST",
     headers: authHeaders(token),
-    body: filesForm(input.files, { ...loadFields(input, c), fingerprint, consent: String(consent) }),
+    body: filesForm(input.files, {
+      ...loadFields(input, c), fingerprint, consent: String(consent), skip_duplicates: String(skipDuplicates),
+    }),
   });
   await raiseForStatus(res);
   return res.json();
@@ -593,10 +599,12 @@ export async function getCloudTableFile(token: string, schema: string, name: str
 
 /**
  * "Connect QuickBooks / Xero / Supabase": the provider's sign-in address. The
- * page then goes there; the provider sends the person back to /app?integration=...
+ * page then goes there; the provider sends the person back to
+ * /app?integration=... — or to /start?integration=... (returnTo "start", from Get Started).
  */
-export async function startConnect(token: string, connector: string): Promise<string> {
-  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/authorize`, {
+export async function startConnect(token: string, connector: string, returnTo: "app" | "start" = "app"): Promise<string> {
+  const q = returnTo === "start" ? "?return_to=start" : "";
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/authorize${q}`, {
     headers: authHeaders(token),
   });
   await raiseForStatus(res);
@@ -628,6 +636,26 @@ export async function getLiveDatasets(token: string, connector: string): Promise
 export const getLiveDatasetFile = (token: string, connector: string, id: string) =>
   liveCsv(token, `/api/connections/${encodeURIComponent(connector)}/dataset?id=${encodeURIComponent(id)}`,
     `${connector}.${id}.csv`);
+
+/**
+ * The stored sync (Data Engineering): store a connected QuickBooks / Xero's
+ * records now, then on its refresh schedule. `consent` = "store my data"
+ * ticked (needed once, like any storing).
+ */
+export const startSync = (token: string, connector: string, consent: boolean) =>
+  postJson<{ sync: SyncResult; connectors: DataConnection[] }>(
+    `/api/connections/${encodeURIComponent(connector)}/sync`, { consent }, token);
+
+/** Name matches between sources waiting for a person ("Is this the same customer?"). */
+export async function getEntityReview(token: string): Promise<{ matches: EntityMatch[] }> {
+  const res = await apiFetch(`${API_URL}/api/entities/review`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Answer one: same = merge them (no stored rows change), different = keep them apart. */
+export const decideEntity = (token: string, linkId: number, same: boolean) =>
+  postJson<{ matches: EntityMatch[] }>("/api/entities/review", { link_id: linkId, same }, token);
 
 /** After "Sign in with Supabase": the client's projects and the one being read. */
 export async function getSupabaseProjects(token: string): Promise<{ projects: SupabaseProject[]; selected: string | null }> {

@@ -13,6 +13,15 @@
 //                          ConsultantPicker.tsx). Optional: the projects you'd like help
 //                          with. Starts with a free 30-minute consultation.
 // "Continue" first asks the person to confirm the choice and what to expect to pay.
+//
+// THE SAME RULES AS THE WORKSPACE, by where the data is (`source`):
+//   files     every option.
+//   cloud     "Just download" is grayed out (cleaning only REPORTS on data that
+//             lives in their database — the database stays the source), and the
+//             package notes that storing a copy is off (Data Engineering's
+//             diagrams and dictionaries still work on it).
+//   business  "Just download" grayed out the same way; Data Engineering is
+//             where the stored sync lives (history, trends, combining sources).
 
 "use client";
 
@@ -24,6 +33,7 @@ import type { BillingInterval, ConsultantLoad, ConsultantPlan, Quote, Service, S
 import PackageBuilder, { packageTotal } from "@/components/billing/PackageBuilder";
 import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { QuoteSummary } from "./ServiceConfirm";
+import type { DataSource } from "./StepDataLocation";
 import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader, TotalRow } from "./ui";
 
 /** The three ways forward from "Your needs". */
@@ -54,7 +64,20 @@ export default function StepServices(props: {
   onConsultantPlan: (p: ConsultantPlan) => void;
   onBack: () => void;
   onNext: () => void;
+  /** Where the data is: decides which options apply (see the top of this file). */
+  source?: DataSource;
 }) {
+  const source = props.source ?? "files";
+  // Why an option doesn't apply on this path (shown on the grayed-out card).
+  const offWhy: Partial<Record<NextPath, string>> =
+    source === "files"
+      ? {}
+      : {
+          download:
+            source === "cloud"
+              ? "Cleaning fixes need files from your computer. Your database stays the source."
+              : "Cleaning fixes need files. Export a file from your app to use this.",
+        };
   const picked = props.subscription?.plans ?? [];
   const pickedNames = picked.map((id) => props.subscriptions.find((p) => p.id === id)?.name).filter(Boolean);
   const [interval, setBilling] = useState<BillingInterval>(props.subscription?.interval ?? "year");
@@ -82,26 +105,38 @@ export default function StepServices(props: {
     if (id === "data_cleaning") return; // always included
     props.onChange(props.selected.includes(id) ? props.selected.filter((s) => s !== id) : [...props.selected, id]);
   };
-  // "Do it myself" needs at least one tool picked before going on.
-  const ready = props.path !== null && (props.path !== "package" || picked.length > 0);
+  // "Do it myself" needs at least one tool picked before going on; a grayed-out path can't be chosen.
+  const ready = props.path !== null && !offWhy[props.path] && (props.path !== "package" || picked.length > 0);
 
   return (
     <section>
-      <StepHeader title="What would you like to do next?" subtitle="Your cleaned data is ready. Choose one — you can change your mind later." />
+      <StepHeader
+        title="What would you like to do next?"
+        subtitle={
+          source === "files"
+            ? "Your cleaned data is ready. Choose one — you can change your mind later."
+            : "Your data is connected. Choose one — you can change your mind later."
+        }
+      />
 
       <div role="radiogroup" aria-label="Next step" className="grid gap-3 sm:grid-cols-3">
         {PATHS.map((p) => {
           const on = props.path === p.id;
           const lavender = p.id === "consultant";
+          const off = offWhy[p.id];
           return (
             <button
               key={p.id}
               type="button"
               role="radio"
               aria-checked={on}
+              aria-disabled={!!off}
+              disabled={!!off}
               onClick={() => props.onPath(p.id)}
               className={`rounded-2xl border-2 p-4 text-left shadow-[var(--shadow-card)] transition-colors ${
-                on
+                off
+                  ? "cursor-not-allowed border-dashed border-line bg-surface opacity-60"
+                  : on
                   ? lavender
                     ? "border-consultant bg-consultant-soft"
                     : "border-brand bg-brand-soft"
@@ -114,7 +149,7 @@ export default function StepServices(props: {
                 {p.emoji}
               </span>
               <span className="mt-1 block font-semibold">{p.title}</span>
-              <span className="mt-1 block text-sm text-ink-muted">{p.note}</span>
+              <span className="mt-1 block text-sm text-ink-muted">{off ?? p.note}</span>
             </button>
           );
         })}
@@ -127,6 +162,22 @@ export default function StepServices(props: {
             <span className="font-mono">{quote ? fmtUsd(quote.estimated_total_usd) : "…"}</span> — you&apos;ll confirm
             it before anything is charged.
           </p>
+        </Card>
+      )}
+
+      {props.path === "package" && source !== "files" && (
+        <Card className="mt-6 text-sm">
+          {source === "cloud" ? (
+            <p>
+              <strong>Your data stays in your database.</strong> Every tool works on it there; storing a copy with us is
+              off for cloud data. Data Engineering&apos;s diagrams and data dictionaries still work on it.
+            </p>
+          ) : (
+            <p>
+              <strong>The quick look is free.</strong> Add <strong>Data Engineering</strong> to store your records on a
+              schedule — your full history, trends over the years, and combining them with your other sources.
+            </p>
+          )}
         </Card>
       )}
 

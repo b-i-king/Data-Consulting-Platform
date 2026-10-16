@@ -8,6 +8,8 @@ export interface Choice {
   label: string;
   description?: string;
   available?: boolean;
+  /** A real integration ("supabase", "quickbooks", "xero"): the wizard takes the connect path for it. */
+  connector?: string;
 }
 
 export interface DataLocation extends Choice {
@@ -946,6 +948,8 @@ export interface LoadPlan {
   fingerprint: string;
   /** "Update my most recent upload": the stored source this load replaces (null = a normal load). */
   replacing?: string | null;
+  /** Records already stored from ANOTHER source (same date, amount and reference) — api/services/dedupe.py. */
+  duplicates?: { records: number; of: number; record_ids: string[]; sources: string[] };
   ready: boolean;
   problem: string | null;
   storage: StorageStatus;
@@ -1014,7 +1018,16 @@ export interface DeleteStoredResult {
 /** POST /api/warehouse/load */
 export interface LoadResult {
   load_run: LoadRun;
-  result: { rows_loaded: number; rows_updated: number; rows_already_stored: number };
+  result: {
+    rows_loaded: number;
+    rows_updated: number;
+    rows_already_stored: number;
+    /** Records left out because another source already had them ("load only the new records"). */
+    records_skipped_as_duplicates?: number;
+    /** New customers / vendors / products, and name matches waiting for a person. */
+    entities_added?: number;
+    matches_to_review?: number;
+  };
   summary: WarehouseCounts;
 }
 
@@ -1065,6 +1078,10 @@ export interface QuickLook {
   company: string;
   start: string; // ISO dates
   end: string;
+  /** The earliest date the FREE quick look covers (12 months back); older history = the stored sync. */
+  earliest: string;
+  /** true = the asked-for start was earlier than `earliest`, so it was moved up. */
+  history_limited: boolean;
   currency: string;
   /** true = added up from records (Xero), not the tool's own report. */
   estimate: boolean;
@@ -1073,6 +1090,36 @@ export interface QuickLook {
   monthly: { month: string; income: number; expenses: number; net: number }[];
   top_customers: { name: string; amount: number }[];
   stored: false;
+}
+
+/** "Is this the same customer?" — a name match between sources waiting for a person (api/services/entities.py). */
+export interface EntityMatch {
+  link_id: number;
+  entity_type: "customer" | "vendor" | "item" | "payee" | "location";
+  source_system: string;
+  /** The name as the newer source writes it. */
+  name: string;
+  /** 80-91: close, but not sure. */
+  score: number;
+  candidate: { entity_id: number; name: string; sources: string[] };
+}
+
+/** One run of the stored sync (api/services/sync.py). */
+export interface SyncResult {
+  connector: string;
+  /** Records (invoices, payments...) read from the tool this run. */
+  records: number;
+  rows_loaded: number;
+  rows_updated: number;
+  rows_skipped: number;
+  /** false = stopped early (the tool's daily allowance); the next sync carries on. */
+  complete: boolean;
+  /** Records that were ALSO in the client's uploaded files (same date, amount and reference). */
+  duplicates_elsewhere: number;
+  /** New customers / vendors / products found, and name matches waiting for a person. */
+  entities_added: number;
+  matches_to_review: number;
+  finished_at: string;
 }
 
 /** A record type of a connected QuickBooks / Xero that can be opened in the workspace. */

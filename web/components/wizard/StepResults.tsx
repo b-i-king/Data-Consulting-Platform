@@ -42,6 +42,14 @@ export default function StepResults(props: {
   bookingUrl: string;
   onBack: () => void;
   onNext: () => void;
+  /**
+   * Data read live from a cloud database or QuickBooks / Xero (Get Started's
+   * cloud and business app paths): the same findings, as a REPORT — nothing
+   * is fixed, renamed or transformed (fix it in the source), like the workspace.
+   */
+  readOnly?: boolean;
+  /** Where it came from, for the heading: "public.orders", "QuickBooks invoices". */
+  sourceLabel?: string;
 }) {
   const { categorization, groups } = props.analysis;
   const [active, setActive] = useState(0);
@@ -49,7 +57,14 @@ export default function StepResults(props: {
 
   return (
     <section className="space-y-8">
-      <StepHeader title="Your data, cleaned" subtitle={categorization.next_step} />
+      <StepHeader
+        title={props.readOnly ? `Preview: ${props.sourceLabel ?? "your data"}` : "Your data, cleaned"}
+        subtitle={
+          props.readOnly
+            ? "Read-only: what's missing or looks off is reported so you can fix it at the source. Nothing is copied or changed."
+            : categorization.next_step
+        }
+      />
 
       {categorization.mode === "multiple_files" && (
         <div className="space-y-3">
@@ -101,6 +116,7 @@ export default function StepResults(props: {
 
       <GroupDetails
         key={group.group_id}
+        readOnly={props.readOnly}
         group={group}
         bookingUrl={props.bookingUrl}
         applied={props.input.columnActions[String(group.group_id)] ?? {}}

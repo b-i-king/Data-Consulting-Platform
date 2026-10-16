@@ -148,6 +148,11 @@ after each restart (accounts live in memory).
       Supabase → Authentication → URL Configuration → **Redirect URLs** (for
       "Forgot password"). Invite emails are still to do (ROADMAP → Security).
 - [ ] Leave `ALLOW_PRIVATE_DB_HOSTS` unset (it's for local testing of the Supabase integration only).
+- [ ] Stored sync schedule: Render → New → **Cron Job**, same repo and environment variables as the
+      API, command `python scripts/run_syncs.py`, schedule `0 * * * *` (hourly; `*/15 * * * *` if you
+      sell "live"). Without it, syncs only run when a client clicks "Sync now".
+- [ ] After deploying this version: `python scripts/setup_database.py`, then once
+      `python scripts/backfill_entities.py` (links data stored before customers were stored once).
 - [ ] "Connect" buttons (optional, per tool): set `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET`,
       `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` (and `QUICKBOOKS_ENVIRONMENT=production`
       with production keys), `SUPABASE_OAUTH_CLIENT_ID` / `SUPABASE_OAUTH_CLIENT_SECRET`, and register

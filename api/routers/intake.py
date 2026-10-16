@@ -46,7 +46,7 @@ async def intake_options():
     settings = get_settings()
     return {
         "account_types": intake.ACCOUNT_TYPES,
-        "data_locations": intake.DATA_LOCATIONS,
+        "data_locations": intake.data_locations(),
         "services": pricing.catalog(),
         "supported_extensions": list(SUPPORTED_EXTENSIONS),
         # Grouped list for the upload screen; CSV and Excel are marked recommended.

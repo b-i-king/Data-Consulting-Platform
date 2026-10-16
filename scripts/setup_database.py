@@ -41,7 +41,7 @@ TABLES = {
     "dim": ["accounts", "consultants", "teams", "subscriptions", "consultations", "usage_events",
             "storage_consents", "load_runs", "data_connections",
             "dashboard_tabs", "question_log", "api_usage"],
-    "fact": ["account_data", "field_map"],
+    "fact": ["account_data", "field_map", "entities", "entity_sources"],
 }
 
 

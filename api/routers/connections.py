@@ -18,6 +18,7 @@ prices in api/services/pricing.py (REFRESH_OPTIONS).
     GET    /api/connections/{connector}/quick-look   QuickBooks / Xero live summary (never stored)
     GET    /api/connections/{connector}/datasets     record types that can be opened (empty ones flagged)
     GET    /api/connections/{connector}/dataset      one record type as CSV (live, never stored)
+    POST   /api/connections/{connector}/sync         the STORED sync now (Data Engineering + consent)
     DELETE /api/connections/{connector}       disconnect (the saved login is deleted; sign-in access revoked)
 
 All accept X-Acting-As, so a consultant can set this up for a client they
@@ -35,8 +36,8 @@ from fastapi.responses import RedirectResponse, Response
 
 from api.core.config import get_settings
 from api.core.security import get_acting_context
-from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn
-from api.services import account_store, business_tools, cloud_sources, connections, entitlements, oauth
+from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn
+from api.services import account_store, business_tools, cloud_sources, connections, entitlements, oauth, sync
 from api.services.pricing import refresh_catalog
 
 router = APIRouter(prefix="/connections")
@@ -338,15 +339,16 @@ async def oauth_callback(state: str = "", code: str = "", error: str = "", realm
     the browser back to the workspace:
         /app?integration=xero&connected=1             it worked
         /app?integration=xero&integration_error=...   it didn't (the message says why)
+    (/start instead of /app when the sign-in began in Get Started.)
 
     No sign-in token is needed here: `state` (encrypted, 15 minutes) says
     which account it is for, and can't be forged.
     """
     site = get_settings().site_url.rstrip("/")
-    provider = ""
+    provider, page = "", oauth.RETURN_PAGES["app"]
     try:
         st = oauth.read_state(state)
-        provider = st["provider"]
+        provider, page = st["provider"], oauth.RETURN_PAGES[st["return_to"]]
         if error or not code:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Access wasn't allowed, so nothing was connected.")
         tokens = await oauth.exchange_code(provider, code, st["verifier"])
@@ -358,21 +360,22 @@ async def oauth_callback(state: str = "", code: str = "", error: str = "", realm
             raise _full(provider)
         display, extra = await oauth.finish_connect(provider, tokens, realmId)
         await oauth.save(st["account_id"], provider, display, {"tokens": tokens, "extra": extra}, st["consultant_id"])
-        return RedirectResponse(f"{site}/app?integration={provider}&connected=1", status_code=303)
+        return RedirectResponse(f"{site}{page}?integration={provider}&connected=1", status_code=303)
     except HTTPException as exc:
         q = urlencode({"integration": provider, "integration_error": str(exc.detail)})
-        return RedirectResponse(f"{site}/app?{q}", status_code=303)
+        return RedirectResponse(f"{site}{page}?{q}", status_code=303)
 
 
 @router.get("/{connector}/authorize")
-async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_context)], return_to: str = "app"):
     """
     GET /api/connections/{connector}/authorize — start "Connect QuickBooks / Xero / Supabase".
 
     Returns the provider's sign-in address; the website sends the browser
     there. The connection is saved on the CLIENT (a consultant may connect
     for a client they manage). Free with any plan: the live quick look stores
-    nothing.
+    nothing. `return_to=start` sends them back to Get Started instead of the
+    workspace.
 
     Returns:
         dict: {"url": "https://appcenter.intuit.com/connect/oauth2?..."}.
@@ -387,7 +390,7 @@ async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_cont
     if connector in ("xero", "quickbooks") and not await _slot_free(connector, holder):
         raise _full(connector)
     consultant = str(ctx["consultant"]["id"]) if ctx["acting"] else None
-    return {"url": oauth.authorize_url(connector, holder, consultant)}
+    return {"url": oauth.authorize_url(connector, holder, consultant, return_to)}
 
 
 async def _live(ctx: dict, connector: str) -> tuple[dict, dict, business_tools.CallMeter]:
@@ -400,18 +403,12 @@ async def _live(ctx: dict, connector: str) -> tuple[dict, dict, business_tools.C
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     holder = await entitlements.plan_holder_id(ctx["account"])
     row, creds = await oauth.load(holder, connector)
-    company = creds["extra"]["tenant_id"] if connector == "xero" else creds["extra"]["realm_id"]
-    month = datetime.now(timezone.utc).date().replace(day=1)
-    meter = business_tools.CallMeter(connector, company, row.get("api_calls_day"), row.get("api_calls_count") or 0,
-                                     await account_store.get_api_usage(connector, month))
-    return row, creds, meter
+    return row, creds, await business_tools.meter_for(connector, row, creds)
 
 
 async def _save_meter(row: dict, meter: business_tools.CallMeter) -> None:
     """Save today's count on the connection and add this request's calls to the month (also after a failure)."""
-    if meter.changed:
-        await account_store.save_api_usage(str(row["account_id"]), row["connector"], meter.day, meter.used)
-    await account_store.add_api_usage(row["connector"], meter.month, meter.request_calls)
+    await business_tools.save_meter(row, meter)
 
 
 @router.get("/{connector}/quick-look")
@@ -473,6 +470,55 @@ async def live_dataset(connector: str, id: str, ctx: Annotated[dict, Depends(get
     finally:
         await _save_meter(row, meter)
     return _csv_response(r, f"{r['name']}.csv")
+
+
+@router.post("/{connector}/sync")
+async def sync_now(connector: str, body: SyncIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/connections/{connector}/sync — store a connected QuickBooks / Xero now
+    ("Turn on the stored sync", "Sync now"), then on its refresh schedule.
+
+    Needs Data Engineering and the storage consent (given now with
+    consent=true, or before). Only the plan holder (or their consultant).
+    "Sync now" is allowed again only after the gap its schedule allows
+    (connections.refresh_now_allowed), so nobody gets hourly data for the
+    price of daily. Each run stores only what changed (api/services/sync.py)
+    and never passes the tool's free-plan limits.
+
+    Returns:
+        dict: {"sync": SyncResult, "connectors": [...]}.
+
+    Raises:
+        HTTPException: 404 unknown / not connected; 403 without Data Engineering or for a
+            colleague; 400 without consent; 429 when "Sync now" is too soon.
+
+    Example:
+        POST /api/connections/xero/sync  {"consent": true}
+        -> 200 {"sync": {"records": 420, "rows_loaded": 3150, "complete": true, ...}, "connectors": [...]}
+    """
+    if connector not in sync.SOURCE_NAMES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
+    holder_id = await _holder_only(ctx)
+    holder = await account_store.get_account(holder_id)
+    if connections.REQUIRED_SERVICE not in await entitlements.active_services(holder):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Storing your records on a schedule needs Data Engineering in your package.")
+    if await account_store.active_storage_consent(holder_id) is None:
+        if not body.consent:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Please tick the box to agree to storing your data first.")
+        from api.routers.warehouse import TERMS_VERSION
+
+        await account_store.add_storage_consent(holder_id, TERMS_VERSION, str(ctx["account"]["id"]) if not ctx["acting"]
+                                                else str(ctx["consultant"]["account_id"]))
+    row = await account_store.get_integration(holder_id, connector)
+    if row and row.get("last_synced_at"):
+        ok, ready_at = connections.refresh_now_allowed(row.get("refresh_frequency") or "daily", row["last_synced_at"])
+        if not ok:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail=f"Your schedule allows the next sync after {ready_at:%m/%d/%Y %I:%M %p} UTC.")
+    result = await sync.run(holder, connector, consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
+                            started_by=str(ctx["consultant"]["account_id"]) if ctx["acting"] else str(ctx["account"]["id"]))
+    return {"sync": result, "connectors": connections.connector_list(await account_store.list_connections(holder_id))}
 
 
 @router.delete("/{connector}")

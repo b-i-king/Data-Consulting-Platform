@@ -97,6 +97,13 @@ services the client chose are offered; the rest are badges from
 | `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
 | `api/services/business_tools.py` | QuickBooks and Xero read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
 | `web/components/workspace/QuickLook.tsx` | The live quick look card (income, expenses, owed, by month, top customers) | How the quick look looks |
+| `api/services/sync.py` + `scripts/run_syncs.py` | The stored sync: QuickBooks / Xero into managed storage, only what changed, within the free limits; the scheduler | Stored sync |
+| `api/services/entities.py` + `api/routers/entities.py` | Each customer / vendor / product stored once (`fact.entities`), linked from every source; "Is this the same customer?" | Customers across sources |
+| `api/services/dedupe.py` | The same record from two sources (date, amount, reference) — at preview and in the sync | Duplicates across sources |
+| `scripts/backfill_entities.py` | One-time: link data stored before entities | After upgrading |
+| `web/components/wizard/StepConnect.tsx`, `StepQuickLook.tsx` | Get Started's connect and quick-look steps (cloud and business app paths) | The Get Started paths |
+| `web/components/workspace/AddSourceDialog.tsx` | "Add another source" in the workspace | Combining sources |
+| `web/components/workspace/EntityReview.tsx` | "Is this the same customer?" | Merging customers |
 | `api/services/dashboards.py` + `api/routers/dashboards.py` | Business context, suggested questions by industry, the client's own dashboard tabs, the question log | Dashboards built around the business |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
 | `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |

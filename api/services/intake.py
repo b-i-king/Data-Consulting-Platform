@@ -13,9 +13,16 @@ today, a phone app later) can render them from one source of truth:
 
 `available=True` means the platform can handle that choice end-to-end today.
 Anything else is "coming soon": the UI still lets people pick it (so you
-learn what clients use), and routes them to your booking link.
+learn what clients use), and offers a consultation or a file export instead.
 
-To launch a new connector later, build it, then flip `available` to True.
+An option with a `connector` (Supabase, QuickBooks, Xero) is a real
+integration (api/services/connections.py): data_locations() switches it on
+when it can be used — QuickBooks and Xero only once the platform's sign-in
+keys are set. The wizard then takes a different path for it: account,
+connect, preview (docs/RUN_THROUGH.md, "Get Started paths").
+
+To launch a new connector later, build it, give its option a `connector`,
+and add it to the check in data_locations().
 """
 
 from __future__ import annotations
@@ -47,12 +54,13 @@ DATA_LOCATIONS = [
         "description": "Data that lives in a cloud platform or database.",
         "available": False,
         "options": [
+            {"id": "supabase", "label": "Supabase / PostgreSQL", "available": True, "connector": "supabase"},
             {"id": "aws_s3", "label": "AWS (S3, Redshift, RDS)", "available": False},
             {"id": "snowflake", "label": "Snowflake", "available": False},
             {"id": "bigquery", "label": "Google BigQuery", "available": False},
             {"id": "databricks", "label": "Databricks", "available": False},
             {"id": "azure", "label": "Microsoft Azure / Fabric", "available": False},
-            {"id": "postgres", "label": "PostgreSQL / MySQL / SQL Server", "available": False},
+            {"id": "postgres", "label": "MySQL / SQL Server", "available": False},
             {"id": "google_drive", "label": "Google Drive / Sheets", "available": False},
         ],
     },
@@ -62,7 +70,8 @@ DATA_LOCATIONS = [
         "description": "Accounting, payroll, sales, and point-of-sale tools.",
         "available": False,
         "options": [
-            {"id": "quickbooks", "label": "QuickBooks", "available": False},
+            {"id": "quickbooks", "label": "QuickBooks", "available": False, "connector": "quickbooks"},
+            {"id": "xero", "label": "Xero", "available": False, "connector": "xero"},
             {"id": "gusto", "label": "Gusto", "available": False},
             {"id": "shopify", "label": "Shopify", "available": False},
             {"id": "square", "label": "Square", "available": False},
@@ -80,6 +89,37 @@ DATA_LOCATIONS = [
         "options": [],
     },
 ]
+
+
+def data_locations() -> list[dict]:
+    """
+    DATA_LOCATIONS with today's availability filled in.
+
+    An option with a connector is available when that integration can be used:
+    Supabase always (a connection string needs no platform keys), QuickBooks
+    and Xero once their sign-in keys are set (api/services/oauth.py). A
+    location is available when it is flat files or has an available option.
+
+    Returns:
+        list[dict]: copies of DATA_LOCATIONS (the constant is never changed).
+
+    Example:
+        >>> [o["available"] for o in data_locations()[1]["options"]][:1]
+        [True]
+    """
+    from api.services import oauth
+
+    out = []
+    for loc in DATA_LOCATIONS:
+        options = []
+        for opt in loc["options"]:
+            opt = dict(opt)
+            if opt.get("connector"):
+                opt["available"] = opt["connector"] == "supabase" or oauth.configured(opt["connector"])
+            options.append(opt)
+        available = loc["id"] == "flat_files" or any(o["available"] for o in options)
+        out.append({**loc, "options": options, "available": available})
+    return out
 
 
 # ── Company size — asked of business accounts ────────────────────────────────

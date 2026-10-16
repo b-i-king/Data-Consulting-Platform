@@ -549,3 +549,47 @@ def test_default_limits_fit_quickbooks_free_month():
     assert s.quickbooks_max_connections * business_tools.daily_budget("quickbooks") * 30 \
         <= business_tools.monthly_budget("quickbooks") == 450_000
     assert business_tools.daily_budget("xero") == 900 and s.xero_max_connections == 5
+
+
+# ── Get Started paths (api/services/intake.py, return_to, the free 12 months) ──
+
+def test_get_started_offers_the_integrations_that_work(monkeypatch):
+    """Supabase always connects; QuickBooks / Xero only with the platform's keys; the rest stay coming soon."""
+    locs = {l["id"]: l for l in client.get("/api/intake/options").json()["data_locations"]}
+    cloud = {o["id"]: o for o in locs["cloud_storage"]["options"]}
+    apps = {o["id"]: o for o in locs["business_apps"]["options"]}
+    assert cloud["supabase"]["available"] and cloud["supabase"]["connector"] == "supabase"
+    assert not cloud["snowflake"]["available"] and locs["cloud_storage"]["available"]
+    assert apps["xero"]["available"] and apps["quickbooks"]["available"] and not apps["square"]["available"]
+    monkeypatch.setenv("XERO_CLIENT_ID", "")
+    monkeypatch.setenv("QUICKBOOKS_CLIENT_ID", "")
+    get_settings.cache_clear()
+    locs = {l["id"]: l for l in client.get("/api/intake/options").json()["data_locations"]}
+    apps = {o["id"]: o for o in locs["business_apps"]["options"]}
+    assert not apps["xero"]["available"] and not locs["business_apps"]["available"]
+
+
+def test_sign_in_from_get_started_comes_back_to_get_started():
+    fake = _xero_fake()
+    oauth.HTTP_TRANSPORT = httpx.MockTransport(fake)
+    h = _signup()
+    url = client.get("/api/connections/xero/authorize?return_to=start", headers=h).json()["url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    back = client.get("/api/connections/oauth/callback", params={"state": state, "code": "c"}, follow_redirects=False)
+    assert back.headers["location"] == "https://site.example.com/start?integration=xero&connected=1"
+    # Anything else goes to the workspace, as before.
+    assert oauth.read_state(oauth.make_state("xero", "a", None, return_to="elsewhere"))["return_to"] == "app"
+
+
+def test_free_quick_look_covers_the_last_12_months():
+    from datetime import date, timedelta
+
+    oauth.HTTP_TRANSPORT = httpx.MockTransport(_xero_fake())
+    h = _signup()
+    _connect(h, "xero")
+    old = (date.today() - timedelta(days=800)).isoformat()
+    look = client.get(f"/api/connections/xero/quick-look?start={old}", headers=h).json()
+    assert look["history_limited"] is True and look["start"] == look["earliest"]
+    assert date.fromisoformat(look["earliest"]) >= date.today() - timedelta(days=366)
+    recent = (date.today() - timedelta(days=30)).isoformat()
+    assert client.get(f"/api/connections/xero/quick-look?start={recent}", headers=h).json()["history_limited"] is False

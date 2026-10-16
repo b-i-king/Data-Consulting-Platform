@@ -550,6 +550,19 @@ class CloudConnectIn(BaseModel):
     connection_string: str = Field(min_length=12, max_length=1000)
 
 
+class SyncIn(BaseModel):
+    """Start the stored sync. consent = "store my data" ticked (needed once, like any storing)."""
+
+    consent: bool = False
+
+
+class EntityDecisionIn(BaseModel):
+    """An answer to "Is this the same customer?" (api/services/entities.py decide)."""
+
+    link_id: int
+    same: bool
+
+
 class SupabaseProjectIn(BaseModel):
     """After "Sign in with Supabase": the project to read (its ref, e.g. "abcdefghijklmnop")."""
 

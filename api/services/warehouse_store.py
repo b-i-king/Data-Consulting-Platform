@@ -12,7 +12,14 @@ WHAT THIS FILE DOES
                              data in any service — dashboards, analysis, AI — or
                              download it as a CSV
     delete(holder)           delete everything stored for the client ("delete my
-                             stored data")
+                             stored data"), entities included
+    delete_records(...)      remove records a source says are gone (a voided Xero invoice)
+    relink_stored(holder)    the one-time backfill: link data stored before entities
+
+ENTITIES: every load first goes through entities.link() — each customer,
+vendor, product, payee and location is stored ONCE in fact.entities, and the
+rows keep only a link to it (api/services/entities.py). export() puts the
+names and details back, so "Use my stored data" still gives the table back.
 
 Only called after the client (or their consultant) saw the preview, accepted
 it, and consented to storage (api/routers/warehouse.py checks all of that).
@@ -40,6 +47,7 @@ Like account_store.py there is an in-memory path for development and tests
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from decimal import Decimal
@@ -48,7 +56,7 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from api.core import database
-from api.services import account_store, unified
+from api.services import account_store, entities, unified
 from api.services.warehouse_loader import EVENT_TYPES, LoadPlan
 
 # ── In-memory fallback (development only) ────────────────────────────────────
@@ -81,7 +89,8 @@ def _tables_missing(exc: Exception) -> bool:
     return isinstance(exc, (asyncpg.exceptions.UndefinedTableError, asyncpg.exceptions.InvalidSchemaNameError))
 
 
-async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, replace: bool = False) -> dict:
+async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, replace: bool = False,
+               skip_records: set[str] | None = None) -> dict:
     """
     Write an accepted plan into fact.account_data.
 
@@ -93,11 +102,15 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
             this source is deleted first, in the same transaction, so rows that
             are no longer in the new file disappear too (a normal load only
             adds and updates).
+        skip_records: set | None, record_ids NOT to store — the records the
+            duplicate check found already stored from another source, when the
+            person chose "load only the new records" (api/services/dedupe.py).
 
     Returns:
         dict: {"rows_loaded": new rows, "rows_updated": stored rows whose content
         changed, "rows_already_stored": rows skipped because they were stored
-        unchanged}.
+        unchanged, "records_skipped_as_duplicates", "entities_added",
+        "matches_to_review"}.
 
     Raises:
         HTTPException: 503 when the table doesn't exist yet.
@@ -108,10 +121,22 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
     """
     aid = str(holder["id"])
     rows = plan.rows
+    skipped = 0
+    if skip_records:
+        keep = ~rows["record_id"].isin(skip_records)
+        skipped = int(rows.loc[~keep, "record_id"].nunique())
+        rows = rows[keep]
+    # Customers, vendors, products... stored once; the rows keep a link (entities.py).
+    rows, ent = await entities.link(aid, plan.source_system, rows)
+    plan = dataclasses.replace(plan, rows=rows)
+    extra = {"records_skipped_as_duplicates": skipped, "entities_added": ent["entities_added"],
+             "matches_to_review": ent["matches_to_review"]}
     if database.pool is None:
         if replace:
             _stored.pop((aid, plan.source_system, plan.source_name), None)
-        return _load_in_memory(aid, plan)
+        return {**_load_in_memory(aid, plan), **extra}
+    if rows.empty:
+        return {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": 0, **extra}
 
     data = rows[_ROW_COLUMNS].to_dict("records")
     col = lambda name, fix=lambda v: v: [fix(_none(r[name])) for r in data]   # noqa: E731 — one Python list per column
@@ -163,7 +188,7 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
         raise
     inserted = sum(1 for r in changed if r["inserted"])
     return {"rows_loaded": inserted, "rows_updated": len(changed) - inserted,
-            "rows_already_stored": len(data) - len(changed)}
+            "rows_already_stored": len(data) - len(changed), **extra}
 
 
 def _load_in_memory(aid: str, plan: LoadPlan) -> dict:
@@ -175,6 +200,8 @@ def _load_in_memory(aid: str, plan: LoadPlan) -> dict:
     """
     key = (aid, plan.source_system, plan.source_name)
     existing = _stored.get(key)
+    if plan.rows.empty:
+        return {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": 0}
     decision = unified.plan_upsert(plan.rows, existing)
     new = pd.concat([decision["insert"], decision["update"][plan.rows.columns]], ignore_index=True)
     merged = new if existing is None else pd.concat([existing, new], ignore_index=True)
@@ -342,7 +369,10 @@ async def export(holder: dict, source_name: str | None = None) -> pd.DataFrame:
     """
     aid = str(holder["id"])
     tables = []
+    links = await entities.lookup(aid)
     for (system, name), rows in (await _stored_rows(aid, source_name)).items():
+        # Each source's own names, IDs and the entities' details back in place of the links.
+        rows = rows.assign(attributes=rows["attributes"].map(lambda a: entities.expand(a, links)))
         plan = await account_store.latest_column_plan(aid, system, name)
         if plan:
             wide = unified.unified_to_wide(rows, use_source_names=True, plan=plan).drop(
@@ -379,6 +409,7 @@ async def delete(holder: dict) -> dict:
     if database.pool is None:
         for key in [k for k in _stored if k[0] == aid]:
             del _stored[key]
+        await entities.delete_all(aid)
         return gone
     if not before["set_up"]:
         return gone
@@ -386,4 +417,70 @@ async def delete(holder: dict) -> dict:
         async with conn.transaction():
             await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
             await conn.execute("DELETE FROM fact.account_data WHERE account_id = $1", uuid.UUID(aid))
+    await entities.delete_all(aid)
     return gone
+
+
+async def delete_records(holder: dict, source_system: str, source_name: str, record_ids: list[str]) -> int:
+    """
+    Remove stored records that their source says are gone (a voided or deleted
+    Xero invoice), so stored totals match the source.
+
+    Returns:
+        int: rows deleted.
+    """
+    if not record_ids:
+        return 0
+    aid = str(holder["id"])
+    if database.pool is None:
+        key = (aid, source_system, source_name)
+        df = _stored.get(key)
+        if df is None:
+            return 0
+        keep = ~df["record_id"].isin(record_ids)
+        _stored[key] = df[keep].reset_index(drop=True)
+        return int((~keep).sum())
+    async with database.pool.acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
+        result = await conn.execute(
+            """DELETE FROM fact.account_data WHERE account_id = $1 AND source_system = $2 AND source_name = $3
+               AND record_id = ANY($4::text[])""", uuid.UUID(aid), source_system, source_name, list(record_ids))
+    return int(result.split()[-1])
+
+
+async def relink_stored(holder: dict) -> dict:
+    """
+    The one-time BACKFILL for data stored before entities existed: link each
+    stored source's customers, vendors... and rewrite its rows' attributes and
+    fingerprints in place (added_at / modified_at stay; nothing is reloaded).
+    Rows already linked are left as they are, so running it twice is safe.
+
+    Returns:
+        dict: {"rows_relinked", "entities_added", "matches_to_review"}.
+    """
+    aid = str(holder["id"])
+    totals = {"rows_relinked": 0, "entities_added": 0, "matches_to_review": 0}
+    for (system, name), rows in (await _stored_rows(aid, None)).items():
+        linked, stats = await entities.link(aid, system, rows)
+        changed = linked["row_hash"].ne(rows["row_hash"].values)
+        totals["entities_added"] += stats["entities_added"]
+        totals["matches_to_review"] += stats["matches_to_review"]
+        if not changed.any():
+            continue
+        totals["rows_relinked"] += int(changed.sum())
+        if database.pool is None:
+            _stored[(aid, system, name)] = linked.reset_index(drop=True)
+            continue
+        part = linked[changed.values]
+        async with database.pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
+            await conn.execute(
+                """UPDATE fact.account_data AS a SET attributes = t.attr::jsonb, row_hash = t.rh
+                   FROM unnest($4::text[], $5::int[], $6::text[], $7::text[], $8::text[])
+                        AS t(rid, ln, fn, attr, rh)
+                   WHERE a.account_id = $1 AND a.source_system = $2 AND a.source_name = $3
+                     AND a.record_id = t.rid AND a.line_number = t.ln AND a.field_name = t.fn""",
+                uuid.UUID(aid), system, name, part["record_id"].tolist(), [int(v) for v in part["line_number"]],
+                part["field_name"].tolist(), [unified.attributes_json(a) for a in part["attributes"]],
+                part["row_hash"].tolist())
+    return totals

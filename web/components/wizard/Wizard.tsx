@@ -1,41 +1,85 @@
-// ── The guest questionnaire ("wizard") ────────────────────────────────────────
+// ── The guest questionnaire ("wizard", Get Started) ──────────────────────────
 // This component owns ALL the state for the intake flow and decides which
 // step to show. Each step is its own component that receives just the values
-// and callbacks it needs. Flow:
+// and callbacks it needs. After "Where is your data?" the flow takes one of
+// THREE PATHS (StepDataLocation.tsx decides which), each with the same rules
+// as the workspace:
 //
-//   0. Who are you?            individual / business (+ size and industry for businesses)
-//   1. Where is your data?     flat files (live) · cloud · business apps (coming soon)
-//   2. Upload files            one or many; choose how to treat missing values
-//   3. Clean & preview         categorization, cleaning report, fill/remove gaps,
-//                              first-rows preview, Explore (dashboard + skills)
-//   4. Your needs              one of three paths: just download · do it myself
-//                              (a package of tools) · help from a consultant
-//                              (one-time or monthly, picked by name)
-//   5. Next steps              sign up (only now!), then: download; start the
-//                              package; or share the cleaned data with the
-//                              consultant (stored in the database, with consent)
+//   FILES ON MY COMPUTER
+//     About you -> Your data -> Upload -> Clean & preview (full cleaning:
+//     fix, fill, rename, transform; dashboard and tools) -> Your needs ->
+//     Next steps (sign up only now; download, package, or share with a consultant)
+//   CLOUD STORAGE (Supabase / PostgreSQL)
+//     About you -> Your data -> Account -> Connect & choose a table (StepConnect)
+//     -> Preview (READ-ONLY report, nothing fixed) -> Your needs (no "just
+//     download") -> Next steps (the workspace opens on that table)
+//   BUSINESS APPS (QuickBooks, Xero)
+//     About you -> Your data -> Account -> Connect (the tool's own sign-in) ->
+//     Quick look (free, StepQuickLook; optional read-only preview of a record
+//     type) -> Your needs -> Next steps ("Turn on the stored sync" with Data
+//     Engineering)
+//
+// The account comes BEFORE "Connect" on the last two paths: a connection is
+// saved, encrypted, on an account. Connecting QuickBooks / Xero (or "Sign in
+// with Supabase") LEAVES this page for the provider's sign-in; the answers so
+// far are saved in sessionStorage first (this tab only), and the provider
+// sends the person back to /start?integration=... — the wizard picks up at
+// "Connect" again.
+//
+// NAVIGATION on every page (components/wizard/ui.tsx NavRow): "← Previous"
+// on every page but the first; "« First step" from the third page on (your
+// answers are kept); "Skip to download" on every page but the first and the
+// last — for someone who changes their mind and just wants the cleaned file.
+// Downloading needs a FILE (cloud and live data are never offered as a
+// download), so without cleaned file data it goes to Upload, and straight to
+// the download once the file is read.
 //
 // IMPORTANT: the uploaded File objects stay in this component's memory. They
 // are re-sent (with the missing-value choices) whenever the server needs the
 // data again — fills, dashboard, skills, download — so it never stores client data.
+// Cloud tables and QuickBooks / Xero records come in as the same kind of File.
 
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { analyzeFiles, getIntakeOptions } from "@/lib/api";
+import { analyzeFiles, getCloudTableFile, getIntakeOptions, getLiveDatasetFile } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
-import { ErrorBox, Progress } from "./ui";
+import type { AccountType, AnalyzeResponse, CleaningInput, CloudTable, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, LiveDataset, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import AuthForm from "@/components/auth/AuthForm";
+import { Button, Card, ErrorBox, NavRow, Progress, WizardNavContext } from "./ui";
 import StepAccountType from "./StepAccountType";
-import StepDataLocation from "./StepDataLocation";
+import StepDataLocation, { type DataSource } from "./StepDataLocation";
+import StepConnect from "./StepConnect";
+import StepQuickLook from "./StepQuickLook";
 import StepUpload from "./StepUpload";
 import StepResults from "./StepResults";
 import { AddServiceConfirm } from "./ServiceConfirm";
 import StepServices, { type NextPath } from "./StepServices";
 import StepAccount from "./StepAccount";
 
-const LABELS = ["About you", "Your data", "Upload", "Clean & preview", "Your needs", "Next steps"];
+type StepId = "about" | "data" | "upload" | "clean" | "account" | "connect" | "preview" | "quicklook" | "needs" | "next";
+
+/** The steps of each path, in order, with the progress bar's labels. */
+const FLOWS: Record<DataSource, { id: StepId; label: string }[]> = {
+  files: [
+    { id: "about", label: "About you" }, { id: "data", label: "Your data" }, { id: "upload", label: "Upload" },
+    { id: "clean", label: "Clean & preview" }, { id: "needs", label: "Your needs" }, { id: "next", label: "Next steps" },
+  ],
+  cloud: [
+    { id: "about", label: "About you" }, { id: "data", label: "Your data" }, { id: "account", label: "Account" },
+    { id: "connect", label: "Connect" }, { id: "preview", label: "Preview" }, { id: "needs", label: "Your needs" },
+    { id: "next", label: "Next steps" },
+  ],
+  business: [
+    { id: "about", label: "About you" }, { id: "data", label: "Your data" }, { id: "account", label: "Account" },
+    { id: "connect", label: "Connect" }, { id: "quicklook", label: "Quick look" }, { id: "needs", label: "Your needs" },
+    { id: "next", label: "Next steps" },
+  ],
+};
+const PROVIDER_NAMES: Record<string, string> = { supabase: "Supabase", quickbooks: "QuickBooks", xero: "Xero" };
+// The answers kept while the browser is away at a provider's sign-in (this tab only).
+const SAVED_KEY = "dcp-get-started";
 
 export default function Wizard() {
   // Options (questions + answer choices) come from the backend.
@@ -44,7 +88,16 @@ export default function Wizard() {
   const [slow, setSlow] = useState(false);   // still loading after 4 s: the server is probably waking up
 
   // Answers collected along the way.
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState<StepId>("about");
+  const [source, setSource] = useState<DataSource>("files");
+  // Cloud / business app paths: what was previewed, and messages from the connect step.
+  const [previewLabel, setPreviewLabel] = useState<string | null>(null);
+  const [pickedTable, setPickedTable] = useState<CloudTable | null>(null);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [connectNotice, setConnectNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // "Skip to download" was pressed before there was cleaned file data: after Upload, go straight to it.
+  const [downloadOnly, setDownloadOnly] = useState(false);
   const [accountType, setAccountType] = useState<AccountType | null>(null);
   const [industry, setIndustry] = useState<Industry>({
     industry_supersector: null,
@@ -75,6 +128,32 @@ export default function Wizard() {
   useEffect(() => {
     // Restore a sign-in from earlier in this browser tab.
     setSession(loadSession());
+    // Back from a provider's sign-in (api/routers/connections.py oauth_callback, return_to=start):
+    // restore the answers saved before leaving, and pick up at "Connect".
+    const q = new URLSearchParams(window.location.search);
+    const integration = q.get("integration");
+    if (integration) {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(SAVED_KEY) ?? "null");
+        if (saved) {
+          setAccountType(saved.accountType ?? null);
+          if (saved.industry) setIndustry(saved.industry);
+          setLocation(saved.location ?? null);
+          setLocationOption(saved.locationOption ?? null);
+          setSource(saved.source ?? "files");
+          setStep("connect");
+        }
+      } catch {
+        // storage blocked: they start over at the first step, already connected
+      }
+      const name = PROVIDER_NAMES[integration] ?? integration;
+      setConnectNotice(
+        q.get("connected") === "1"
+          ? { ok: true, text: `${name} is connected. Read-only — nothing is copied.` }
+          : { ok: false, text: q.get("integration_error") ?? `${name} wasn't connected.` },
+      );
+      window.history.replaceState(null, "", window.location.pathname);
+    }
     const timer = setTimeout(() => setSlow(true), 4000);
     getIntakeOptions()
       .then(setOptions)
@@ -136,10 +215,48 @@ export default function Wizard() {
       : subscription?.plans ?? [])])),
     [serviceIds, subscription, options],
   );
-  const go = (n: number) => {
+  const go = (n: StepId) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  // Keep the answers while on "Connect": the provider's sign-in leaves this page.
+  useEffect(() => {
+    if (step !== "connect") return;
+    try {
+      sessionStorage.setItem(SAVED_KEY, JSON.stringify({ accountType, industry, location, locationOption, source }));
+    } catch {
+      // storage blocked: coming back starts over (the connection itself is kept)
+    }
+  }, [step, accountType, industry, location, locationOption, source]);
+
+  // The connected integration on the cloud / business app paths.
+  const connector =
+    options?.data_locations.find((l) => l.id === location)?.options.find((o) => o.id === locationOption)?.connector ?? null;
+
+  // A cloud table or a QuickBooks / Xero record type, read live and opened like a
+  // file — but only as a READ-ONLY preview (the same rule as the workspace).
+  async function previewLive(read: () => Promise<{ file: File }>, label: string) {
+    setLiveBusy(true);
+    setLiveError(null);
+    try {
+      const { file } = await read();
+      const empty = { columnActions: {}, columnNames: {}, transforms: {} };
+      const result = await analyzeFiles({ files: [file], strategy: "keep", ...empty });
+      setFiles([file]);
+      setStrategy("keep");
+      setColumnActions({});
+      setColumnNames({});
+      setTransforms({});
+      setAnalysis(result);
+      setPreviewLabel(label);
+      go("preview");
+    } catch (e) {
+      setLiveError(e instanceof Error ? e.message : "We couldn't read that.");
+    } finally {
+      setLiveBusy(false);
+    }
+  }
 
   const onSignedIn = (s: Session) => {
     saveSession(s);
@@ -158,9 +275,50 @@ export default function Wizard() {
       </p>
     );
 
+  const flow = FLOWS[source];
+  // A record type's preview belongs to the business path's "Quick look" stage.
+  const stage = source === "business" && step === "preview" ? "quicklook" : step;
+  const stepIndex = Math.max(0, flow.findIndex((f) => f.id === stage));
+  const providerName = PROVIDER_NAMES[connector ?? ""] ?? "your app";
+  const workspaceHref =
+    source === "cloud" && pickedTable
+      ? `/app?open_table=${encodeURIComponent(`${pickedTable.schema}.${pickedTable.name}`)}`
+      : source === "business"
+        ? "/app?show=integrations"
+        : "/app";
+
+  // "Skip to download": with cleaned file data, straight to the download (the
+  // "Just download" path); otherwise via Upload (a cloud / app choice switches
+  // to the files path: downloading needs a file exported from it).
+  function skipToDownload() {
+    setPath("download");
+    if (source === "files" && analysis && files.length) {
+      go("next");
+      return;
+    }
+    setSource("files");
+    setDownloadOnly(true);
+    go("upload");
+  }
+  const lastStep = step === "next";
+  const nav = {
+    // From the third page on: back to the first page, answers kept.
+    onFirst: stepIndex >= 2 ? () => go("about") : undefined,
+    // Every page but the first and the last (and not again on Upload once chosen).
+    onSkipToDownload: step !== "about" && !lastStep && !(step === "upload" && downloadOnly) ? skipToDownload : undefined,
+  };
+
   return (
+    <WizardNavContext.Provider value={nav}>
     <div>
-      <Progress step={step} total={LABELS.length} labels={LABELS} />
+      <Progress step={stepIndex} total={flow.length} labels={flow.map((f) => f.label)} />
+
+      {step === "upload" && downloadOnly && (
+        <p role="status" className="mb-4 rounded-2xl border border-brand/40 bg-brand-soft p-3 text-sm">
+          <strong>Skipping to the download.</strong> Choose your file{connector ? ` (export it from ${providerName})` : ""}:
+          once it&apos;s read and cleaned, you go straight to creating your account and downloading.
+        </p>
+      )}
 
       {pendingAdd && options.services.find((s) => s.id === pendingAdd) && (
         <AddServiceConfirm
@@ -173,7 +331,7 @@ export default function Wizard() {
         />
       )}
 
-      {step === 0 && (
+      {step === "about" && (
         <StepAccountType
           choices={options.account_types}
           value={accountType}
@@ -182,11 +340,11 @@ export default function Wizard() {
           companySizes={options.company_sizes}
           industry={industry}
           onIndustryChange={setIndustry}
-          onNext={() => go(1)}
+          onNext={() => go("data")}
         />
       )}
 
-      {step === 1 && (
+      {step === "data" && (
         <StepDataLocation
           locations={options.data_locations}
           location={location}
@@ -196,12 +354,108 @@ export default function Wizard() {
             setLocation(loc);
             setLocationOption(opt);
           }}
-          onBack={() => go(0)}
-          onNext={() => go(2)}
+          onBack={() => go("about")}
+          onNext={(next) => {
+            setSource(next);
+            setConnectNotice(null);
+            setDownloadOnly(false);
+            go(next === "files" ? "upload" : session ? "connect" : "account");
+          }}
         />
       )}
 
-      {step === 2 && (
+      {/* Cloud / business apps: the account first (a connection is saved on it). */}
+      {step === "account" && (
+        <section>
+          {session ? (
+            <Card className="space-y-3">
+              <p className="text-sm">
+                Signed in as <strong>{session.account.email}</strong>. Your {providerName} connection will be saved on
+                this account.
+              </p>
+              <NavRow onBack={() => go("data")}>
+                <Button onClick={() => go("connect")}>Continue</Button>
+              </NavRow>
+            </Card>
+          ) : (
+            <>
+              <AuthForm
+                defaultType={accountType ?? "individual"}
+                industry={industry}
+                onSignedIn={(s) => {
+                  onSignedIn(s);
+                  go("connect");
+                }}
+                title={{ signup: `Create your free account to connect ${providerName}`, signin: "Welcome back" }}
+                subtitle="Your connection is saved, encrypted, on your account. It's read-only: nothing is copied or changed."
+              />
+              <NavRow onBack={() => go("data")} />
+            </>
+          )}
+        </section>
+      )}
+
+      {step === "connect" && session && connector && (
+        <StepConnect
+          token={session.token}
+          connector={connector}
+          source={source}
+          notice={connectNotice}
+          busy={liveBusy}
+          error={liveError}
+          onPickTable={(t) => {
+            setPickedTable(t);
+            void previewLive(() => getCloudTableFile(session.token, t.schema, t.name), `${t.schema}.${t.name}`);
+          }}
+          onFileExport={() => {
+            setSource("files");
+            go("upload");
+          }}
+          onBack={() => go(session ? "data" : "account")}
+          onNext={() => go("quicklook")}
+        />
+      )}
+      {step === "connect" && (!session || !connector) && (
+        <Card className="space-y-3 text-sm">
+          <p>Let&apos;s pick up where you left off: choose where your data is again.</p>
+          <ErrorBox message={connectNotice && !connectNotice.ok ? connectNotice.text : null} />
+          <Button onClick={() => go("data")}>Back to Your data</Button>
+        </Card>
+      )}
+
+      {step === "quicklook" && session && connector && (
+        <StepQuickLook
+          token={session.token}
+          connector={connector}
+          name={providerName}
+          busy={liveBusy}
+          error={liveError}
+          onPreview={(d: LiveDataset) =>
+            void previewLive(() => getLiveDatasetFile(session.token, connector, d.id), `${providerName} ${d.name.toLowerCase()}`)}
+          onBack={() => go("connect")}
+          onNext={() => go("needs")}
+        />
+      )}
+
+      {step === "preview" && analysis && (
+        <StepResults
+          readOnly
+          sourceLabel={previewLabel ?? undefined}
+          analysis={analysis}
+          input={input}
+          onApplyActions={applyActions}
+          onApplyNames={applyNames}
+          onApplyTransforms={applyTransforms}
+          services={options.services}
+          selectedServices={previewServices}
+          onAddService={addService}
+          bookingUrl={bookingUrl}
+          onBack={() => go(source === "business" ? "quicklook" : "connect")}
+          onNext={() => go("needs")}
+        />
+      )}
+
+      {step === "upload" && (
         <StepUpload
           files={files}
           strategy={strategy}
@@ -222,13 +476,13 @@ export default function Wizard() {
           }}
           onAnalyzed={(result) => {
             setAnalysis(result);
-            go(3);
+            go(downloadOnly ? "next" : "clean");
           }}
-          onBack={() => go(1)}
+          onBack={() => go("data")}
         />
       )}
 
-      {step === 3 && analysis && (
+      {step === "clean" && analysis && (
         <StepResults
           analysis={analysis}
           input={input}
@@ -239,17 +493,18 @@ export default function Wizard() {
           selectedServices={previewServices}
           onAddService={addService}
           bookingUrl={bookingUrl}
-          onBack={() => go(2)}
-          onNext={() => go(4)}
+          onBack={() => go("upload")}
+          onNext={() => go("needs")}
         />
       )}
 
-      {step === 4 && analysis && (
+      {step === "needs" && (analysis || source !== "files") && (
         <StepServices
+          source={source}
           services={options.services}
           selected={serviceIds}
           onChange={setServiceIds}
-          runtimeSeconds={analysis.runtime.runtime_seconds}
+          runtimeSeconds={source === "files" && analysis ? analysis.runtime.runtime_seconds : 0}
           bookingUrl={bookingUrl}
           subscriptions={options.subscriptions ?? []}
           subscription={subscription}
@@ -262,13 +517,16 @@ export default function Wizard() {
           onConsultantId={setConsultantId}
           consultantPlan={consultantPlan}
           onConsultantPlan={setConsultantPlan}
-          onBack={() => go(3)}
-          onNext={() => go(5)}
+          onBack={() => go(source === "files" ? "clean" : source === "business" ? "quicklook" : analysis ? "preview" : "connect")}
+          onNext={() => go("next")}
         />
       )}
 
-      {step === 5 && analysis && (
+      {step === "next" && (analysis || source !== "files") && (
         <StepAccount
+          source={source}
+          connector={connector}
+          workspaceHref={workspaceHref}
           location={location}
           defaultType={accountType ?? "individual"}
           industry={industry}
@@ -285,10 +543,11 @@ export default function Wizard() {
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}
           input={input}
-          analysis={analysis}
-          onBack={() => go(4)}
+          analysis={source === "files" ? analysis : null}
+          onBack={() => go("needs")}
         />
       )}
     </div>
+    </WizardNavContext.Provider>
   );
 }

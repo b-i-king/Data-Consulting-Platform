@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from api.core.config import get_settings
 from api.main import app
-from api.services import account_store, warehouse_store
+from api.services import account_store, entities, warehouse_store
 from api.services.unified import NO_METRIC
 from api.services.warehouse_loader import EVENT_TYPES, build_plan
 
@@ -35,6 +35,11 @@ SALES = (
 ).encode()
 
 
+def _counts(result: dict) -> dict:
+    """The three row counts of a load result (it also reports entities and duplicates)."""
+    return {k: result[k] for k in ("rows_loaded", "rows_updated", "rows_already_stored")}
+
+
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
     """
@@ -50,7 +55,8 @@ def fresh(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "")
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._teams, account_store._consultants, account_store._consents,
-                  account_store._load_runs, account_store._subscriptions, warehouse_store._stored):
+                  account_store._load_runs, account_store._subscriptions, warehouse_store._stored,
+                  entities._entities, entities._links):
         store.clear()
     yield
     get_settings.cache_clear()
@@ -176,13 +182,13 @@ def test_preview_then_accept_then_reload_is_safe():
     ok = client.post("/api/warehouse/load", headers=h, files=_files(),
                      data={"fingerprint": preview["fingerprint"], "consent": "true"}).json()
     rows = preview["counts"]["rows_to_load"]
-    assert ok["result"] == {"rows_loaded": rows, "rows_updated": 0, "rows_already_stored": 0}
+    assert _counts(ok["result"]) == {"rows_loaded": rows, "rows_updated": 0, "rows_already_stored": 0}
     assert ok["load_run"]["status"] == "succeeded"
     assert ok["summary"]["rows"] == rows and ok["summary"]["sources"][0]["source_name"] == "sales.csv"
 
     again = client.post("/api/warehouse/load", headers=h, files=_files(),
                         data={"fingerprint": preview["fingerprint"]}).json()   # consent already on file
-    assert again["result"] == {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": rows}
+    assert _counts(again["result"]) == {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": rows}
 
     summary = client.get("/api/warehouse/summary", headers=h).json()
     assert summary["storage"]["consented"] is True and len(summary["loads"]) == 2
@@ -201,7 +207,7 @@ def test_a_changed_value_is_updated_not_duplicated():
 
     first = load(SALES)
     changed = load(SALES.replace(b"1000,2024-10-01,100,Bagel,Bread,-4.0,Card", b"1000,2024-10-01,100,Bagel,Bread,-5.0,Card"))
-    assert changed == {"rows_loaded": 0, "rows_updated": 1, "rows_already_stored": first["rows_loaded"] - 1}
+    assert _counts(changed) == {"rows_loaded": 0, "rows_updated": 1, "rows_already_stored": first["rows_loaded"] - 1}
 
 
 def test_needs_data_engineering():
