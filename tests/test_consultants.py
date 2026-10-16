@@ -185,10 +185,14 @@ def test_clients_pick_a_consultant_by_name_within_capacity():
     settings = client.put("/api/consultant/settings", headers=_auth(kim), json={"capacity": 1}).json()
     assert settings["load"]["capacity"] == 1 and settings["max_capacity"] == 10
 
-    ana = _signup("ana@example.com", "Ana", wants_consultant=True, consultant_id=kim_id, consultant_plan="monthly").json()
+    ana = _signup("ana@example.com", "Ana", wants_consultant=True, consultant_id=kim_id, consultant_plan="monthly",
+                  service_ids=["data_visualization", "data_science_ml"]).json()
     assert ana["account"]["consultant_name"] == "Kim" and ana["account"]["consultant_plan"] == "monthly"
     [summary] = client.get("/api/consultant/clients", headers=_auth(kim)).json()["clients"]
     assert summary["consultant_plan"] == "monthly"
+    # The "Working on" picker filters on what they need help with, and sorts by last sign-in.
+    assert summary["interested_services"] == ["data_visualization", "data_science_ml"]
+    assert summary["last_login_at"]
     kim_row = next(c for c in client.get("/api/intake/options").json()["consultants"] if c["name"] == "Kim")
     assert (kim_row["clients"], kim_row["percent"], kim_row["full"]) == (1, 100, True)
     assert "email" not in kim_row                            # guests never see emails

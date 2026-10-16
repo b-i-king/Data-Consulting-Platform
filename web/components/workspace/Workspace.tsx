@@ -727,7 +727,8 @@ export default function Workspace() {
         ) : (
           <div className="min-h-0 lg:flex-1 lg:overflow-y-auto">
             {isConsultant && (
-              <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad} />
+              <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad}
+                services={options?.services} />
             )}
             <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">{whoName}</p>
             <nav aria-label="Workspace" data-tour="ws-nav">
