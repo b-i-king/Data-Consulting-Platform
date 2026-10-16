@@ -144,7 +144,11 @@ after each restart (accounts live in memory).
 ## Checklist before real clients
 
 - [ ] Passwords: set `SUPABASE_URL` / `SUPABASE_KEY`, turn Supabase "Confirm email"
-      on with your own SMTP, and build "Forgot password" + invite emails (ROADMAP → Security).
+      on with your own SMTP, and add `https://<your site>/reset-password` to
+      Supabase → Authentication → URL Configuration → **Redirect URLs** (for
+      "Forgot password"). Invite emails are still to do (ROADMAP → Security).
+- [ ] Leave `ALLOW_PRIVATE_DB_HOSTS` unset (it's for local testing of the Supabase integration only).
+- [ ] Keep `JWT_SECRET_KEY` fixed: it also encrypts clients' saved database logins (changing it means they reconnect).
 - [ ] Run the latest `db/schema.sql` in Supabase (`python scripts/setup_database.py`).
 - [ ] Cal.com: `BOOKING_URL` (free), `PAID_BOOKING_URL` (paid), webhook + `CALCOM_WEBHOOK_SECRET` ([RUN_THROUGH.md](RUN_THROUGH.md) step 8).
 - [ ] Payments: set real prices, run `scripts/sync_stripe.py`, add the Stripe webhook and keys ([PAYMENTS.md](PAYMENTS.md)).

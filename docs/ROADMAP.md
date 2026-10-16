@@ -33,9 +33,9 @@ What exists today and what comes next, in priority order.
   local hashes when Supabase isn't configured. Turn on Supabase's "Confirm
   email" setting for verified addresses (the app already handles it).
 Still to do:
-1. **Forgot password**: `supabase.auth.reset_password_for_email(email,
-   {"redirect_to": SITE_URL + "/reset-password"})` plus a small page that sets
-   the new password. Until then, reset from Supabase → Authentication → Users.
+1. ✅ **Forgot password** ("Forgot password?" on sign-in, "Reset password" in
+   Settings → Account): Supabase emails the link back to `/reset-password`
+   (add it to Supabase's Redirect URLs); local mode logs the link instead.
 2. **Invite emails** for team colleagues and consultant-added clients. Today the
    first sign-in with their email sets the password, so whoever gets there first
    chooses it — sign them in promptly.
@@ -112,6 +112,28 @@ Use the Gemini API (`GEMINI_API_KEY`) with **caps like the Video Game Stats
 Tracker**: daily questions per plan in `ai_usage_daily`, plus a global monthly
 budget. When the AI can't answer, offer the consultant (free 30 minutes). Flip
 `available=True` for `ai` in `api/services/pricing.py`.
+
+## Gaps compared with leading SaaS products (October 2026 review)
+
+What the best data and small-business SaaS products (Stripe, Notion, Airtable,
+Looker Studio, Power BI, HubSpot, QuickBooks itself) do that this platform
+doesn't yet — in the order I'd build them. ✅ = done in the October 2026 round.
+
+| # | Gap | Why it matters | Size |
+|---|---|---|---|
+| ✅ | Forgot / reset password | Basic trust; every app has it | S |
+| ✅ | Settings area (account, billing, integrations, roles) | One predictable place for everything that isn't the work | M |
+| ✅ | Business context + the client's own dashboard tabs | Dashboards answer *their* questions, and grow with them | M |
+| 1 | **Email notifications** (consultant approved, data loaded, a refresh failed, weekly summary) | People come back when something tells them to; today nothing is emailed except Supabase's | M |
+| 2 | **Shareable, scheduled dashboards** (a read-only link, and a weekly PDF/email) | Owners want the numbers without signing in; consultants deliver reports this way | M |
+| 3 | **Two-factor sign-in** for consultants and admins (Supabase MFA) | They can open client data; required before real clients | S |
+| 4 | **Activity log** (who loaded, deleted, connected, changed a plan — per account) | Trust and support: "what happened to my data?"; also needed for audits | S |
+| 5 | **Team roles beyond owner/member** (viewer, editor) and invite emails | Businesses share dashboards with staff who shouldn't change billing | M |
+| 6 | **Usage & billing history** in the app (downloads, minutes, invoices) | Fewer "why was I charged?" questions; Stripe's portal covers invoices only | S |
+| 7 | **Several datasets at once** (a "data catalog": pick tables, join them in the workspace, not only at load) | Most businesses have more than one table; the load step can join, the workspace can't yet | L |
+| 8 | **Help center + in-app chat** (searchable how-tos; message your consultant) | Self-serve support; consultants answer in context | M |
+| 9 | **Status page and error monitoring** (Sentry or similar) | Know about a broken refresh before the client does | S |
+| 10 | **API keys / webhooks for clients** | Larger clients want to push data in or pull results out | M |
 
 ## Later
 

@@ -1,5 +1,5 @@
 // Root layout: wraps every page with the header (logo, theme switch, sign-in links)
-// and footer (social media icons, privacy note, links to the legal pages).
+// and footer (social media icons; "Made with 💡 by", the copyright, and the legal pages).
 //
 // SEO (how people find the site): the `metadata` below — title, description,
 // keywords, link previews, robots rules, Google verification — plus a JSON-LD
@@ -106,10 +106,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <footer className="mx-auto max-w-5xl border-t border-line px-4 pb-8 pt-2 text-xs text-ink-muted">
           {/* Social media icons (components/SocialLinks.tsx). */}
           <SocialLinks />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>Your files are processed in memory and not stored, unless you choose managed storage.</span>
+          {/* Three parts: who made it (left), the copyright (middle), the legal pages (right).
+              How client data is handled lives in the Privacy Policy and Storage terms. */}
+          <div className="grid items-center gap-3 sm:grid-cols-3">
+            <span className="text-center sm:text-left">
+              Made with 💡 by{" "}
+              <a
+                href="https://www.linkedin.com/company/thebolgroup"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                {COMPANY}
+              </a>
+            </span>
+            <span className="text-center">
+              © {new Date().getFullYear()} {COMPANY}. All rights reserved.
+            </span>
             {/* Legal pages (app/privacy, terms, storage-terms, data-deletion). */}
-            <nav aria-label="Legal" className="flex flex-wrap gap-4">
+            <nav aria-label="Legal" className="flex flex-wrap justify-center gap-4 sm:justify-end">
               <Link href="/privacy" className="hover:text-ink">
                 Privacy
               </Link>
@@ -124,17 +139,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </Link>
             </nav>
           </div>
-          <p className="mt-3 text-center">
-            Made with 💡 by{" "}
-            <a
-              href="https://www.linkedin.com/company/thebolgroup"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-brand hover:underline"
-            >
-              {COMPANY}
-            </a>
-          </p>
         </footer>
       </body>
     </html>

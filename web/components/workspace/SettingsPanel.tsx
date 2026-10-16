@@ -1,4 +1,5 @@
-// Settings (⚙️ in the workspace's left pane).
+// Settings pieces, used by the workspace's Account area (AccountPanel.tsx and
+// the Consultant section):
 //
 //   * CONSULTANTS (the "finish setting up" steps for a new consultant):
 //       1. Your booking links — their own FREE 30-minute and PAID session
@@ -42,46 +43,8 @@ import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 
-export default function SettingsPanel(props: {
-  token: string;
-  account: Account;
-  onAccount: (a: Account) => void;
-  /** Consultants: told when "finish setting up" is done (or needed again). */
-  onSetupNeeded?: (needed: boolean) => void;
-  /** True when a consultant (or admin) is working on a client: their stored data, not my account. */
-  acting: boolean;
-  /** Whose workspace is on screen (the client when acting). */
-  workspaceName: string;
-  /** What's stored for the workspace's account (null while loading). */
-  stored: WarehouseCounts | null;
-  /** The workspace's plan includes Data Engineering (storing and replacing data). */
-  canStore: boolean;
-  /** The plan holder (or their consultant) may replace data; team members may not. */
-  canChange: boolean;
-  onStoredChanged: (counts: WarehouseCounts) => void;
-  /** The account was deleted: sign out and go home. */
-  onDeleted: () => void;
-}) {
-  const isConsultant = props.account.role === "consultant";
-  return (
-    <div className="space-y-5">
-      {!props.acting &&
-        (isConsultant ? <ConsultantSetup token={props.token} onSetupNeeded={props.onSetupNeeded} /> : <AskToConsult {...props} />)}
-      {props.stored?.latest_upload && props.canStore && props.canChange && (
-        <UpdateLatestUpload
-          token={props.token}
-          latest={props.stored.latest_upload}
-          name={props.workspaceName}
-          onStoredChanged={props.onStoredChanged}
-        />
-      )}
-      {!props.acting && <DeleteAccount token={props.token} account={props.account} onDeleted={props.onDeleted} />}
-    </div>
-  );
-}
-
 /** "Update your most recent upload": pick the corrected file; it replaces the stored one after a preview. */
-function UpdateLatestUpload(props: {
+export function UpdateLatestUpload(props: {
   token: string;
   latest: string;
   name: string;
@@ -147,7 +110,7 @@ function UpdateLatestUpload(props: {
 }
 
 /** "Delete my account": type your email to confirm; everything goes. */
-function DeleteAccount(props: { token: string; account: Account; onDeleted: () => void }) {
+export function DeleteAccount(props: { token: string; account: Account; onDeleted: () => void }) {
   const [asking, setAsking] = useState(false);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -211,7 +174,7 @@ function DeleteAccount(props: { token: string; account: Account; onDeleted: () =
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-consultant";
 
-function ConsultantSetup({ token, onSetupNeeded }: { token: string; onSetupNeeded?: (needed: boolean) => void }) {
+export function ConsultantSetup({ token, onSetupNeeded }: { token: string; onSetupNeeded?: (needed: boolean) => void }) {
   const [data, setStoredData] = useState<ConsultantSettings | null>(null);
   const setData = (d: ConsultantSettings) => {
     setStoredData(d);
@@ -426,7 +389,7 @@ function Capacity({ token, data, onSaved }: SectionProps) {
   );
 }
 
-function AskToConsult(props: { token: string; account: Account; onAccount: (a: Account) => void }) {
+export function AskToConsult(props: { token: string; account: Account; onAccount: (a: Account) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const status = props.account.consultant_request;

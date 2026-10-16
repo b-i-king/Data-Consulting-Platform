@@ -6,6 +6,23 @@ spending. Code: `data_skills/build-dashboard/skill.py` (the dashboard),
 `data_skills/_time.py` (the time calculations) and
 `web/components/explore/Dashboard.tsx` (the screen).
 
+## Built around the business (tabs and context)
+
+The workspace's Dashboard page (`web/components/explore/DashboardTabs.tsx`,
+`api/services/dashboards.py`) has layers:
+
+1. **Business context** at the top: the industry (from sign-up) and "About your
+   business" (Settings → Account: what they do, their goals, the questions they
+   ask most).
+2. **Overview** — the automatic dashboard described below.
+3. **Their own tabs** — each tab is a list of saved plain-English questions
+   ("total amount by store", "top 5 product by amount in 2025"), answered again
+   on the open data every time (the ask-your-data skill, read-only). "+ Add tab"
+   suggests questions from their key questions, the questions they ask most
+   (`dim.question_log`), and their **industry** — written with the table's own
+   column names (retail: best sellers, sales by store, how customers pay...).
+   Up to 10 tabs, 12 questions each; adding tabs needs Data Visualization.
+
 ## When does the dashboard appear?
 
 Whenever the cleaned table has a date column (real dates, or text where 80%+

@@ -93,6 +93,8 @@ services the client chose are offered; the rest are badges from
 | `api/services/consultations.py` + `api/routers/consultations.py` | Free consultation → paid link; Cal.com webhook; consultant confirmation | Booking / consultation rules |
 | `api/services/warehouse_loader.py` | Plans a load: mapping, steps with "why", previews, fingerprint (pandas only) | Changing how files fit the warehouse |
 | `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
+| `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only) | Cloud integrations |
+| `api/services/dashboards.py` + `api/routers/dashboards.py` | Business context, suggested questions by industry, the client's own dashboard tabs, the question log | Dashboards built around the business |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
 | `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |
 | `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (the `fact.account_data` shape) | Changing how data is stored, or adding a source |

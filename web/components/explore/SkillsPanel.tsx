@@ -104,6 +104,8 @@ export default function SkillsPanel(props: {
   /** A result kept from earlier, so switching back to a skill doesn't re-run it. */
   initialResult?: SkillResult | null;
   onResult?: (r: SkillResult) => void;
+  /** "Ask your data": told each question asked and whether it was answered (for the question log). */
+  onAsked?: (question: string, answered: boolean) => void;
 }) {
   const { input, groupId, columns } = props;
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -156,8 +158,10 @@ export default function SkillsPanel(props: {
       const r = await runSkill(skill.id, input, params, groupId);
       setResult(r);
       props.onResult?.(r);
+      if (typeof params.question === "string") props.onAsked?.(params.question, true);
     } catch (e) {
       setResult(null);
+      if (!auto && typeof values.question === "string" && values.question) props.onAsked?.(values.question, false);
       const msg = e instanceof Error ? e.message : "The skill could not run.";
       // An automatic run that needs an option (e.g. which column to predict) isn't
       // an error: show the form with a hint instead.

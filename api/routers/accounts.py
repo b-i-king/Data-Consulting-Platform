@@ -9,6 +9,10 @@ Account endpoints.
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
     DELETE /api/accounts/me           delete my account and EVERYTHING in it (type your email to confirm)
+    POST /api/accounts/forgot-password   "Forgot password?": email a reset link (same reply for any email)
+    POST /api/accounts/reset-password    set a new password from the emailed link
+    POST /api/accounts/reset-link        signed in (Account page): email MYSELF a reset link
+    PUT  /api/accounts/business-context  "About your business" — what dashboards are built around
     GET  /api/accounts/consultants    consultants and how full they are, one page at a time (public: the picker)
     POST /api/accounts/consultant     a signed-in client picks a consultant (one-time or monthly)
     POST /api/accounts/consultant-request   "I'd like to work as a consultant" (an admin decides)
@@ -51,14 +55,17 @@ from api.models.accounts import (
     AccountOut,
     AddServiceIn,
     AuthOut,
+    BusinessContextIn,
     ChooseConsultantIn,
     DeleteAccountIn,
+    ForgotPasswordIn,
+    ResetPasswordIn,
     SigninIn,
     SignupIn,
     TeamMemberIn,
 )
-from api.services import (account_store, auth, billing, consultants, consultations, entitlements, locations, pricing,
-                          warehouse_store)
+from api.services import (account_store, auth, billing, consultants, consultations, dashboards, entitlements,
+                          locations, pricing, warehouse_store)
 from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
@@ -833,3 +840,89 @@ async def ask_to_be_consultant(token: Annotated[dict, Depends(get_current_accoun
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
     return await _full_account_out(await consultants.request(acc))
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordIn):
+    """
+    POST /api/accounts/forgot-password — email a password-reset link.
+
+    The reply is the same whether or not the email has an account, so the
+    form can't be used to find out who signed up (api/services/auth.py).
+
+    Args:
+        body: ForgotPasswordIn, {"email": "..."}.
+
+    Returns:
+        dict: {"message": auth.RESET_SENT}.
+
+    Raises:
+        HTTPException: 429 when too many links were asked for.
+
+    Example:
+        POST /api/accounts/forgot-password  {"email": "ana@example.com"}
+        -> 200 {"message": "If that email has an account, we've sent it a link ..."}
+    """
+    await auth.send_reset_link(await account_store.get_account_by_email(body.email), body.email)
+    return {"message": auth.RESET_SENT}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    """
+    POST /api/accounts/reset-password — choose a new password from the emailed link.
+
+    Args:
+        body: ResetPasswordIn, {"token": "<from the link>", "password": "<new>"}.
+
+    Returns:
+        dict: {"message": "...", "email": "<the account's email>"} — the page then offers sign-in.
+
+    Raises:
+        HTTPException: 400 for an expired / used link; 422 for a password that breaks the rules.
+    """
+    account = await auth.reset_password(body.token.strip(), body.password)
+    return {"message": "Your password is changed. Sign in with your new password.", "email": account["email"]}
+
+
+@router.post("/reset-link")
+async def reset_link(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/accounts/reset-link — signed in (Account page): email myself a reset link.
+
+    Returns:
+        dict: {"message": "We emailed a reset link to <email>."}
+
+    Raises:
+        HTTPException: 401 when the account is gone.
+    """
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
+    await auth.send_reset_link(acc, acc["email"])
+    return {"message": f"We emailed a link to reset your password to {acc['email']}. It works for 1 hour."}
+
+
+@router.put("/business-context")
+async def set_business_context(body: BusinessContextIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    PUT /api/accounts/business-context — "About your business" (what dashboards are built around).
+
+    Saved on the plan holder (a business shares it); a consultant may fill it
+    in for their client.
+
+    Args:
+        body: BusinessContextIn, {"about", "goals", "key_questions": [...]}.
+
+    Returns:
+        dict: {"context": the saved context}.
+
+    Raises:
+        HTTPException: 403 for a team colleague.
+    """
+    holder = await entitlements.plan_holder(ctx["account"])
+    if not ctx["acting"] and str(holder["id"]) != str(ctx["account"]["id"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can change this.")
+    context = dashboards.clean_context(body.about, body.goals, body.key_questions)
+    await account_store.set_business_context(str(holder["id"]), context)
+    return {"context": context}

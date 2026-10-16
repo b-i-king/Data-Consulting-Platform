@@ -22,6 +22,23 @@ checked in one of two ways:
 After a password checks out, the API still issues its OWN login token
 (api/core/security.py), exactly as before, so nothing else in the app changes.
 
+FORGOT / RESET PASSWORD
+-----------------------
+  1. "Forgot password?" (sign-in form) or "Reset password" (Account page)
+     -> send_reset_link(email). The reply is the SAME whether or not the email
+     has an account, so nobody can use it to find out who signed up.
+       * Supabase account: Supabase emails its own reset link
+         (auth.reset_password_for_email), back to SITE_URL/reset-password.
+         Add that address to Supabase -> Authentication -> URL Configuration
+         -> Redirect URLs.
+       * Local account (no Supabase): a random token; only its sha256 is
+         stored (accounts.password_reset_hash, 1 hour). There is no email
+         server in local mode, so the link is written to the API's log.
+  2. /reset-password -> reset_password(token, new password):
+       * Supabase's link carries an access token (a JWT, it has dots): the new
+         password is sent to Supabase's /auth/v1/user with that token.
+       * A local token: matched by its hash, then replaced by the new hash.
+
 WHY NOT GOOGLE / APPLE SIGN-IN YET?
 -----------------------------------
 Email + password keeps sign-in in-house to start. Supabase Auth supports Google
@@ -35,12 +52,17 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import logging
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
+
+log = logging.getLogger(__name__)
 
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
@@ -50,6 +72,11 @@ MAX_PASSWORD_LENGTH = 128
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 
 WRONG_PASSWORD = "Wrong email or password."
+RESET_SENT = ("If that email has an account, we've sent it a link to reset the password. "
+              "The link works for 1 hour — check your spam folder too.")
+RESET_BAD_LINK = "That reset link has expired or was already used. Ask for a new one."
+RESET_HOURS = 1
+LOCAL_PREFIX = "lr_"   # local reset tokens start with this (Supabase's are JWTs)
 
 
 @dataclass
@@ -307,3 +334,106 @@ async def check_password(account: dict, password: str) -> None:
     # Belt and braces: the Supabase user must be the one linked to this account.
     if res.user is None or str(res.user.id) != str(account["auth_user_id"]):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=WRONG_PASSWORD)
+
+
+# ── Forgot / reset password ─────────────────────────────────────────────────
+
+def _reset_url() -> str:
+    """Where reset links send people: SITE_URL/reset-password."""
+    return get_settings().site_url.rstrip("/") + "/reset-password"
+
+
+async def send_reset_link(account: dict | None, email: str) -> None:
+    """
+    Send a password-reset link (see FORGOT / RESET PASSWORD above).
+
+    Quietly does nothing for an unknown email, so the caller can always answer
+    RESET_SENT. A Supabase account gets Supabase's email; a local account gets a
+    one-hour token whose link is written to the log (no email server locally).
+
+    Args:
+        account: dict | None, the accounts row for that email (None = unknown).
+        email: str, the address typed (lowercase).
+
+    Returns:
+        None.
+
+    Raises:
+        HTTPException: 429 when Supabase says too many emails were asked for.
+
+    Example:
+        >>> await send_reset_link(account, "ana@example.com")
+    """
+    if account is None:
+        return
+    if account.get("auth_user_id") and mode() == "supabase":
+        def call():
+            return _supabase().auth.reset_password_for_email(email, {"redirect_to": _reset_url()})
+
+        try:
+            await asyncio.to_thread(call)
+        except Exception as exc:   # noqa: BLE001
+            err = _supabase_error(exc)
+            if err.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                raise err
+            log.warning("Supabase reset email failed for an account: %s", exc)
+        return
+    from api.services import account_store   # imported here: account_store doesn't need auth
+
+    token = LOCAL_PREFIX + secrets.token_urlsafe(32)
+    await account_store.set_password_reset(str(account["id"]), hashlib.sha256(token.encode()).hexdigest(),
+                                           datetime.now(timezone.utc) + timedelta(hours=RESET_HOURS))
+    # Local mode has no email server: the link goes to the API's log for the developer.
+    log.warning("Password reset link (local mode — no email is sent): %s?token=%s", _reset_url(), token)
+
+
+async def reset_password(token: str, new_password: str) -> dict:
+    """
+    Set a new password from a reset link.
+
+    Args:
+        token: str, Supabase's recovery access token (from the link's "#access_token=")
+            or a local token ("lr_...", from "?token=").
+        new_password: str, the new password (rules checked here).
+
+    Returns:
+        dict: the accounts row whose password changed.
+
+    Raises:
+        HTTPException: 422 for a password that breaks the rules; 400 RESET_BAD_LINK
+            for an expired, used or unknown link; 502 when Supabase can't be reached.
+
+    Example:
+        >>> (await reset_password("lr_abc...", "a new long password"))["email"]
+        'ana@example.com'
+    """
+    from api.services import account_store
+
+    password = check_password_rules(new_password)
+    if token.startswith(LOCAL_PREFIX):
+        account = await account_store.get_account_by_reset_hash(hashlib.sha256(token.encode()).hexdigest())
+        if account is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
+        await account_store.set_credentials(str(account["id"]), auth_user_id=None, password_hash=hash_password(password))
+        await account_store.set_password_reset(str(account["id"]), None, None)
+        return account
+    if mode() != "supabase" or token.count(".") != 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
+    s = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.put(f"{s.supabase_url.rstrip('/')}/auth/v1/user", json={"password": password},
+                                   headers={"apikey": s.supabase_key, "Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Sign-in service problem: {exc}")
+    if res.status_code in (401, 403):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
+    if res.status_code == 422:
+        raise HTTPException(422, detail="That password is too easy to guess. Try a longer one.")
+    if res.status_code >= 400:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Sign-in service problem: the password wasn't changed.")
+    user_id = str(res.json().get("id") or "")
+    account = await account_store.get_account_by_auth_user(user_id) if user_id else None
+    if account is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
+    return account

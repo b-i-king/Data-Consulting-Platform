@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     # — there is no access code to share or guess.
     admin_emails: str = Field(default="", alias="ADMIN_EMAILS")
 
+    # ── Integrations: clients' own databases (api/services/cloud_sources.py) ──
+    # Leave OFF in production: when true, a client's database may be on a
+    # private / local address (only for testing with a database on this machine).
+    allow_private_db_hosts: bool = Field(default=False, alias="ALLOW_PRIVATE_DB_HOSTS")
+
     # ── Big-data engine (PySpark, optional) ───────────────────────────────────
     # pandas is the data engine. PySpark is an OPTIONAL second engine for data
     # too big for one machine's memory or living in a client's cloud warehouse.
