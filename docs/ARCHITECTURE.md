@@ -185,10 +185,31 @@ gold, Fira Code) with Copilot Money-inspired rounded cards and category colors.
 
 The same platform serves clients who use the tools themselves and clients who
 would rather hire a consultant. A **consultant** signs in with their own account
-(email listed in `CONSULTANT_EMAILS`, plus the secret `CONSULTANT_ACCESS_CODE`)
 and sees a lavender "Consultant" badge and a **"Working on"** picker in the
 workspace. Picking a client shows that client's workspace: every signed-in
 request then carries `X-Acting-As: <client id>`.
+
+**Who is a consultant (no access codes).** The `ADMIN_EMAILS` addresses are
+admins and consultants from the start; the first one is the default consultant.
+Anyone else ticks "I'd like to work as a consultant" (at sign-up, or in
+Settings) and waits: an admin approves or denies in the workspace's **Admin**
+panel (`api/routers/admin.py`). Approval creates their `dim.consultants` row at
+once. Nobody can make themselves a consultant.
+
+**Picking a consultant, and capacity.** A "done for you" client picks a
+consultant by first name (or "whoever has room") and a **one-time analysis** or
+**monthly help** (`accounts.consultant_plan`). Each consultant sets their
+**capacity** in Settings (default 3, at most 10, `consultants.capacity`); the
+picker shows a fill bar — green under half full, yellow from half, red when
+full — and a full consultant can't be picked (`consultants.pick`, the capacity
+rule). Clients who pick nobody go to the default consultant if they have room,
+else to whoever has the most room, else wait.
+
+**Sharing data with the consultant.** Files are never kept after a visit, so on
+the guest flow's "Next steps" a consultant client is offered **Share your data
+with <consultant>**: the Data Engineering load (preview, storage consent, accept)
+into `fact.account_data`. Only then can the consultant open the same data from
+their workspace.
 
 **The access rule** (`api/services/consultants.py`, used through
 `get_acting_context` in `api/core/security.py`):

@@ -61,6 +61,11 @@ erDiagram
         text location_label
         bool wants_consultant
         uuid consultant_id FK "NULL unless wants_consultant"
+        text consultant_plan "one_time | monthly"
+        bool is_admin "ADMIN_EMAILS"
+        bool is_consultant "approved by an admin"
+        text consultant_request "pending | approved | denied"
+        timestamptz terms_accepted_at
         text_array interested_services "interest only"
         text stripe_customer_id UK
         timestamptz created_at
@@ -73,6 +78,7 @@ erDiagram
         text email UK
         bool is_default
         bool active
+        int capacity "clients at once, 1-10 (default 3)"
     }
     teams {
         uuid id PK
@@ -165,8 +171,8 @@ erDiagram
 
 | Table | One row per | Written by | Notes |
 |---|---|---|---|
-| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. |
-| `dim.consultants` | consultant | first consultant sign-in (`consultants.register`) | You never insert it by hand: the email must be in `CONSULTANT_EMAILS` and they enter `CONSULTANT_ACCESS_CODE` once. `is_default` = who "do it for me" clients go to. |
+| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). |
+| `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). |
 | `dim.teams` | business | business signup | `accounts.team_id` links members. |
 | `dim.subscriptions` | client subscription (a package of tools, or All tools) | **Stripe webhook** (`api/services/billing.py`); in test mode, checkout switches it on at once | The tools are the `items` list (`plan_id` from `pricing.py`, plus Stripe's item id). One billing interval for all of them. `active`, `trialing`, `past_due` keep it on. The tools on sale and their prices live in `pricing.py` and in Stripe, so there is no plans table. |
 | `dim.consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | Consulting is booked **and paid** on Cal.com. The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to `PAID_BOOKING_URL`. Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |

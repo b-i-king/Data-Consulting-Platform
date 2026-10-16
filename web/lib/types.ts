@@ -104,6 +104,46 @@ export interface IntakeOptions {
   consulting_rate_per_hour_usd: number;
   /** The default consultant ("I'd like Brandon to do this for me"); null when none is set up. */
   consultant: { name: string } | null;
+  /** Every consultant and how full they are (the "pick your consultant" fill bars). */
+  consultants: ConsultantLoad[];
+}
+
+/**
+ * One consultant in the picker (GET /api/accounts/consultants, also in the
+ * intake options): first name and how full they are — never an email.
+ */
+export interface ConsultantLoad {
+  id: string;
+  name: string;
+  /** How many clients they take at once (they choose, 1 to 10; default 3). */
+  capacity: number;
+  clients: number;
+  /** clients / capacity × 100, 0–100: green under 50, yellow from 50, red at 100. */
+  percent: number;
+  full: boolean;
+  /** The default consultant: clients who pick nobody go here first. */
+  is_default: boolean;
+}
+
+/** How a consultant helps: one analysis of everything sent, or ongoing monthly help. */
+export type ConsultantPlan = "one_time" | "monthly";
+
+/** GET /api/admin/consultant-requests — one person who asked to be a consultant. */
+export interface ConsultantRequest {
+  account_id: string;
+  name: string;
+  email: string;
+  company_name: string | null;
+  location: string | null;
+  status: "pending" | "approved" | "denied";
+  requested_at: string | null; // ISO date-time
+  decided_at: string | null;
+}
+
+/** The Admin panel: the requests, plus every consultant's load. */
+export interface AdminPanelData {
+  requests: ConsultantRequest[];
+  consultants: ConsultantLoad[];
 }
 
 /**
@@ -647,7 +687,13 @@ export interface Account {
   industry_other: string | null;
   /** "consultant" accounts see the "Working on" client picker and every service. */
   role: "client" | "consultant";
+  /** Admins (ADMIN_EMAILS) see the Admin panel and approve consultants. */
+  is_admin: boolean;
+  /** "I'd like to work as a consultant": waiting, approved or denied (null = never asked). */
+  consultant_request: "pending" | "approved" | "denied" | null;
   wants_consultant: boolean;
+  /** How the consultant helps: "one_time" or "monthly" (null = they do it themselves). */
+  consultant_plan: ConsultantPlan | null;
   /** The assigned consultant's first name, e.g. "Brandon". */
   consultant_name: string | null;
 }
@@ -664,6 +710,8 @@ export interface ConsultantClient {
   location: string | null;
   naics_sector: string | null;
   industry_other: string | null;
+  /** One-time analysis or monthly help (null for clients a consultant added by hand). */
+  consultant_plan: ConsultantPlan | null;
 }
 
 /** GET /api/locations — one city in the location picker. */
@@ -711,8 +759,13 @@ export interface SignupInput {
   industry_other?: string | null;
   /** "I'd like a consultant to do this for me." */
   wants_consultant?: boolean;
-  /** Consultants only (CONSULTANT_ACCESS_CODE). */
-  access_code?: string;
+  /** The consultant picked by name (empty = the server picks one with room). */
+  consultant_id?: string | null;
+  consultant_plan?: ConsultantPlan;
+  /** "I'd like to work as a consultant" — waits for an admin's approval. */
+  consultant_request?: boolean;
+  /** The Terms of Service + Privacy Policy box; required for your own sign-up. */
+  accept_terms?: boolean;
   /** Required for your own sign-up (8+ characters); left out when a consultant adds a client. */
   password?: string;
 }

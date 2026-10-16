@@ -65,7 +65,7 @@ def _signup(email="pat@example.com", **extra):
         >>> client.get("/api/accounts/services", headers=_h(token)).status_code
         200
     """
-    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "account_type": "individual", "first_name": "Pat",
+    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "first_name": "Pat",
                                                     "last_name": "Lee", "email": email, **extra})
     body = res.json()
     return body["access_token"], body["account"]["id"]
@@ -206,7 +206,7 @@ def test_team_members_cant_change_billing():
     member still shares the owner's active plan.
     """
     owner = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
         "company_name": "Ko Co", "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}],
     }).json()["access_token"]
     member = client.post("/api/accounts/signin", json={"email": "bo@example.com", "password": "Correct-horse-9"}).json()["access_token"]

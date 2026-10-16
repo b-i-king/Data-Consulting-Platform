@@ -30,8 +30,7 @@ def fresh_store(monkeypatch):
     """
     monkeypatch.setenv("SUPABASE_URL", "")
     monkeypatch.setenv("SUPABASE_KEY", "")
-    monkeypatch.setenv("CONSULTANT_EMAILS", "coach@example.com")
-    monkeypatch.setenv("CONSULTANT_ACCESS_CODE", "code-123")
+    monkeypatch.setenv("ADMIN_EMAILS", "coach@example.com")
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._teams, account_store._consultants):
         store.clear()
@@ -51,7 +50,7 @@ def _signup(email="ana@example.com", password=PW, **extra):
     Returns:
         httpx.Response: The TestClient response.
     """
-    body = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee", "email": email, **extra}
+    body = {"account_type": "individual", "first_name": "Ana", "last_name": "Lee", "email": email, "accept_terms": True, **extra}
     if password is not None:
         body["password"] = password
     return client.post("/api/accounts/signup", json=body)
@@ -96,7 +95,7 @@ def test_invited_colleague_sets_password_on_first_signin():
     """A colleague added by the owner has no password; their first sign-in sets it, later ones must match."""
     res = client.post("/api/accounts/signup", json={
         "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
-        "company_name": "Ko Bakery", "password": PW,
+        "company_name": "Ko Bakery", "password": PW, "accept_terms": True,
         "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}]})
     assert res.status_code == 201
     bo = next(a for a in account_store._accounts.values() if a["email"] == "bo@example.com")
@@ -109,16 +108,21 @@ def test_invited_colleague_sets_password_on_first_signin():
     assert again.status_code == 401
 
 
-def test_consultant_needs_code_and_password():
-    """A consultant signs up with the access code and a password; sign-in needs both."""
-    assert _signup("coach@example.com", access_code="code-123").status_code == 201
-    no_code = client.post("/api/accounts/signin", json={"email": "coach@example.com", "password": PW})
-    assert no_code.status_code == 403
-    wrong_pw = client.post("/api/accounts/signin",
-                           json={"email": "coach@example.com", "password": "nope-nope", "access_code": "code-123"})
+def test_admin_signs_in_with_just_a_password():
+    """An ADMIN_EMAILS address needs no access code: email + password, and it is a consultant."""
+    res = _signup("coach@example.com")
+    assert res.status_code == 201 and res.json()["account"]["role"] == "consultant"
+    wrong_pw = client.post("/api/accounts/signin", json={"email": "coach@example.com", "password": "nope-nope"})
     assert wrong_pw.status_code == 401
-    ok = client.post("/api/accounts/signin", json={"email": "coach@example.com", "password": PW, "access_code": "code-123"})
-    assert ok.status_code == 200 and ok.json()["account"]["role"] == "consultant"
+    ok = client.post("/api/accounts/signin", json={"email": "coach@example.com", "password": PW})
+    assert ok.status_code == 200 and ok.json()["account"]["role"] == "consultant" and ok.json()["account"]["is_admin"]
+
+
+def test_signup_needs_the_terms_box():
+    """No account without ticking the Terms of Service + Privacy Policy box."""
+    res = _signup("ana@example.com", accept_terms=False)
+    assert res.status_code == 400 and "Terms of Service" in res.json()["detail"]
+    assert account_store._accounts == {}                      # nothing was created
 
 
 def test_health_reports_auth_mode():

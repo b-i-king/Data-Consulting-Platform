@@ -94,8 +94,7 @@ the create page):
 | `STRIPE_SECRET_KEY` | optional: `sk_test_...` / `sk_live_...` — empty = test mode, nothing charged ([PAYMENTS.md](PAYMENTS.md)) |
 | `STRIPE_WEBHOOK_SECRET` | with Stripe: the webhook's signing secret `whsec_...` |
 | `SITE_URL` | with Stripe: your Vercel URL (where Stripe sends people back after paying) |
-| `CONSULTANT_EMAILS` | your email (and any other consultants', comma-separated). The **first** is the default consultant that "do it for me" clients go to |
-| `CONSULTANT_ACCESS_CODE` | a long secret you type when signing in as a consultant (generate it like `JWT_SECRET_KEY`). Empty = consultant sign-in off |
+| `ADMIN_EMAILS` | your email. Admins are consultants too and approve everyone else who asks to be a consultant; the **first** is the default consultant |
 
 Click **Deploy Web Service**. The first build installs pandas and
 scikit-learn (~5–10 minutes). Then open `https://<your-api>.onrender.com/health`:
@@ -135,11 +134,11 @@ Search wording, keywords and the business details Google reads (JSON-LD) are in
 
 ### Signing in as the consultant
 
-After setting `CONSULTANT_EMAILS` and `CONSULTANT_ACCESS_CODE` on Render (and
-redeploying), open the site → **Sign in** → **Create an account** with your
-consultant email and a password → click **I'm a consultant** and enter the access code. The
-header shows a lavender **Consultant** badge, and the workspace has a
-**Working on** picker. On a free test server without a database, sign up again
+After setting `ADMIN_EMAILS` on Render (and redeploying), open the site →
+**Sign in** → **Create an account** with that email and a password (tick the
+Terms box). The header shows a lavender **Consultant** badge, and the workspace
+has a **Working on** picker, **Settings** (your capacity) and **Admin** (approve
+or deny people who asked to be consultants). On a free test server without a database, sign up again
 after each restart (accounts live in memory).
 
 ## Checklist before real clients

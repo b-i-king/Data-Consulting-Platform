@@ -127,15 +127,14 @@ class Settings(BaseSettings):
     # The website's address, for "back to the site" links after paying at Stripe.
     site_url: str = Field(default="http://localhost:3000", alias="SITE_URL")
 
-    # ── Consultants ───────────────────────────────────────────────────────────
-    # Email addresses that sign in as CONSULTANTS (comma-separated). The FIRST
-    # one is the default consultant: clients who tick "I'd like a consultant to
-    # do this for me" are assigned to them. Empty = no consultants.
-    consultant_emails: str = Field(default="", alias="CONSULTANT_EMAILS")
-    # A secret code a consultant must enter to sign in (or sign up), on top of
-    # their password — a consultant can open every assigned client, so they get
-    # a second check. Empty = consultant sign-in is switched off.
-    consultant_access_code: str = Field(default="", alias="CONSULTANT_ACCESS_CODE")
+    # ── Admin and consultants ─────────────────────────────────────────────────
+    # Email addresses of the platform ADMINS (comma-separated; normally just
+    # yours). An admin is also a consultant, and the FIRST admin is the default
+    # consultant: "do it for me" clients who don't pick anyone go to them.
+    # Everyone else becomes a consultant only by asking ("I'd like to work as a
+    # consultant") and being APPROVED by an admin in the workspace's Admin panel
+    # — there is no access code to share or guess.
+    admin_emails: str = Field(default="", alias="ADMIN_EMAILS")
 
     # ── Big-data engine (PySpark, optional) ───────────────────────────────────
     # pandas is the data engine. PySpark is an OPTIONAL second engine for data
@@ -160,9 +159,9 @@ class Settings(BaseSettings):
 
     # ── Convenience helpers (computed, not read from the environment) ─────────
     @property
-    def consultant_email_list(self) -> list[str]:
+    def admin_email_list(self) -> list[str]:
         """
-        CONSULTANT_EMAILS as a clean lowercase list, default consultant first.
+        ADMIN_EMAILS as a clean lowercase list, default consultant first.
 
         Splits the comma-separated setting, trims spaces around each address,
         lowercases it (so sign-in matching ignores case) and drops empty pieces
@@ -170,14 +169,14 @@ class Settings(BaseSettings):
         default consultant that new "do it for me" clients are assigned to.
 
         Returns:
-            list[str]: consultant email addresses, lowercase, in the order written;
-            an empty list when CONSULTANT_EMAILS is not set.
+            list[str]: admin email addresses, lowercase, in the order written;
+            an empty list when ADMIN_EMAILS is not set.
 
         Example:
-            >>> Settings(consultant_emails=" Ana@Example.com, ,bo@example.com,").consultant_email_list
+            >>> Settings(admin_emails=" Ana@Example.com, ,bo@example.com,").admin_email_list
             ['ana@example.com', 'bo@example.com']
         """
-        return [e.strip().lower() for e in self.consultant_emails.split(",") if e.strip()]
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     @property
     def origins_list(self) -> list[str]:

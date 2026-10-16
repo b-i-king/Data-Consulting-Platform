@@ -120,7 +120,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/billing.py` + `api/routers/billing.py` | Stripe: packages of tools, Checkout, webhook, portal; the AI rule (needs stored data) | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
 | `api/services/fair_use.py` | Download limit per 24 h and free repeats (one-way data fingerprint) | Changing fair-use rules ([PRICING.md](PRICING.md)) |
 | `api/services/connections.py` + `api/routers/connections.py` | Connectors and how often they refresh (schedule rules, "Refresh now" gap) | Adding a connector or refresh choice |
-| `api/services/consultants.py` + `api/routers/consultants.py` | Consultants, their clients, the "acting as" access rule | Consultant features |
+| `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), admin approval of consultant requests | Consultant and admin features |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
 | `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its README.md in step) |

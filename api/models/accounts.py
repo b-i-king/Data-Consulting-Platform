@@ -138,10 +138,17 @@ class SignupIn(BaseModel):
     # "Other" industry: what the person typed when nothing in the list fit.
     # Saved instead of a NAICS code; leave everything empty to save nothing.
     industry_other: str | None = Field(default=None, max_length=120)
-    # "I'd like a consultant to do this for me" -> assigned to the default consultant.
+    # "I'd like a consultant to do this for me": the consultant picked by name
+    # (a dim.consultants id; empty = we pick, see consultants.pick) and how they
+    # help — "one_time" analysis or "monthly" ongoing help.
     wants_consultant: bool = False
-    # Only consultants (CONSULTANT_EMAILS) send this; see api/services/consultants.py.
-    access_code: str | None = Field(default=None, max_length=200)
+    consultant_id: str | None = Field(default=None, max_length=64)
+    consultant_plan: Literal["one_time", "monthly"] | None = None
+    # "I'd like to work as a consultant": waits for an admin's approval.
+    consultant_request: bool = False
+    # The Terms of Service + Privacy Policy box. POST /api/accounts/signup
+    # refuses a sign-up without it; a consultant adding a client leaves it out.
+    accept_terms: bool = False
     # The new password. Required by POST /api/accounts/signup (checked there,
     # with a friendly message); left out when a consultant adds a client — the
     # client then chooses one on their first sign-in. See api/services/auth.py.
@@ -368,7 +375,6 @@ class SignupIn(BaseModel):
 class SigninIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
-    access_code: str | None = Field(default=None, max_length=200)   # consultants only
 
     @field_validator("email", mode="before")
     @classmethod
@@ -414,7 +420,11 @@ class AccountOut(BaseModel):
     location: str | None = None       # "Atlanta, Georgia, United States"
     industry_other: str | None = None
     role: Literal["client", "consultant"] = "client"
+    is_admin: bool = False                # approves consultants (Admin panel)
+    # "I'd like to work as a consultant": None, "pending", "approved" or "denied".
+    consultant_request: str | None = None
     wants_consultant: bool = False
+    consultant_plan: str | None = None    # "one_time" or "monthly" consultant help
     consultant_name: str | None = None    # the assigned consultant's first name
 
 
@@ -482,3 +492,16 @@ class RefreshIn(BaseModel):
     """How often a connector should pull new data (an id from pricing.REFRESH_OPTIONS)."""
 
     refresh_frequency: Literal["manual", "weekly", "daily", "hourly", "live"]
+
+
+class CapacityIn(BaseModel):
+    """A consultant's own setting: how many clients they take at once."""
+
+    capacity: int = Field(ge=1, le=10)   # consultants.MAX_CAPACITY
+
+
+class ChooseConsultantIn(BaseModel):
+    """A client picks (or changes) their consultant, and how they help."""
+
+    consultant_id: str | None = Field(default=None, max_length=64)   # empty = we pick
+    consultant_plan: Literal["one_time", "monthly"] = "one_time"

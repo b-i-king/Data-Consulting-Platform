@@ -47,6 +47,13 @@
 // consultation and prepaid consulting hours — components/billing/BillingPanel.tsx.
 // Coming back from Stripe (?checkout=success) shows a thank-you note.
 //
+// SETTINGS (⚙️): consultants set their capacity (how many clients at once);
+// clients can ask to work as a consultant — components/workspace/SettingsPanel.tsx.
+// ADMIN (🛡️, admins only): approve or deny consultant requests, and every
+// consultant's fill bar — components/workspace/AdminPanel.tsx.
+// Each visit re-reads the account (GET /api/accounts/me), so someone approved
+// as a consultant gets consultant mode without signing in again.
+//
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
 // Tools unlock only through a package: "Add to my package" opens Plan &
 // billing with that tool ticked (the package selector shows the new total). Downloads also
@@ -61,6 +68,7 @@ import {
   analyzeFiles,
   downloadCleaned,
   getIntakeOptions,
+  getMe,
   getMyClients,
   getMyServices,
   getSkills,
@@ -70,10 +78,12 @@ import {
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
-import { clearSession, loadSession, type Session } from "@/lib/session";
-import type { ConsultantClient, IntakeOptions } from "@/lib/types";
+import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
+import type { ConsultantClient, ConsultantLoad, IntakeOptions } from "@/lib/types";
 import ClientPicker, { AddClientForm } from "./ClientPicker";
 import ConsultationPanel from "./ConsultationPanel";
+import AdminPanel from "./AdminPanel";
+import SettingsPanel from "./SettingsPanel";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult, WarehouseCounts } from "@/lib/types";
@@ -89,6 +99,8 @@ const CLEANING = "data_cleaning";
 const ENGINEERING = "data_engineering";
 const AI = "ai";
 const BILLING = "__billing"; // the "Plan & billing" page (not a service)
+const SETTINGS = "__settings"; // capacity (consultants) / "work as a consultant" (clients)
+const ADMIN = "__admin"; // consultant requests (admins only)
 const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard / database load)
 // The skill each built-in view already shows, so it isn't listed twice in the menu
 // (Data Engineering's load view isn't a skill, so nothing is hidden for it).
@@ -154,6 +166,7 @@ export default function Workspace() {
   // Consultant mode: my clients, the one I'm working on (null = my own workspace).
   const [options, setOptions] = useState<IntakeOptions | null>(null);
   const [clients, setClients] = useState<ConsultantClient[]>([]);
+  const [myLoad, setMyLoad] = useState<ConsultantLoad | null>(null); // how full I am (consultants)
   const [actingId, setActingId] = useState<string | null>(null);
   const [addingClient, setAddingClient] = useState(false);
   const [returnNote, setReturnNote] = useState<string | null>(null); // after paying at Stripe
@@ -168,11 +181,25 @@ export default function Workspace() {
     setSession(s);
     setActingAs(null); // a fresh visit starts in your own workspace
     if (!s) return;
-    if (s.account.role === "consultant") {
-      getMyClients(s.token)
-        .then((r) => setClients(r.clients))
+    // Consultants: my clients and how full I am.
+    const loadClients = (token: string) =>
+      getMyClients(token)
+        .then((r) => {
+          setClients(r.clients);
+          setMyLoad(r.load);
+        })
         .catch(() => {});
-    }
+    // Re-read the account: an approval (or a new consultant) shows up at once.
+    getMe(s.token)
+      .then((account) => {
+        const fresh = { ...s, account };
+        saveSession(fresh);
+        setSession(fresh);
+        if (account.role === "consultant") loadClients(s.token);
+      })
+      .catch(() => {
+        if (s.account.role === "consultant") loadClients(s.token);
+      });
     getMyServices(s.token)
       .then(setPlan)
       .catch((e) => {
@@ -447,7 +474,7 @@ export default function Workspace() {
       {/* ── Left pane ── */}
       <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
         {isConsultant && (
-          <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} />
+          <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad} />
         )}
         <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">
           {who.company_name ?? `${who.first_name} ${who.last_name}`}
@@ -474,6 +501,28 @@ export default function Workspace() {
         >
           <span aria-hidden>💳</span> Plan &amp; billing
         </button>
+        <button
+          type="button"
+          onClick={() => setSection(SETTINGS)}
+          aria-current={current === SETTINGS ? "page" : undefined}
+          className={`mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
+            current === SETTINGS ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+          }`}
+        >
+          <span aria-hidden>⚙️</span> Settings
+        </button>
+        {session.account.is_admin && (
+          <button
+            type="button"
+            onClick={() => setSection(ADMIN)}
+            aria-current={current === ADMIN ? "page" : undefined}
+            className={`mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
+              current === ADMIN ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+            }`}
+          >
+            <span aria-hidden>🛡️</span> Admin
+          </button>
+        )}
         <button type="button" onClick={signOut} className="mt-4 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
           Sign out
         </button>
@@ -486,6 +535,16 @@ export default function Workspace() {
             {current === BILLING && (
               <>
                 <span aria-hidden>💳</span> Plan &amp; billing
+              </>
+            )}
+            {current === SETTINGS && (
+              <>
+                <span aria-hidden>⚙️</span> Settings
+              </>
+            )}
+            {current === ADMIN && (
+              <>
+                <span aria-hidden>🛡️</span> Admin
               </>
             )}
             {currentService && (
@@ -547,6 +606,21 @@ export default function Workspace() {
         )}
         <ErrorBox message={error} />
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
+
+        {current === SETTINGS && (
+          <SettingsPanel
+            token={session.token}
+            account={session.account}
+            onAccount={(account) => {
+              const fresh = { ...session, account };
+              saveSession(fresh);
+              setSession(fresh);
+            }}
+          />
+        )}
+        {current === ADMIN && session.account.is_admin && (
+          <AdminPanel token={session.token} />
+        )}
 
         {current === BILLING && plan && (
           <>

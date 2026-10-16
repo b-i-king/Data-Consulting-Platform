@@ -8,17 +8,25 @@ Account endpoints.
     POST /api/accounts/services       record interest in a project with a consultant (doesn't unlock tools)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
+    GET  /api/accounts/consultants    every consultant and how full they are (public: the picker)
+    POST /api/accounts/consultant     a signed-in client picks a consultant (one-time or monthly)
+    POST /api/accounts/consultant-request   "I'd like to work as a consultant" (an admin decides)
 
 Guests only need an account at the DOWNLOAD step. Signup asks for:
   * individual: first name, last name, email
   * business:   first name, last name, email, company name (+ optional team members)
-  * optional:   "I'd like a consultant to do this for me"
+  * required:   the Terms of Service + Privacy Policy box (accept_terms)
+  * optional:   "I'd like a consultant to do this for me" — a consultant
+                picked by name (capacity permitting) and one-time or monthly help
+  * optional:   "I'd like to work as a consultant" (waits for an admin)
 (Subscriptions are bought after signup: api/routers/billing.py.)
 
-CONSULTANTS sign up and sign in here too: their email must be in
-CONSULTANT_EMAILS and they must send CONSULTANT_ACCESS_CODE. Their token says
-role "consultant". The services endpoints accept `X-Acting-As: <client id>`
-from a consultant to work on an assigned client (api/services/consultants.py).
+CONSULTANTS sign up and sign in here like everyone else — no access code. An
+ADMIN_EMAILS address is an admin and a consultant from the start; anyone
+else becomes a consultant only when an admin approves their request
+(api/routers/admin.py). Their token says role "consultant". The services
+endpoints accept `X-Acting-As: <client id>` from a consultant to work on an
+assigned client (api/services/consultants.py).
 
 PASSWORDS
 ---------
@@ -42,6 +50,7 @@ from api.models.accounts import (
     AccountOut,
     AddServiceIn,
     AuthOut,
+    ChooseConsultantIn,
     SigninIn,
     SignupIn,
     TeamMemberIn,
@@ -50,6 +59,10 @@ from api.services import account_store, auth, billing, consultants, consultation
 from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
+
+# The Terms of Service / Privacy Policy version ticked at sign-up (saved on the
+# account). When web/app/terms or web/app/privacy changes, bump this too.
+TERMS_VERSION = "2026-10-15"
 
 # A valid sign-in token whose account no longer exists. Without a database
 # (DATABASE_URL empty, e.g. a free test deploy) accounts live in memory and
@@ -101,7 +114,10 @@ def _account_out(acc: dict, role: str = "client", consultant_name: str | None = 
         location=acc.get("location_label"),
         industry_other=acc.get("industry_other"),
         role=role,
+        is_admin=bool(acc.get("is_admin")),
+        consultant_request=acc.get("consultant_request"),
         wants_consultant=bool(acc.get("wants_consultant")),
+        consultant_plan=acc.get("consultant_plan"),
         consultant_name=consultant_name,
     )
 
@@ -158,10 +174,10 @@ async def signup(body: SignupIn):
     """
     POST /api/accounts/signup — create an individual or business account and sign it in.
 
-    Consultants (emails in CONSULTANT_EMAILS) must also send the right
-    `access_code`; their consultant row is created after the account. Other
-    sign-ups go through `create_client_account` with "default", so ticking
-    "I'd like a consultant" assigns the default consultant.
+    The Terms box must be ticked. An ADMIN_EMAILS address becomes an admin and
+    consultant at once; anyone else is a client (and, if they asked, waits for
+    an admin to approve them as a consultant). "I'd like a consultant" assigns
+    the consultant they picked, or one with room (consultants.pick).
 
     Args:
         body: SignupIn, the validated sign-up form (see api/models/accounts.py).
@@ -170,26 +186,30 @@ async def signup(body: SignupIn):
         AuthOut: the new login token and the account (HTTP 201).
 
     Raises:
-        HTTPException: 403 for a consultant email without the right access code;
-            400 for unknown service ids; 409 when an email already has an account.
+        HTTPException: 400 without accept_terms or for unknown service ids;
+            409 when an email already has an account or the picked consultant
+            is full; 404 for an unknown consultant.
             (Malformed fields are rejected with 422 before this runs.)
 
     Example:
         POST /api/accounts/signup
         {"account_type": "individual", "first_name": "Ana", "last_name": "Lee",
-         "email": "ana@example.com"}
+         "email": "ana@example.com", "password": "...", "accept_terms": true}
         -> 201 {"access_token": "eyJ...", "token_type": "bearer",
                 "account": {"id": "...", "role": "client", ...}}
     """
-    is_consultant = consultants.is_consultant_email(body.email)
-    if is_consultant:
-        consultants.check_access_code(body.access_code)   # 403 without the right code
+    if not body.accept_terms:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Please accept the Terms of Service and Privacy Policy to create an account.")
     password = auth.check_password_rules(body.password)  # 422 if missing or too short
     await _check_new_signup(body)                          # 400/409 BEFORE the password is registered
+    admin = consultants.is_admin_email(body.email)
+    if body.wants_consultant and not admin:
+        await consultants.pick(body.consultant_id)        # 404/409 (full) BEFORE the password is registered
     creds = await auth.register_password(body.email, password)
-    owner = await create_client_account(body, consultant_id=None if is_consultant else "default", credentials=creds)
-    if is_consultant:
-        await consultants.register(owner)
+    owner = await create_client_account(body, consultant_id=None if admin else "pick", credentials=creds,
+                                        terms_version=TERMS_VERSION, is_admin=admin)
+    owner = await consultants.sync_roles(owner)
     if creds.needs_confirmation:
         return await _confirm_email_response(owner)
     return await _auth_response(owner)
@@ -240,19 +260,22 @@ async def _check_new_signup(body: SignupIn) -> None:
 
 
 async def create_client_account(body: SignupIn, consultant_id: str | None,
-                                credentials: auth.Credentials | None = None) -> dict:
+                                credentials: auth.Credentials | None = None,
+                                terms_version: str | None = None, is_admin: bool = False) -> dict:
     """
     Create the account (+ team members, + services on the plan). Shared by
     signup and by a consultant adding a client (api/routers/consultants.py).
-    `consultant_id`: "default" = the default consultant if they asked for one;
-    a consultant's id = assign to them; None = no consultant.
+    `consultant_id`: "pick" = if they asked for a consultant, the one they
+    chose or one with room (consultants.pick, the capacity rule); a
+    consultant's id = assign to them; None = no consultant.
 
     Order of work (all checks happen before anything is written, so a failure
     never leaves a half-created sign-up):
     1. Every service id must be in the catalog.
     2. No email (owner or team member) may already have an account.
     3. The location id is looked up; "wants a consultant" is True when ticked
-       or when a specific consultant is assigning the client to themselves.
+       or when a specific consultant is assigning the client to themselves;
+       the consultant is picked (capacity rule) before anything is written.
     4. The owner account is created, then each team member as "invited".
     5. Picked services are recorded as interest (they don't unlock tools).
 
@@ -261,6 +284,8 @@ async def create_client_account(body: SignupIn, consultant_id: str | None,
         consultant_id: str | None, "default", a consultant's id, or None (see above).
         credentials: auth.Credentials | None, the password registered at sign-up;
             None when a consultant adds a client (they choose one at first sign-in).
+        terms_version: str | None, the Terms version ticked (sign-up only).
+        is_admin: bool, True for an ADMIN_EMAILS address.
 
     Returns:
         dict: the newly created owner account row.
@@ -278,10 +303,9 @@ async def create_client_account(body: SignupIn, consultant_id: str | None,
     # leaves a half-created signup behind (one email = one account).
     await _check_new_signup(body)
     place = locations.get(body.location_id) if body.location_id else None
-    wants = body.wants_consultant or (consultant_id not in (None, "default"))
-    if consultant_id == "default":
-        default = await consultants.default_consultant() if body.wants_consultant else None
-        consultant_id = str(default["id"]) if default else None
+    wants = body.wants_consultant or (consultant_id not in (None, "pick"))
+    if consultant_id == "pick":
+        consultant_id = await consultants.pick(body.consultant_id) if body.wants_consultant else None
     try:
         owner = await account_store.create_account(
             account_type=body.account_type,
@@ -299,6 +323,10 @@ async def create_client_account(body: SignupIn, consultant_id: str | None,
             consultant_id=consultant_id,
             auth_user_id=credentials.auth_user_id if credentials else None,
             password_hash=credentials.password_hash if credentials else None,
+            consultant_plan=(body.consultant_plan or "one_time") if wants else None,
+            terms_version=terms_version,
+            consultant_request=body.consultant_request,
+            is_admin=is_admin,
         )
     except account_store.AccountExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
@@ -320,9 +348,10 @@ async def signin(body: SigninIn):
     """
     POST /api/accounts/signin — check the email + password and issue a new token.
 
-    Consultant emails must also send the access code; their consultant row is
-    (re)registered on each sign-in, so the default consultant picks up any
-    clients waiting for one. The last-login time is updated.
+    Roles are brought up to date on each sign-in (consultants.sync_roles): an
+    ADMIN_EMAILS address gets its admin flags, and every consultant's row is
+    (re)registered, so the default consultant picks up clients waiting for one
+    (as many as they have room for). The last-login time is updated.
 
     FIRST SIGN-IN FOR AN ACCOUNT MADE FOR SOMEONE: a colleague added to a team,
     or a client a consultant added, has no password yet. Their first sign-in
@@ -331,15 +360,14 @@ async def signin(body: SigninIn):
     sign in for them promptly, or tell them to (docs/ROADMAP.md).
 
     Args:
-        body: SigninIn, the email, password (and, for consultants, the access code).
+        body: SigninIn, the email and password.
 
     Returns:
         AuthOut: a fresh login token and the account (or, for a first sign-in
         that Supabase must confirm by email, needs_confirmation and no token).
 
     Raises:
-        HTTPException: 403 for a consultant email without the right code;
-            401 "Wrong email or password."; 403 while Supabase waits for the
+        HTTPException: 401 "Wrong email or password."; 403 while Supabase waits for the
             email to be confirmed; 422 for a too-short first password.
 
     Example:
@@ -347,8 +375,6 @@ async def signin(body: SigninIn):
         {"email": "ana@example.com", "password": "correct horse"}
         -> 200 {"access_token": "eyJ...", "token_type": "bearer", "account": {...}}
     """
-    if consultants.is_consultant_email(body.email):
-        consultants.check_access_code(body.access_code)   # 403 without the right code
     acc = await account_store.get_account_by_email(body.email)
     if acc is None:
         # Same message as a wrong password, so the form doesn't reveal who has an account.
@@ -365,8 +391,7 @@ async def signin(body: SigninIn):
         if creds.needs_confirmation:
             return await _confirm_email_response(acc)
     await account_store.touch_last_login(str(acc["id"]))
-    if consultants.is_consultant_email(body.email):
-        await consultants.register(acc)
+    acc = await consultants.sync_roles(acc)
     return await _auth_response(acc)
 
 
@@ -654,3 +679,90 @@ async def add_service(body: AddServiceIn, ctx: Annotated[dict, Depends(get_actin
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return await _services_out(ctx)
+
+
+@router.get("/consultants")
+async def consultant_directory():
+    """
+    GET /api/accounts/consultants — every consultant and how full they are.
+
+    Public (guests see it on "Your needs"): first names and client counts only,
+    never emails. Feeds the picker's fill bars.
+
+    Returns:
+        dict: {"consultants": [{"id", "name", "capacity", "clients", "percent",
+        "full", "is_default"}, ...]}.
+
+    Example:
+        GET /api/accounts/consultants
+        -> 200 {"consultants": [{"id": "...", "name": "Brandon", "capacity": 3, "clients": 1,
+                                 "percent": 33, "full": false, "is_default": true}]}
+    """
+    return {"consultants": await consultants.directory()}
+
+
+@router.post("/consultant")
+async def choose_consultant(body: ChooseConsultantIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/accounts/consultant — a signed-in client asks for a consultant (or changes theirs).
+
+    Used by "Next steps" when the person was already signed in. The capacity
+    rule applies (consultants.pick); keeping the same consultant only changes
+    one-time / monthly. Only the plan holder (individual or team owner) may choose.
+
+    Args:
+        body: ChooseConsultantIn, the consultant picked (empty = keep mine, or
+            we pick) and "one_time" or "monthly".
+        ctx: dict, the acting context (injected by `get_acting_context`).
+
+    Returns:
+        dict: the updated plan summary built by `_services_out`.
+
+    Raises:
+        HTTPException: 403 for a team member or a consultant's own account;
+            404 / 409 from the capacity rule.
+
+    Example:
+        POST /api/accounts/consultant
+        {"consultant_id": "...", "consultant_plan": "monthly"}
+        -> 200 {"account": {"consultant_name": "Brandon", "consultant_plan": "monthly", ...}, ...}
+    """
+    acc = ctx["account"]
+    if await entitlements.plan_holder_id(acc) != str(acc["id"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Ask your team's owner to choose a consultant.")
+    if acc.get("is_consultant"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Consultants can't hire a consultant for themselves.")
+    current = str(acc["consultant_id"]) if acc.get("consultant_id") else None
+    keep = current is not None and body.consultant_id in (None, "", current)
+    chosen = current if keep else await consultants.pick(body.consultant_id)
+    await account_store.set_consultant_for(str(acc["id"]), chosen, body.consultant_plan)
+    ctx = {**ctx, "account": await account_store.get_account(str(acc["id"]))}
+    return await _services_out(ctx)
+
+
+@router.post("/consultant-request", response_model=AccountOut)
+async def ask_to_be_consultant(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/accounts/consultant-request — "I'd like to work as a consultant".
+
+    Puts the caller on the admin's list (api/routers/admin.py). Nothing
+    changes until an admin approves.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        AccountOut: the caller's account, consultant_request "pending".
+
+    Raises:
+        HTTPException: 401 when the account is gone; 409 if already a
+            consultant or already waiting.
+
+    Example:
+        POST /api/accounts/consultant-request
+        -> 200 {"consultant_request": "pending", ...}
+    """
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
+    return await _full_account_out(await consultants.request(acc))

@@ -84,7 +84,7 @@ async def main(check_only: bool) -> int:
         consultants = await conn.fetch("SELECT email, is_default FROM dim.consultants ORDER BY created_at") \
             if await conn.fetchval("SELECT to_regclass('dim.consultants') IS NOT NULL") else []
         print("\nConsultants:", ", ".join(f"{c['email']}{' (default)' if c['is_default'] else ''}" for c in consultants)
-              or "none yet - sign up in the app with an email from CONSULTANT_EMAILS + your access code.")
+              or "none yet - sign up in the app with your ADMIN_EMAILS address.")
         if missing:
             print(f"\n{missing} table(s) missing. Run without --check to create them.")
         return 1 if missing else 0

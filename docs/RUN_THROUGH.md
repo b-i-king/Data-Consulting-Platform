@@ -38,8 +38,7 @@ In the project folder: copy `.env.example` to `.env` and fill in:
 | `DATABASE_URL` | the connection string from Step 1.2 |
 | `JWT_SECRET_KEY` | run `python -c "import secrets; print(secrets.token_urlsafe(48))"` and paste the result |
 | `SUPABASE_URL`, `SUPABASE_KEY` | from Step 1.3 |
-| `CONSULTANT_EMAILS` | **your** email (the first one listed is the default consultant) |
-| `CONSULTANT_ACCESS_CODE` | a long secret phrase you'll type when signing in as consultant |
+| `ADMIN_EMAILS` | **your** email: you're the admin and the default consultant |
 | `BOOKING_URL` | your Cal.com **free** 30-minute consultation link |
 | `PAID_BOOKING_URL` | your Cal.com **paid** session link (Step 8) — can wait |
 | `CALCOM_WEBHOOK_SECRET` | leave empty for now (Step 8) |
@@ -76,17 +75,22 @@ settings are empty.)
 ## Step 5 — Create YOUR consultant account (before anything else)
 
 1. Go to <http://localhost:3000/signin?mode=signup>.
-2. Fill in your name, **the email from `CONSULTANT_EMAILS`**, and a password
-   (8+ characters, typed twice).
-3. Click **"I'm a consultant"** and enter your `CONSULTANT_ACCESS_CODE`.
-4. **Create account** → you land in the workspace with a lavender **Consultant** badge.
+2. Fill in your name, **the email from `ADMIN_EMAILS`**, and a password
+   (8+ characters, then **Confirm password**).
+3. Tick **I agree to the Terms of Service and Privacy Policy**.
+4. **Create account** → you land in the workspace with a lavender **Consultant**
+   badge, plus **⚙️ Settings** (your capacity, default 3 clients) and
+   **🛡️ Admin** (people waiting to become consultants: Approve / Deny).
 
 Check it worked: `python scripts/setup_database.py --check` ends with
 `Consultants: you@... (default)`. In Supabase → Table Editor → `accounts`, your
 row has `auth_user_id` filled and `password_hash` empty (Supabase holds the
 password, not us).
 
-Next time: **Sign in** with email + password + access code.
+Next time: **Sign in** with email + password. To test a second consultant, sign
+up in a private window with another email and tick **I'd like to work as a
+consultant**; approve them in **Admin**, and their workspace switches to
+consultant mode on its next load.
 
 ## Step 6 — Make test clients
 
@@ -102,6 +106,18 @@ Next time: **Sign in** with email + password + access code.
 
 A client you added has no password yet: the password typed at their **first**
 sign-in becomes theirs.
+
+- **A guest who asks for a consultant** (the full flow, in a private window) —
+  **Start as a guest** → upload `samples/sales.csv` → on **Your needs** pick
+  **Help from a consultant**, choose **One-time analysis** or **Monthly help**,
+  and pick yourself by name (the fill bar shows how full you are) → create the
+  account → on **Next steps** use **Share your data with <you>**: check the
+  preview, tick the storage consent, **Accept and load**. Back in *your*
+  workspace, pick that client in **Working on**: Data Engineering → **Use my
+  stored data** opens the same table. (Skip the share step and nothing is
+  stored — files only live in the guest's browser tab.)
+- **Capacity** — in **⚙️ Settings**, set your capacity to 1. Once you have one
+  client, the picker shows you red/full and new clients can't pick you.
 
 ## Step 7 — Walk through all seven services
 

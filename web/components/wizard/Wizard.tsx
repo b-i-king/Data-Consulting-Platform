@@ -8,8 +8,12 @@
 //   2. Upload files            one or many; choose how to treat missing values
 //   3. Clean & preview         categorization, cleaning report, fill/remove gaps,
 //                              first-rows preview, Explore (dashboard + skills)
-//   4. What do you need?       pick services, see a price estimate
-//   5. Account & download      sign up (only now!) and download the clean file
+//   4. Your needs              one of three paths: just download · do it myself
+//                              (a package of tools) · help from a consultant
+//                              (one-time or monthly, picked by name)
+//   5. Next steps              sign up (only now!), then: download; start the
+//                              package; or share the cleaned data with the
+//                              consultant (stored in the database, with consent)
 //
 // IMPORTANT: the uploaded File objects stay in this component's memory. They
 // are re-sent (with the missing-value choices) whenever the server needs the
@@ -21,17 +25,17 @@ import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getIntakeOptions } from "@/lib/api";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import { ErrorBox, Progress } from "./ui";
 import StepAccountType from "./StepAccountType";
 import StepDataLocation from "./StepDataLocation";
 import StepUpload from "./StepUpload";
 import StepResults from "./StepResults";
 import { AddServiceConfirm } from "./ServiceConfirm";
-import StepServices from "./StepServices";
+import StepServices, { type NextPath } from "./StepServices";
 import StepAccount from "./StepAccount";
 
-const LABELS = ["About you", "Your data", "Upload", "Clean & preview", "Your needs", "Download"];
+const LABELS = ["About you", "Your data", "Upload", "Clean & preview", "Your needs", "Next steps"];
 
 export default function Wizard() {
   // Options (questions + answer choices) come from the backend.
@@ -49,9 +53,13 @@ export default function Wizard() {
     company_size: null,
     industry_other: null,
   });
-  // "Your needs": a plan (monthly / yearly, or none), and "do it for me".
+  // "Your needs": the path (download / package / consultant), the package
+  // (monthly / yearly), and the consultant picked by name + one-time or monthly.
+  const [path, setPath] = useState<NextPath | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionChoice | null>(null);
-  const [wantsConsultant, setWantsConsultant] = useState(false);
+  const [consultantId, setConsultantId] = useState<string | null>(null);
+  const [consultantPlan, setConsultantPlan] = useState<ConsultantPlan>("one_time");
+  const wantsConsultant = path === "consultant";
   const [location, setLocation] = useState<string | null>(null);
   const [locationOption, setLocationOption] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -246,10 +254,14 @@ export default function Wizard() {
           subscriptions={options.subscriptions ?? []}
           subscription={subscription}
           onSubscription={setSubscription}
-          consultantName={options.consultant?.name ?? null}
           consultingRate={options.consulting_rate_per_hour_usd ?? 80}
-          wantsConsultant={wantsConsultant}
-          onWantsConsultant={setWantsConsultant}
+          path={path}
+          onPath={setPath}
+          consultants={options.consultants ?? []}
+          consultantId={consultantId}
+          onConsultantId={setConsultantId}
+          consultantPlan={consultantPlan}
+          onConsultantPlan={setConsultantPlan}
           onBack={() => go(3)}
           onNext={() => go(5)}
         />
@@ -260,10 +272,14 @@ export default function Wizard() {
           defaultType={accountType ?? "individual"}
           industry={industry}
           serviceIds={serviceIds}
-          subscription={subscription}
+          path={path ?? "download"}
+          // A package counts only on the "Do it myself" path.
+          subscription={path === "package" ? subscription : null}
           plans={options.subscriptions ?? []}
           wantsConsultant={wantsConsultant}
-          consultantName={options.consultant?.name ?? null}
+          consultants={options.consultants ?? []}
+          consultantId={consultantId}
+          consultantPlan={consultantPlan}
           session={session}
           onSignedIn={onSignedIn}
           onSignOut={onSignOut}

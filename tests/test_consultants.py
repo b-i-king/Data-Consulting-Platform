@@ -1,6 +1,7 @@
 """
-Consultants, "done for you" clients, the access rule, subscriptions and the
-"Other" industry (api/services/consultants.py, api/routers/consultants.py).
+Consultants, "done for you" clients, the access rule, admin approval,
+capacity, picking a consultant by name, and the "Other" industry
+(api/services/consultants.py, api/routers/consultants.py, api/routers/admin.py).
 Runs on the in-memory account store, like the rest of the API tests.
 """
 
@@ -14,17 +15,16 @@ from api.main import app
 from api.services import account_store
 
 client = TestClient(app)
-CODE = "lavender-test-code"
 
 
 @pytest.fixture(autouse=True)
 def consultant_settings(monkeypatch):
     """
-    Two consultants (the first is the default) and an access code; fresh memory store.
+    One admin (Brandon, the default consultant); fresh memory store.
 
-    Runs automatically for every test: sets CONSULTANT_EMAILS and CONSULTANT_ACCESS_CODE,
-    clears cached settings, and empties the in-memory accounts, teams, consultants and
-    services. Settings are cleared again after the test.
+    Runs automatically for every test: sets ADMIN_EMAILS, clears cached settings,
+    and empties the in-memory accounts, teams and consultants. Settings are
+    cleared again after the test.
 
     Args:
         monkeypatch: pytest fixture for setting environment variables for one test.
@@ -32,8 +32,7 @@ def consultant_settings(monkeypatch):
     Returns:
         Iterator[None]: yields once while the test runs (setup before, cleanup after).
     """
-    monkeypatch.setenv("CONSULTANT_EMAILS", "brandon@example.com, second@example.com")
-    monkeypatch.setenv("CONSULTANT_ACCESS_CODE", CODE)
+    monkeypatch.setenv("ADMIN_EMAILS", "brandon@example.com")
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._teams, account_store._consultants):
         store.clear()
@@ -48,8 +47,8 @@ def _signup(email, first="Dana", **extra):
     Args:
         email: Email for the new account.
         first: First name (default "Dana"); the last name is always "Lee".
-        **extra: Extra signup fields merged into the JSON body, e.g. access_code=CODE or
-            wants_consultant=True.
+        **extra: Extra signup fields merged into the JSON body, e.g. wants_consultant=True
+            or consultant_request=True.
 
     Returns:
         httpx.Response: The TestClient response (check .status_code, then .json()).
@@ -58,7 +57,7 @@ def _signup(email, first="Dana", **extra):
         >>> _signup("ana@example.com", "Ana", wants_consultant=True).status_code
         201
     """
-    body = {"password": "Correct-horse-9", "account_type": "individual", "first_name": first, "last_name": "Lee", "email": email, **extra}
+    body = {"password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "first_name": first, "last_name": "Lee", "email": email, **extra}
     return client.post("/api/accounts/signup", json=body)
 
 
@@ -87,49 +86,111 @@ def _auth(token, acting_as=None):
 
 def _consultant(email="brandon@example.com", first="Brandon"):
     """
-    Sign up a consultant (an email listed in CONSULTANT_EMAILS plus the access code).
+    Sign up a consultant: the admin (brandon@example.com) directly; anyone else
+    by asking and being approved by the admin (who must already exist).
 
     Args:
-        email: Consultant email (default "brandon@example.com", the default consultant).
+        email: Consultant email (default "brandon@example.com", the admin and default consultant).
         first: Consultant first name (default "Brandon").
 
     Returns:
-        str: The consultant's access token.
+        str: The consultant's access token (for an approved consultant, from a fresh
+        sign-in, so it carries the consultant role).
 
     Example:
         >>> token = _consultant()
         >>> client.get("/api/consultant/clients", headers=_auth(token)).status_code
         200
     """
-    return _signup(email, first, access_code=CODE).json()["access_token"]
+    if email == "brandon@example.com":
+        return _signup(email, first).json()["access_token"]
+    asked = _signup(email, first, consultant_request=True).json()
+    admin = client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9"})
+    res = client.post(f"/api/admin/consultant-requests/{asked['account']['id']}/approve",
+                      headers=_auth(admin.json()["access_token"]))
+    assert res.status_code == 200, res.text
+    return client.post("/api/accounts/signin", json={"email": email, "password": "Correct-horse-9"}).json()["access_token"]
 
 
-def test_consultant_sign_in_needs_the_access_code():
+def test_admin_is_a_consultant_and_others_must_be_approved():
     """
-    Check that a consultant email can sign up or sign in only with the right access code, and
-    then gets the "consultant" role.
+    The ADMIN_EMAILS address is an admin and consultant at once (no access code).
+    Anyone else who asks waits as a client until the admin approves (consultant at
+    once) or denies (stays a client). Only admins see or decide requests.
     """
-    assert _signup("brandon@example.com", "Brandon").status_code == 403            # no code
-    assert _signup("brandon@example.com", "Brandon", access_code="nope").status_code == 403
-    res = _signup("brandon@example.com", "Brandon", access_code=CODE)
-    assert res.status_code == 201 and res.json()["account"]["role"] == "consultant"
-    assert client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9"}).status_code == 403
-    ok = client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9", "access_code": CODE})
-    assert ok.status_code == 200 and ok.json()["account"]["role"] == "consultant"
+    admin = _signup("brandon@example.com", "Brandon").json()
+    assert admin["account"]["role"] == "consultant" and admin["account"]["is_admin"]
+    kim = _signup("kim@example.com", "Kim", consultant_request=True).json()
+    lee = _signup("lee@example.com", "Lee", consultant_request=True).json()
+    assert kim["account"]["role"] == "client" and kim["account"]["consultant_request"] == "pending"
+    # Nobody but an admin sees the list or decides.
+    assert client.get("/api/admin/consultant-requests", headers=_auth(kim["access_token"])).status_code == 403
+    assert client.post(f"/api/admin/consultant-requests/{kim['account']['id']}/approve",
+                       headers=_auth(kim["access_token"])).status_code == 403
+    panel = client.get("/api/admin/consultant-requests", headers=_auth(admin["access_token"])).json()
+    assert [(r["email"], r["status"]) for r in panel["requests"]] == [("kim@example.com", "pending"),
+                                                                      ("lee@example.com", "pending")]
+    h = _auth(admin["access_token"])
+    client.post(f"/api/admin/consultant-requests/{kim['account']['id']}/approve", headers=h)
+    panel = client.post(f"/api/admin/consultant-requests/{lee['account']['id']}/deny", headers=h).json()
+    assert {r["email"]: r["status"] for r in panel["requests"]} == {"kim@example.com": "approved", "lee@example.com": "denied"}
+    assert [c["name"] for c in panel["consultants"]] == ["Brandon", "Kim"]   # default consultant first
+    # Approved: a consultant from the next page load (no new sign-in needed for /me).
+    assert client.get("/api/accounts/me", headers=_auth(kim["access_token"])).json()["role"] == "consultant"
+    assert client.get("/api/consultant/clients", headers=_auth(kim["access_token"])).status_code == 200
+    # Denied: still a client, and may ask again.
+    assert client.get("/api/accounts/me", headers=_auth(lee["access_token"])).json()["role"] == "client"
+    again = client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"]))
+    assert again.status_code == 200 and again.json()["consultant_request"] == "pending"
+    assert client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"])).status_code == 409
 
 
-def test_consultant_sign_in_is_off_without_a_code(monkeypatch):
+def test_clients_pick_a_consultant_by_name_within_capacity():
     """
-    Check that consultant sign-in is switched off (403 with a clear message) when no access code
-    is configured.
+    A client picks a consultant by name and one-time or monthly help; the fill bar
+    counts their clients; a full consultant can't be picked (409), and a client who
+    picks nobody goes to whoever has room.
+    """
+    brandon = _consultant()
+    kim = _consultant("kim@example.com", "Kim")
+    kim_id = next(c["id"] for c in client.get("/api/accounts/consultants").json()["consultants"] if c["name"] == "Kim")
+    # Kim takes one client at most.
+    assert client.put("/api/consultant/settings", headers=_auth(kim), json={"capacity": 11}).status_code == 422
+    settings = client.put("/api/consultant/settings", headers=_auth(kim), json={"capacity": 1}).json()
+    assert settings["load"]["capacity"] == 1 and settings["max_capacity"] == 10
 
-    Args:
-        monkeypatch: pytest fixture used to clear CONSULTANT_ACCESS_CODE.
-    """
-    monkeypatch.setenv("CONSULTANT_ACCESS_CODE", "")
-    get_settings.cache_clear()
-    res = _signup("brandon@example.com", "Brandon", access_code="anything")
-    assert res.status_code == 403 and "isn't switched on" in res.json()["detail"]
+    ana = _signup("ana@example.com", "Ana", wants_consultant=True, consultant_id=kim_id, consultant_plan="monthly").json()
+    assert ana["account"]["consultant_name"] == "Kim" and ana["account"]["consultant_plan"] == "monthly"
+    [summary] = client.get("/api/consultant/clients", headers=_auth(kim)).json()["clients"]
+    assert summary["consultant_plan"] == "monthly"
+    kim_row = next(c for c in client.get("/api/intake/options").json()["consultants"] if c["name"] == "Kim")
+    assert (kim_row["clients"], kim_row["percent"], kim_row["full"]) == (1, 100, True)
+    assert "email" not in kim_row                            # guests never see emails
+
+    # Kim is full: picking her is refused, and nothing is created.
+    full = _signup("bo@example.com", "Bo", wants_consultant=True, consultant_id=kim_id)
+    assert full.status_code == 409 and "fully booked" in full.json()["detail"]
+    assert account_store._accounts and all(a["email"] != "bo@example.com" for a in account_store._accounts.values())
+    # Picking nobody: the default consultant (Brandon) has room; one-time is the default.
+    bo = _signup("bo@example.com", "Bo", wants_consultant=True).json()["account"]
+    assert bo["consultant_name"] == "Brandon" and bo["consultant_plan"] == "one_time"
+    assert client.get("/api/consultant/settings", headers=_auth(brandon)).json()["load"]["clients"] == 1
+    # A consultant at capacity can't add more clients by hand either.
+    added = client.post("/api/consultant/clients", headers=_auth(kim), json={
+        "account_type": "individual", "first_name": "Cy", "last_name": "Ro", "email": "cy@example.com"})
+    assert added.status_code == 409
+
+
+def test_a_signed_in_client_can_choose_a_consultant_later():
+    """POST /api/accounts/consultant: a do-it-yourself client asks for help after signing up."""
+    _consultant()
+    sam = _signup("sam@example.com", "Sam").json()
+    assert sam["account"]["consultant_name"] is None
+    plan = client.post("/api/accounts/consultant", headers=_auth(sam["access_token"]),
+                       json={"consultant_plan": "monthly"}).json()
+    assert plan["account"]["consultant_name"] == "Brandon" and plan["account"]["consultant_plan"] == "monthly"
+    # Now consultant-managed: every available tool, including Data Engineering (to store data).
+    assert "data_engineering" in plan["active"]
 
 
 def test_done_for_you_clients_go_to_the_default_consultant_and_get_every_tool():
@@ -172,14 +233,15 @@ def test_consultants_see_all_seven_services_including_ai_preview():
 
 def test_clients_waiting_for_a_consultant_are_assigned_when_one_signs_in():
     """
-    Check that a client who asked for a consultant before any existed is assigned to the first
-    consultant who signs up.
+    Check that clients who asked for a consultant before any existed are assigned to the
+    default consultant when they sign up — oldest first, and only as many as their capacity.
     """
-    waiting = _signup("early@example.com", "Early", wants_consultant=True).json()["account"]
-    assert waiting["consultant_name"] is None                # nobody set up yet
+    for i in range(4):
+        waiting = _signup(f"early{i}@example.com", "Early", wants_consultant=True).json()["account"]
+        assert waiting["consultant_name"] is None            # nobody set up yet
     token = _consultant()
-    clients = client.get("/api/consultant/clients", headers=_auth(token)).json()["clients"]
-    assert [c["email"] for c in clients] == ["early@example.com"]
+    clients = client.get("/api/consultant/clients", headers=_auth(token)).json()
+    assert len(clients["clients"]) == 3 and clients["load"]["full"]   # capacity 3: the 4th still waits
 
 
 def test_the_access_rule():
@@ -192,7 +254,7 @@ def test_the_access_rule():
     other = _consultant("second@example.com", "Avery")
     mine = _signup("ana@example.com", "Ana", wants_consultant=True).json()
     theirs_id = client.post("/api/consultant/clients", headers=_auth(other), json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Kai", "last_name": "Ono", "email": "kai@example.com",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Kai", "last_name": "Ono", "email": "kai@example.com",
         "company_name": "Ono Coffee"}).json()["id"]
     mine_id = mine["account"]["id"]
 
@@ -232,15 +294,15 @@ def test_other_industry_is_saved_and_empty_means_nothing():
     "Other" and a NAICS sector is rejected (422).
     """
     res = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Lu", "last_name": "Ma", "email": "lu@example.com",
         "company_name": "Lu Kitchen", "industry_other": "  Food   truck "})
     assert res.status_code == 201 and res.json()["account"]["industry_other"] == "Food truck"
     blank = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Jo", "last_name": "Ma", "email": "jo@example.com",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Jo", "last_name": "Ma", "email": "jo@example.com",
         "company_name": "Jo Co", "industry_other": "   "}).json()["account"]
     assert blank["industry_other"] is None and blank["naics_sector"] is None
     both = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Al", "last_name": "Ma", "email": "al@example.com",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Al", "last_name": "Ma", "email": "al@example.com",
         "company_name": "Al Co", "industry_other": "x", "industry_supersector": "service_providing",
         "naics_sector": "44-45"})
     assert both.status_code == 422

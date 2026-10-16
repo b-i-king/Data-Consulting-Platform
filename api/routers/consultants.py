@@ -6,6 +6,9 @@ Consultant endpoints (consultants only — everyone else gets 403).
     POST /api/consultant/clients   create an account for a client and assign
                                    it to me (for clients who'd rather not sign
                                    up themselves). Same fields as signup.
+                                   Refused when I'm at my capacity.
+    GET  /api/consultant/settings  my capacity and how full I am
+    PUT  /api/consultant/settings  change my capacity (1 to 10 clients)
 
 To then work on a client, the website sends `X-Acting-As: <client id>` with
 the signed-in requests (see api/services/consultants.py for the access rule).
@@ -18,7 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import get_current_account
-from api.models.accounts import SignupIn
+from api.models.accounts import CapacityIn, SignupIn
 from api.routers.accounts import create_client_account
 from api.services import account_store, consultants
 
@@ -62,9 +65,10 @@ async def my_clients(token: Annotated[dict, Depends(get_current_account)]):
         token: dict, the decoded login token (injected by `get_current_account`).
 
     Returns:
-        dict: {"consultant": {"id", "name"}, "clients": [client summary, ...]};
-        each summary has "id", "label", "person", "email", "account_type",
-        "company_name", "location", "naics_sector", "industry_other".
+        dict: {"consultant": {"id", "name"}, "clients": [client summary, ...],
+        "load": {"capacity", "clients", "percent", "full", ...}}; each summary has
+        "id", "label", "person", "email", "account_type", "company_name",
+        "location", "naics_sector", "industry_other", "consultant_plan".
 
     Raises:
         HTTPException: 401 without a valid token; 403 for non-consultants.
@@ -80,6 +84,7 @@ async def my_clients(token: Annotated[dict, Depends(get_current_account)]):
     return {
         "consultant": {"id": str(consultant["id"]), "name": consultant["display_name"]},
         "clients": [consultants.client_summary(c) for c in clients],
+        "load": consultants.load({**consultant, "client_count": len(clients)}),
     }
 
 
@@ -102,8 +107,8 @@ async def add_client(body: SignupIn, token: Annotated[dict, Depends(get_current_
 
     Raises:
         HTTPException: 401 without a valid token; 403 for non-consultants;
-            400 "That email belongs to a consultant." or unknown service ids;
-            409 when an email already has an account.
+            400 "That email belongs to an admin." or unknown service ids;
+            409 when an email already has an account or I'm at my capacity.
 
     Example:
         POST /api/consultant/clients
@@ -113,7 +118,61 @@ async def add_client(body: SignupIn, token: Annotated[dict, Depends(get_current_
         -> 201 {"id": "...", "label": "Rise Bakery", "person": "Ana Lee", ...}
     """
     consultant = await _me(token)
-    if consultants.is_consultant_email(body.email):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That email belongs to a consultant.")
+    if consultants.is_admin_email(body.email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That email belongs to an admin.")
+    capacity = consultant.get("capacity") or account_store.DEFAULT_CAPACITY
+    if await account_store.count_clients(str(consultant["id"])) >= capacity:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail=f"You're at your capacity ({capacity} clients). Raise it in Settings first.")
     client = await create_client_account(body, consultant_id=str(consultant["id"]))
     return consultants.client_summary(client)
+
+
+@router.get("/settings")
+async def my_settings(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/consultant/settings — my capacity and how full I am.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: {"load": {"id", "name", "capacity", "clients", "percent", "full", ...},
+        "max_capacity": 10}.
+
+    Raises:
+        HTTPException: 401 without a valid token; 403 for non-consultants.
+
+    Example:
+        GET /api/consultant/settings
+        -> 200 {"load": {"capacity": 3, "clients": 1, "percent": 33, ...}, "max_capacity": 10}
+    """
+    consultant = await _me(token)
+    count = await account_store.count_clients(str(consultant["id"]))
+    return {"load": consultants.load({**consultant, "client_count": count}), "max_capacity": consultants.MAX_CAPACITY}
+
+
+@router.put("/settings")
+async def change_settings(body: CapacityIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    PUT /api/consultant/settings — change how many clients I take at once.
+
+    Lowering it below my current clients drops nobody; I just can't be picked
+    until I have room again.
+
+    Args:
+        body: CapacityIn, the new capacity (1 to 10).
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: {"load": {...}, "max_capacity": 10} with the new capacity.
+
+    Raises:
+        HTTPException: 401 / 403 as above; 422 outside 1..10.
+
+    Example:
+        PUT /api/consultant/settings  {"capacity": 5}
+        -> 200 {"load": {"capacity": 5, "clients": 1, "percent": 20, ...}, "max_capacity": 10}
+    """
+    consultant = await _me(token)
+    return {"load": await consultants.set_capacity(consultant, body.capacity), "max_capacity": consultants.MAX_CAPACITY}

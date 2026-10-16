@@ -39,10 +39,13 @@ Still to do:
 2. **Invite emails** for team colleagues and consultant-added clients. Today the
    first sign-in with their email sets the password, so whoever gets there first
    chooses it — sign them in promptly.
-3. Consultants: replace the shared `CONSULTANT_ACCESS_CODE` with two-factor
-   (Supabase MFA), since a consultant can open every client assigned to them.
-4. Google and Apple sign-in (Supabase Auth providers) — no table changes needed.
-5. Sign-in rate limiting on our side (Supabase rate-limits its own endpoints).
+3. Consultants: add two-factor sign-in (Supabase MFA), since a consultant can
+   open every client assigned to them. (Consultants are already approved one by
+   one by an admin; there is no shared access code.)
+4. Email the person when an admin approves or denies their consultant request
+   (today they see it in Settings, and their workspace switches on its next load).
+5. Google and Apple sign-in (Supabase Auth providers) — no table changes needed.
+6. Sign-in rate limiting on our side (Supabase rate-limits its own endpoints).
 
 ### 2. Payments — ✅ built, in test mode
 Stripe subscriptions (each plan has a monthly and an annual price), Checkout,

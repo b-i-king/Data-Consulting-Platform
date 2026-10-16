@@ -5,9 +5,12 @@
 //   * the /signin page (reached from the home page), which then opens the
 //     signed-in workspace at /app.
 //
-// Signup asks: individual -> first name, last name, email, password (typed
-// twice), and (optional) location; business -> plus business name and optional
-// team members. Sign-in asks for the email and password. Guests never see these fields.
+// Signup asks: individual -> first name, last name, email, password (and
+// "Confirm password"), and (optional) location; business -> plus business name
+// and optional team members. Then the TERMS BOX: "I agree to the Terms of
+// Service and Privacy Policy" must be ticked before "Create account" works
+// (the server refuses a sign-up without it too). Sign-in asks for the email
+// and password. Guests never see these fields.
 //
 // PASSWORDS (api/services/auth.py): at least 8 characters. Supabase Auth checks
 // them when it's configured. If Supabase's "Confirm email" setting is on, a new
@@ -15,11 +18,13 @@
 // sign-in. A colleague (or a client a consultant added) has no password yet —
 // the password typed at their FIRST sign-in becomes theirs.
 //
-// Signup also offers "I'd like <consultant> to do this for me" (a "done for
-// you" client, assigned to the default consultant). A plan picked on "Your
-// needs" is paid for after signup, on the download step (Stripe Checkout).
-// CONSULTANTS use the same form plus their access code ("I'm a consultant"
-// link, or shown automatically when the server asks for it).
+// Signup also offers "I'd like a consultant to do this for me": pick one by
+// name (fill bars show how full each is) and one-time or monthly help
+// (components/consultants/ConsultantPicker.tsx). A plan picked on "Your needs"
+// is paid for after signup, on "Next steps" (Stripe Checkout).
+// CONSULTANTS use the same form with no access code: "I'd like to work as a
+// consultant" sends a request, and an admin approves or denies it
+// (Admin panel in the workspace). Nobody can make themselves a consultant.
 //
 // FOOLPROOF INPUT (rules in lib/validation.ts, enforced again on the server):
 //   * names: letters (accents fine), spaces, - ' ’ . ; the first letter is
@@ -33,10 +38,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { signin, signup } from "@/lib/api";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { getConsultants, signin, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
-import type { AccountType, Industry, Location, TeamMemberInput } from "@/lib/types";
+import type { AccountType, ConsultantLoad, ConsultantPlan, Industry, Location, TeamMemberInput } from "@/lib/types";
+import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { capitalizeFirst, companyNameError, emailError, personNameError, repeatedEmails } from "@/lib/validation";
 import { Button, Card, ChoiceCard, ErrorBox, StepHeader } from "@/components/wizard/ui";
 import LocationPicker from "./LocationPicker";
@@ -74,7 +80,9 @@ export default function AuthForm({
   title,
   subtitle,
   wantsConsultant: initialWants = false,
-  consultantName = null,
+  consultants: givenConsultants,
+  consultantId: initialPick = null,
+  consultantPlan: initialPlan = "one_time",
 }: {
   defaultType?: AccountType;
   industry?: Industry; // answered on the wizard's first step; sent only for business signups
@@ -83,8 +91,10 @@ export default function AuthForm({
   initialMode?: "signup" | "signin";
   title: { signup: string; signin: string };
   subtitle?: string;
-  wantsConsultant?: boolean; // ticked on "Your needs"
-  consultantName?: string | null; // the default consultant, e.g. "Brandon"
+  wantsConsultant?: boolean; // "Help from a consultant" picked on "Your needs"
+  consultants?: ConsultantLoad[]; // the picker's list (fetched here when not given)
+  consultantId?: string | null; // picked on "Your needs" (null = whoever has room)
+  consultantPlan?: ConsultantPlan;
 }) {
   const [mode, setMode] = useState<"signup" | "signin">(initialMode);
   const [type, setType] = useState<AccountType>(defaultType);
@@ -98,9 +108,18 @@ export default function AuthForm({
   const [location, setLocation] = useState<Location | null>(null);
   const [team, setTeam] = useState<TeamMemberInput[]>([]);
   const [wants, setWants] = useState(initialWants);
-  // Consultant sign-in: the access code box (hidden for everyone else).
-  const [showCode, setShowCode] = useState(false);
-  const [code, setCode] = useState("");
+  const [pick, setPick] = useState<string | null>(initialPick);
+  const [plan, setPlan] = useState<ConsultantPlan>(initialPlan);
+  const [consultants, setConsultants] = useState<ConsultantLoad[]>(givenConsultants ?? []);
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [askToConsult, setAskToConsult] = useState(false); // "I'd like to work as a consultant"
+  // The consultant list for the picker, when the page didn't pass one (/signin).
+  useEffect(() => {
+    if (givenConsultants || !wants) return;
+    getConsultants()
+      .then((r) => setConsultants(r.consultants))
+      .catch(() => {});
+  }, [givenConsultants, wants]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which fields have been left (so errors don't shout while someone is still typing).
@@ -122,6 +141,7 @@ export default function AuthForm({
         : null;
     if (mode === "signup") {
       e.confirm = confirm !== password ? "The two passwords don't match." : null;
+      e.terms = acceptTerms ? null : "Please accept the Terms of Service and Privacy Policy to continue.";
       e.first = personNameError(first, "First name");
       e.last = personNameError(last, "Last name");
       if (type === "business") {
@@ -137,7 +157,7 @@ export default function AuthForm({
       }
     }
     return e;
-  }, [mode, type, first, last, email, password, confirm, company, team]);
+  }, [mode, type, first, last, email, password, confirm, company, team, acceptTerms]);
   const hasErrors = Object.values(errors).some(Boolean);
 
   async function submit(e: FormEvent) {
@@ -150,7 +170,7 @@ export default function AuthForm({
     try {
       const res =
         mode === "signin"
-          ? await signin(email.trim(), password, showCode ? code.trim() : undefined)
+          ? await signin(email.trim(), password)
           : await signup({
               account_type: type,
               first_name: first.trim(),
@@ -159,8 +179,9 @@ export default function AuthForm({
               password,
               ...(location ? { location_id: location.id } : {}),
               ...(serviceIds.length ? { service_ids: serviceIds } : {}),
-              ...(wants ? { wants_consultant: true } : {}),
-              ...(showCode && code.trim() ? { access_code: code.trim() } : {}),
+              ...(wants ? { wants_consultant: true, consultant_id: pick, consultant_plan: plan } : {}),
+              ...(askToConsult ? { consultant_request: true } : {}),
+              accept_terms: acceptTerms,
               ...(type === "business"
                 ? {
                     company_name: company.trim(),
@@ -180,9 +201,7 @@ export default function AuthForm({
       }
       onSignedIn({ token: res.access_token, account: res.account });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Something went wrong.";
-      if (message.includes("consultant access code")) setShowCode(true); // a consultant's email: ask for the code
-      setError(message);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setBusy(false);
     }
@@ -251,7 +270,7 @@ export default function AuthForm({
             />
           </Field>
           {mode === "signup" && (
-            <Field label="Password again" error={errors.confirm} show={show("confirm")}>
+            <Field label="Confirm password" error={errors.confirm} show={show("confirm")}>
               <input
                 type="password"
                 className={inputCls(show("confirm") && !!errors.confirm)}
@@ -321,38 +340,81 @@ export default function AuthForm({
 
         {mode === "signup" && (
           // "Done for you": a consultant does the work in this account.
-          <label className="flex items-start gap-3 rounded-2xl border border-consultant/40 bg-consultant-soft p-4 text-sm">
+          <div className="space-y-3 rounded-2xl border border-consultant/40 bg-consultant-soft p-4 text-sm">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-[var(--color-consultant)]"
+                checked={wants}
+                onChange={(e) => setWants(e.target.checked)}
+              />
+              <span>
+                <span className="font-semibold">I&apos;d like a consultant to do this for me</span>
+                <span className="block text-xs text-ink-muted">
+                  No new platform to learn: your consultant signs in and does the cleaning, dashboards and analysis for
+                  you, with every tool unlocked. You can still log in and look around anytime.
+                </span>
+              </span>
+            </label>
+            {wants &&
+              (initialWants && givenConsultants ? (
+                // Already chosen on "Your needs": just say so.
+                <p className="text-xs">
+                  <strong>{PLAN_LABELS[plan].title}</strong> with{" "}
+                  {consultants.find((c) => c.id === pick)?.name ?? "whoever has room"} (chosen on Your needs).
+                </p>
+              ) : (
+                <ConsultantPicker consultants={consultants} value={pick} onChange={setPick} plan={plan} onPlan={setPlan} />
+              ))}
+          </div>
+        )}
+
+        {mode === "signup" && (
+          <label className="flex items-start gap-3 text-sm">
             <input
               type="checkbox"
               className="mt-0.5 accent-[var(--color-consultant)]"
-              checked={wants}
-              onChange={(e) => setWants(e.target.checked)}
+              checked={askToConsult}
+              onChange={(e) => setAskToConsult(e.target.checked)}
             />
             <span>
-              <span className="font-semibold">I&apos;d like {consultantName ?? "a consultant"} to do this for me</span>
+              I&apos;d like to work as a consultant on this platform
               <span className="block text-xs text-ink-muted">
-                No new platform to learn: your consultant signs in and does the cleaning, dashboards and analysis for you,
-                with every tool unlocked. You can still log in and look around anytime.
+                We&apos;ll review your request. Once approved, your workspace switches to consultant mode.
               </span>
             </span>
           </label>
         )}
 
-        {showCode ? (
-          <label className="block space-y-1 text-sm">
-            <span>Consultant access code</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              className={inputCls(false)}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-            />
-          </label>
-        ) : (
-          <button type="button" className="text-xs text-ink-muted hover:text-consultant" onClick={() => setShowCode(true)}>
-            I&apos;m a consultant
-          </button>
+        {mode === "signup" && (
+          // The terms box: required before the account can be created.
+          <div>
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-[var(--color-brand)]"
+                checked={acceptTerms}
+                onChange={(e) => setAcceptTerms(e.target.checked)}
+                aria-invalid={show("terms") && !!errors.terms}
+              />
+              <span>
+                I agree to the{" "}
+                <Link href="/terms" target="_blank" className="text-brand underline">
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link href="/privacy" target="_blank" className="text-brand underline">
+                  Privacy Policy
+                </Link>
+                .
+              </span>
+            </label>
+            {show("terms") && errors.terms && (
+              <p role="alert" className="mt-1 text-xs text-bad">
+                {errors.terms}
+              </p>
+            )}
+          </div>
         )}
 
         {(submitted || touched.email) && errors.repeats && (
@@ -368,7 +430,7 @@ export default function AuthForm({
         <ErrorBox message={error} />
 
         <div className="flex flex-wrap items-center gap-4">
-          <Button type="submit" disabled={busy}>
+          <Button type="submit" disabled={busy || (mode === "signup" && !acceptTerms)}>
             {busy ? "One moment…" : mode === "signup" ? "Create account" : "Sign in"}
           </Button>
           <button
@@ -384,19 +446,6 @@ export default function AuthForm({
             {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
           </button>
         </div>
-        {mode === "signup" && (
-          <p className="text-xs text-ink-muted">
-            By creating an account you agree to the{" "}
-            <Link href="/terms" target="_blank" className="underline hover:text-ink">
-              Terms of Service
-            </Link>{" "}
-            and{" "}
-            <Link href="/privacy" target="_blank" className="underline hover:text-ink">
-              Privacy Policy
-            </Link>
-            .
-          </p>
-        )}
       </form>
     </>
   );

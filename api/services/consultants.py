@@ -1,20 +1,43 @@
 """
-Consultants: who they are, which clients they manage, and who may act for whom.
+Consultants: who they are, how full they are, which clients they manage, and
+who may act for whom.
 
 WHAT THIS FILE DOES
 -------------------
 The platform serves two kinds of clients:
   * DO IT YOURSELF — they sign up and use the tools themselves.
-  * DONE FOR YOU   — they tick "I'd like a consultant to do this for me" (or a
-                     consultant creates their account), and a consultant signs
-                     in and does the work in their workspace.
+  * DONE FOR YOU   — they tick "I'd like a consultant to do this for me", pick
+                     a consultant by name (or let us pick), and choose a
+                     one-time analysis or monthly help. The consultant signs in
+                     and does the work in their workspace.
 
-  is_consultant_email(email)   is this address in CONSULTANT_EMAILS?
-  check_access_code(code)      the extra secret a consultant must enter
-  default_consultant()         who new "done for you" clients are assigned to
-  register(account)            create the consultant row on first sign-in, and
-                               hand them any clients waiting for a consultant
-  acting_context(token, id)    THE ACCESS RULE (see below)
+WHO IS A CONSULTANT? (no access codes)
+--------------------------------------
+  * ADMINS are the ADMIN_EMAILS addresses (normally just the owner). An admin
+    is always a consultant; the first admin is the DEFAULT consultant.
+  * Anyone else ASKS ("I'd like to work as a consultant" at sign-up, or in the
+    workspace) and waits. An admin APPROVES or DENIES in the Admin panel.
+    Approval creates their dim.consultants row at once, so their next page
+    load shows the consultant workspace. Nobody can make themselves a consultant.
+
+  is_admin_email(email)       is this address in ADMIN_EMAILS?
+  sync_roles(account)         at sign-up / sign-in: admins get their flags and
+                              consultant row; approved consultants get their row
+  request(account)            "I'd like to work as a consultant"
+  decide(account_id, ok, me)  an admin approves or denies
+  default_consultant()        who "do it for me" clients go to when they pick nobody
+  pick(consultant_id)         CAPACITY RULE: the consultant a new client gets
+  directory()                 every consultant with how full they are (the picker)
+  set_capacity(consultant, n) a consultant's own setting, 1 to MAX_CAPACITY
+  acting_context(token, id)   THE ACCESS RULE (see below)
+
+CAPACITY
+--------
+Each consultant takes `capacity` clients at once (default 3, at most
+MAX_CAPACITY). The picker shows a fill bar: green while under half full,
+yellow from half, red when full. A full consultant can't be picked; a client
+who picks nobody goes to the default consultant if they have room, else to
+whoever has the most room, else waits (assigned when someone has room).
 
 THE ACCESS RULE ("row-level security" in the API)
 -------------------------------------------------
@@ -25,16 +48,11 @@ Every signed-in request names who it's for:
     them (accounts.consultant_id). Anyone else gets 403 — a client can never act
     as another client, and a consultant can never open someone else's client.
 The database repeats the safe default (RLS on, no public access); see db/schema.sql.
-
-Consultants sign in with email + password (api/services/auth.py) AND the
-shared CONSULTANT_ACCESS_CODE, because a consultant can open every client
-assigned to them. Replace the shared code with two-factor sign-in (Supabase
-MFA) before real clients — docs/ROADMAP.md.
+Before real clients, add two-factor sign-in for consultants (Supabase MFA) —
+docs/ROADMAP.md.
 """
 
 from __future__ import annotations
-
-import hmac
 
 from fastapi import HTTPException, status
 
@@ -42,14 +60,14 @@ from api.core.config import get_settings
 from api.services import account_store
 from api.services.entitlements import plan_holder_id
 
-CODE_REQUIRED = "Consultant sign-in: enter your consultant access code."
+MAX_CAPACITY = 10   # the most clients one consultant can take (same CHECK in db/schema.sql)
 ACCOUNT_GONE = ("We couldn't find your account. If this is a test server without a database, it may "
                 "have restarted and forgotten accounts — please create your account again.")
 
 
-def is_consultant_email(email: str) -> bool:
+def is_admin_email(email: str) -> bool:
     """
-    Tell whether an email address is listed in CONSULTANT_EMAILS.
+    Tell whether an email address is listed in ADMIN_EMAILS.
 
     The comparison ignores letter case (the settings list is already lower-cased).
 
@@ -57,95 +75,256 @@ def is_consultant_email(email: str) -> bool:
         email: str, the address someone is signing in or signing up with.
 
     Returns:
-        bool: True if the address belongs to a consultant.
+        bool: True if the address belongs to an admin.
 
     Example:
-        >>> is_consultant_email("Pat@Example.com")   # CONSULTANT_EMAILS="pat@example.com"
+        >>> is_admin_email("Pat@Example.com")   # ADMIN_EMAILS="pat@example.com"
         True
     """
-    return email.lower() in get_settings().consultant_email_list
-
-
-def check_access_code(code: str | None) -> None:
-    """
-    Raise 403 unless consultant sign-in is switched on and the code matches.
-
-    Consultant sign-in is "off" while CONSULTANT_ACCESS_CODE is empty. The code
-    is compared with hmac.compare_digest, which takes the same time whether or not
-    a guess is close, so response times do not leak the code.
-
-    Args:
-        code: str | None, the access code the person typed (None or "" if missing).
-
-    Returns:
-        None: returns quietly when the code is correct.
-
-    Raises:
-        HTTPException: 403 if CONSULTANT_ACCESS_CODE is not set, or the code is
-            missing or wrong (detail CODE_REQUIRED).
-
-    Example:
-        >>> check_access_code("s3cret")   # CONSULTANT_ACCESS_CODE="s3cret" -> no error
-        >>> check_access_code("guess")
-        Traceback (most recent call last):
-        HTTPException: 403 Consultant sign-in: enter your consultant access code.
-    """
-    expected = get_settings().consultant_access_code
-    if not expected:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            detail="Consultant sign-in isn't switched on yet (CONSULTANT_ACCESS_CODE is not set).")
-    # compare_digest takes the same time whether or not the code is close, so
-    # the response time doesn't give away how much of a guess was right.
-    if not code or not hmac.compare_digest(code.encode(), expected.encode()):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=CODE_REQUIRED)
-
-
-async def default_consultant() -> dict | None:
-    """
-    Find the default consultant: the first CONSULTANT_EMAILS address.
-
-    New "done for you" clients are assigned to this person. The consultant row
-    exists only once that person has signed in at least once (see register).
-
-    Returns:
-        dict | None: the consultants row, or None if CONSULTANT_EMAILS is empty or
-            the first consultant has not signed in yet.
-
-    Example:
-        >>> c = await default_consultant()
-        >>> c["email"] if c else None
-        'pat@example.com'
-    """
-    emails = get_settings().consultant_email_list
-    return await account_store.get_consultant_by_email(emails[0]) if emails else None
+    return email.lower() in get_settings().admin_email_list
 
 
 async def register(account: dict) -> dict:
     """
-    Make sure a consultant's row exists (the "consultants" dimension table).
+    Make sure a consultant's row exists (the dim.consultants table).
 
-    The default consultant also picks up clients who asked for a consultant
-    before anyone was set up to take them. A consultant is the default when their
-    email is the first CONSULTANT_EMAILS address; the flag is refreshed on every
-    call.
+    A consultant is the DEFAULT when their email is the first ADMIN_EMAILS
+    address (refreshed on every call). The default consultant also picks up
+    clients who asked for a consultant before anyone had room — but only as
+    many as their capacity leaves free.
 
     Args:
         account: dict, the consultant's accounts row (needs "id", "first_name",
             "email").
 
     Returns:
-        dict: the consultants row (with "id", "is_default", ...).
+        dict: the consultants row (with "id", "is_default", "capacity", ...).
 
     Example:
-        >>> row = await register(pat_account)   # Pat is first in CONSULTANT_EMAILS
+        >>> row = await register(pat_account)   # Pat is first in ADMIN_EMAILS
         >>> row["is_default"]
         True
     """
-    emails = get_settings().consultant_email_list
-    consultant = await account_store.ensure_consultant(account, is_default=bool(emails) and account["email"] == emails[0])
+    admins = get_settings().admin_email_list
+    consultant = await account_store.ensure_consultant(account, is_default=bool(admins) and account["email"] == admins[0])
     if consultant["is_default"]:
-        await account_store.assign_waiting_clients(str(consultant["id"]))
+        free = consultant.get("capacity", account_store.DEFAULT_CAPACITY) - await account_store.count_clients(str(consultant["id"]))
+        await account_store.assign_waiting_clients(str(consultant["id"]), limit=free)
     return consultant
+
+
+async def sync_roles(account: dict) -> dict:
+    """
+    Bring an account's roles up to date at sign-up and sign-in.
+
+      * an ADMIN_EMAILS address -> is_admin and is_consultant set, consultant row made
+      * an approved consultant  -> consultant row made (if it was ever missing)
+
+    Args:
+        account: dict, the accounts row that just signed up or signed in.
+
+    Returns:
+        dict: the account row, re-read when anything changed.
+
+    Example:
+        >>> (await sync_roles(my_account))["is_admin"]   # my email is in ADMIN_EMAILS
+        True
+    """
+    if is_admin_email(account["email"]) and not account.get("is_admin"):
+        await account_store.set_admin(str(account["id"]))
+        account = await account_store.get_account(str(account["id"])) or account
+    if account.get("is_admin") or account.get("is_consultant"):
+        await register(account)
+    return account
+
+
+async def request(account: dict) -> dict:
+    """
+    "I'd like to work as a consultant": put the request on the admin's list.
+
+    Args:
+        account: dict, the signed-in person asking (their own account, never a client's).
+
+    Returns:
+        dict: the account row after the request.
+
+    Raises:
+        HTTPException: 409 if they already are a consultant or already asked.
+
+    Example:
+        >>> (await request(kim))["consultant_request"]
+        'pending'
+    """
+    if account.get("is_consultant") or account.get("is_admin"):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="You're already a consultant.")
+    if account.get("consultant_request") == "pending":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Your request is already waiting for approval.")
+    await account_store.request_consultant(str(account["id"]))
+    return await account_store.get_account(str(account["id"])) or account
+
+
+async def decide(account_id: str, approved: bool, admin: dict) -> dict:
+    """
+    An admin approves or denies a consultant request.
+
+    Approving creates the person's dim.consultants row straight away (capacity
+    3), so they can take clients the next time their workspace loads.
+
+    Args:
+        account_id: str, the person who asked.
+        approved: bool, True = approve, False = deny.
+        admin: dict, the admin's accounts row.
+
+    Returns:
+        dict: the person's account row after the decision.
+
+    Raises:
+        HTTPException: 404 if the account doesn't exist; 400 if they never asked.
+
+    Example:
+        >>> (await decide(kim_id, True, me))["is_consultant"]
+        True
+    """
+    person = await account_store.get_account(account_id)
+    if person is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That account was not found.")
+    if not person.get("consultant_request"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="This person hasn't asked to be a consultant.")
+    await account_store.decide_consultant_request(account_id, approved, str(admin["id"]))
+    person = await account_store.get_account(account_id) or person
+    if approved:
+        await register(person)
+    return person
+
+
+def load(consultant: dict) -> dict:
+    """
+    How full one consultant is, for the picker's fill bar (no email: clients see this).
+
+    Args:
+        consultant: dict, a consultants row with "client_count" (list_consultants).
+
+    Returns:
+        dict: {"id", "name", "capacity", "clients", "percent", "full", "is_default"}.
+            percent = clients / capacity * 100 (0-100).
+
+    Example:
+        >>> load({"id": "c1", "display_name": "Kim", "capacity": 4, "client_count": 2})["percent"]
+        50
+    """
+    capacity = consultant.get("capacity") or account_store.DEFAULT_CAPACITY
+    clients = consultant.get("client_count", 0)
+    return {
+        "id": str(consultant["id"]),
+        "name": consultant["display_name"],
+        "capacity": capacity,
+        "clients": clients,
+        "percent": min(100, round(clients / capacity * 100)),
+        "full": clients >= capacity,
+        "is_default": bool(consultant.get("is_default")),
+    }
+
+
+async def directory() -> list[dict]:
+    """
+    Every active consultant with how full they are (default consultant first).
+
+    Returns:
+        list[dict]: `load(...)` for each active consultant.
+
+    Example:
+        >>> [(c["name"], c["clients"], c["capacity"]) for c in await directory()]
+        [('Brandon', 1, 3), ('Kim', 3, 3)]
+    """
+    rows = [load(c) for c in await account_store.list_consultants()]
+    return sorted(rows, key=lambda c: not c["is_default"])
+
+
+async def default_consultant() -> dict | None:
+    """
+    Find the default consultant: the first ADMIN_EMAILS address's consultant row.
+
+    The row exists only once that person has signed in at least once.
+
+    Returns:
+        dict | None: the consultants row, or None if ADMIN_EMAILS is empty or
+            the first admin has not signed in yet.
+
+    Example:
+        >>> c = await default_consultant()
+        >>> c["email"] if c else None
+        'pat@example.com'
+    """
+    admins = get_settings().admin_email_list
+    return await account_store.get_consultant_by_email(admins[0]) if admins else None
+
+
+async def pick(consultant_id: str | None) -> str | None:
+    """
+    THE CAPACITY RULE: which consultant a new "do it for me" client gets.
+
+      * a consultant chosen by name -> them, if active and not full (else 409)
+      * nobody chosen -> the default consultant if they have room, else the
+        active consultant with the most room, else None (the client waits and
+        is assigned when the default consultant next has room)
+
+    Args:
+        consultant_id: str | None, the consultants row id the client picked.
+
+    Returns:
+        str | None: the consultants row id to assign, or None to wait.
+
+    Raises:
+        HTTPException: 404 for an unknown or inactive consultant; 409 when the
+            chosen consultant is full.
+
+    Example:
+        >>> await pick(None)   # default consultant has room
+        '<default consultant id>'
+    """
+    everyone = await directory()
+    if consultant_id:
+        chosen = next((c for c in everyone if c["id"] == consultant_id), None)
+        if chosen is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That consultant isn't available.")
+        if chosen["full"]:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"{chosen['name']} is fully booked right now. Please pick someone else.")
+        return chosen["id"]
+    open_ = [c for c in everyone if not c["full"]]
+    default = next((c for c in open_ if c["is_default"]), None)
+    if default:
+        return default["id"]
+    open_.sort(key=lambda c: (c["clients"] / c["capacity"], c["name"]))
+    return open_[0]["id"] if open_ else None
+
+
+async def set_capacity(consultant: dict, capacity: int) -> dict:
+    """
+    A consultant sets how many clients they take at once.
+
+    Lowering it below their current number of clients is allowed (nobody is
+    dropped); they just can't be picked until they have room again.
+
+    Args:
+        consultant: dict, the consultant's own consultants row.
+        capacity: int, 1 to MAX_CAPACITY.
+
+    Returns:
+        dict: `load(...)` with the new capacity.
+
+    Raises:
+        HTTPException: 400 outside 1..MAX_CAPACITY.
+
+    Example:
+        >>> (await set_capacity(kim, 5))["capacity"]
+        5
+    """
+    if not 1 <= capacity <= MAX_CAPACITY:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail=f"Capacity must be between 1 and {MAX_CAPACITY} clients.")
+    row = await account_store.set_consultant_capacity(str(consultant["id"]), capacity) or consultant
+    return load({**row, "client_count": await account_store.count_clients(str(consultant["id"]))})
 
 
 def client_summary(acc: dict) -> dict:
@@ -159,7 +338,7 @@ def client_summary(acc: dict) -> dict:
 
     Returns:
         dict: {"id", "label", "person", "email", "account_type", "company_name",
-            "location", "naics_sector", "industry_other"}.
+            "location", "naics_sector", "industry_other", "consultant_plan"}.
 
     Example:
         >>> client_summary({"id": 7, "first_name": "Ana", "last_name": "Diaz",
@@ -178,6 +357,7 @@ def client_summary(acc: dict) -> dict:
         "location": acc.get("location_label"),
         "naics_sector": acc.get("naics_sector"),
         "industry_other": acc.get("industry_other"),
+        "consultant_plan": acc.get("consultant_plan"),   # "one_time" or "monthly"
     }
 
 
