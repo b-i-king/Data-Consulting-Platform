@@ -348,6 +348,23 @@ ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS kind TEXT
     CHECK (kind IN ('business_tool', 'cloud_storage'));
 ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS display_name TEXT;
 ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS credentials_encrypted TEXT;
+-- API calls made to this connection TODAY (UTC), so a provider's daily limit
+-- is never passed (Xero Starter: 1,000 per organization per day). Starts over
+-- each day: api_calls_day says which day api_calls_count belongs to.
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS api_calls_day DATE;
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS api_calls_count INTEGER NOT NULL DEFAULT 0;
+
+-- ── dim.api_usage: API calls the whole app made to a tool, per month ────────
+-- QuickBooks' free Builder tier allows 500,000 read calls a MONTH for the
+-- whole app (all clients together) and blocks everyone past it, so the app
+-- counts here and stops at 90% (api/services/business_tools.py CallMeter).
+-- One small row per tool per month; never any client data.
+CREATE TABLE IF NOT EXISTS dim.api_usage (
+    connector  TEXT NOT NULL,                 -- 'quickbooks', 'xero'
+    month      DATE NOT NULL,                 -- the 1st of the month (UTC)
+    calls      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (connector, month)
+);
 
 -- ── dim.dashboard_tabs: the client's own dashboard tabs ─────────────────────
 -- The dashboard opens on "Overview" (built from the data automatically). Each
@@ -581,7 +598,8 @@ DO $$
 DECLARE t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY['accounts', 'consultants', 'teams', 'subscriptions', 'consultations', 'usage_events',
-                             'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log']
+                             'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
+                             'api_usage']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;

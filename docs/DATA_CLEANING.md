@@ -49,6 +49,12 @@ text so duplicate checks still work (same for XML/Parquet cells).
 renamed Excel file ("doesn't look like a real Excel file…"), or a row with more
 columns than the header ("Row 3 … has 2 columns but the header has 1").
 
+**Tables with no rows are skipped** (`load_uploads` in `api/services/pipeline.py`):
+a file (or sheet, or file inside a zip) with column names but no rows is
+dropped straight after reading, so no cleaning or analysis is spent on it. If
+every table in the upload is empty, the upload is refused (422, "has column
+names but no rows").
+
 - **Header row:** the first row is assumed to hold column names.
 - **Encodings tried:** UTF-8 (with/without BOM), Windows-1252, Latin-1 — covers
   most US exports, including older Excel "Save as CSV" files.

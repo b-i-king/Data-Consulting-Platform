@@ -93,7 +93,10 @@ services the client chose are offered; the rest are badges from
 | `api/services/consultations.py` + `api/routers/consultations.py` | Free consultation → paid link; Cal.com webhook; consultant confirmation | Booking / consultation rules |
 | `api/services/warehouse_loader.py` | Plans a load: mapping, steps with "why", previews, fingerprint (pandas only) | Changing how files fit the warehouse |
 | `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
-| `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only) | Cloud integrations |
+| `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only); "Sign in with Supabase" reads through the Management API | Cloud integrations |
+| `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
+| `api/services/business_tools.py` | QuickBooks and Xero read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
+| `web/components/workspace/QuickLook.tsx` | The live quick look card (income, expenses, owed, by month, top customers) | How the quick look looks |
 | `api/services/dashboards.py` + `api/routers/dashboards.py` | Business context, suggested questions by industry, the client's own dashboard tabs, the question log | Dashboards built around the business |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
 | `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |

@@ -120,6 +120,13 @@ loopback / link-local addresses are refused, so the server can't be pointed at
 its own network (`ALLOW_PRIVATE_DB_HOSTS` is for local testing only). For
 cloud data, Data Cleaning only reports and "Load into database" is off.
 
+**QuickBooks and Xero, live: read, never stored.** A "Connect" sign-in
+(OAuth, `api/services/oauth.py`) saves only the access tokens, encrypted, in
+`dim.data_connections`. The quick look and "Open records in the workspace"
+read from QuickBooks / Xero when asked and keep nothing
+(`api/services/business_tools.py`). Storing them on a schedule is the Data
+Engineering sync (consent required, like any managed storage).
+
 **Managed storage (opt-in exception): Data Engineering.** ✅ Built. Clients with
 Data Engineering (or their consultant, working for them) can have their cleaned
 data stored in `fact.account_data` (`db/schema.sql`, explained in
@@ -311,6 +318,32 @@ warehouse, not inside the web service. Details: [SPARK.md](SPARK.md).
 | Website | Vercel Hobby | Free | Hobby is for non-commercial use; move to Pro once you charge clients. Netlify / Cloudflare Pages are alternatives. |
 | API | Render Starter | ~$7/month | Free tier sleeps after inactivity (slow first request). Railway or Fly.io are alternatives. |
 | Database | Supabase Free | Free | Pauses after a week of inactivity on the free tier. |
+
+### Keeping costs low
+
+The two things that cost money as the platform grows are the API server's
+**memory** (pandas holds a table in RAM while it works; a bigger Render plan is
+the main cost step) and the database's **storage**. What the code does about
+each:
+
+| Where | What it does | Code |
+|---|---|---|
+| Every request | Stateless: uploads and DataFrames live only for one request, then are released — nothing is kept in server memory between requests | `api/services/pipeline.py` |
+| Uploads | Size limit (`MAX_UPLOAD_MB`), read one byte past it so a huge file is refused unread; zip bombs stopped while decompressing | `pipeline.load_uploads`, `file_reader._limited` |
+| Uploads | Tables with no rows are dropped straight after reading; an all-empty upload is refused (422) | `pipeline.load_uploads` |
+| Cloud databases | Per schema, only tables **with at least one row** are offered (free row estimate first, a one-row `EXISTS` check only when needed); empty tables are refused before any read | `cloud_sources.list_tables`, `read_table_csv` |
+| Cloud databases | Read in 5,000-row chunks into CSV (one chunk in memory at a time), stopping at 100,000 rows or the upload size limit; one connection per request | `cloud_sources.read_table_csv` |
+| Cloud databases | Nothing read is stored — no storage cost at all | `cloud_sources.py` |
+| QuickBooks / Xero API allowances | Free plans only: connection caps (Xero 5, QuickBooks 15), a daily call share per company, QuickBooks' monthly app-wide allowance stopped at 90% — going over would block the app, never bill it | `business_tools.CallMeter`, `dim.api_usage` |
+| QuickBooks / Xero | Quick look and records read live, never stored; empty record types found with one cheap call and hidden; Xero invoices fetched without line items; at most 20,000 records per open | `business_tools.py` |
+| Machine learning | Models train on a sample of at most 50,000 rows (fixed seed, same result every run) | `data_skills/predictive-modeling/skill.py` |
+| Charts / EDA | Scatter plots sample down to a fixed number of points | `data_skills/eda-report/skill.py` |
+| Big data | Spark only above 50,000,000 cells; results come back to pandas capped at 100,000 rows | `api/services/spark_engine.py` |
+| Managed storage | Only with consent; empty tables are never loaded; unchanged rows are skipped (`row_hash`), so a reload writes nothing new | `warehouse_loader.py`, `warehouse_store.py` |
+| Managed storage | Deleting stored data or the account removes every row (cascade) | `db/schema.sql` |
+| Logs | The question log keeps only the newest 500 questions per account | `account_store.QUESTION_LOG_KEEP` |
+| Database connections | Small pool (1 to 5) | `api/core/database.py` |
+| Bandwidth | Responses over 1 KB are gzip-compressed | `api/main.py` |
 
 The API needs a real Python server (pandas), so it can't run on Vercel's edge
 functions; keeping it on Render matches your template and avoids

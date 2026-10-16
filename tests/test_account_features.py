@@ -8,6 +8,8 @@ store; the client's database is faked here (a real PostgreSQL check is run by
 hand: docs/RUN_THROUGH.md).
 """
 
+import asyncio
+
 import pandas as pd
 import pytest
 from fastapi import HTTPException
@@ -180,6 +182,39 @@ def test_cloud_source_safety_helpers():
             cloud_sources.check_host(host)
 
 
+def test_schema_summary_counts_tables_with_data():
+    """Per schema: tables, and how many have rows ("don't know" counts as may-have-rows)."""
+    tables = [{"schema": "public", "has_rows": True}, {"schema": "public", "has_rows": False},
+              {"schema": "sales", "has_rows": None}, {"schema": "staging", "has_rows": False}]
+    assert cloud_sources.summarize_schemas(tables) == [
+        {"schema": "public", "tables": 2, "with_rows": 1},
+        {"schema": "sales", "tables": 1, "with_rows": 1},
+        {"schema": "staging", "tables": 1, "with_rows": 0},
+    ]
+
+
+def test_empty_upload_is_refused_before_cleaning():
+    """A file with column names but no rows costs nothing: 422 straight after reading."""
+    res = client.post("/api/files/analyze", files={"files": ("empty.csv", b"store,amount\n", "text/csv")})
+    assert res.status_code == 422 and "no rows" in res.json()["detail"]
+    # With a non-empty file alongside, the empty one is just left out.
+    res = client.post("/api/files/analyze", files=[("files", ("empty.csv", b"store,amount\n", "text/csv")),
+                                                   ("files", ("sales.csv", b"store,amount\nMidtown,4\n", "text/csv"))])
+    assert res.status_code == 200
+    assert [d["name"] for d in res.json()["categorization"]["datasets"]] == ["sales.csv"]
+
+
+def test_question_log_keeps_only_the_newest(monkeypatch):
+    """The question log is capped per account, so it never grows without end."""
+    monkeypatch.setattr(account_store, "QUESTION_LOG_KEEP", 3)
+    monkeypatch.setattr(account_store, "_questions", [])
+    for i in range(5):
+        asyncio.run(account_store.log_question("acct-1", f"q{i}", True))
+    asyncio.run(account_store.log_question("acct-2", "other", True))
+    assert [q["question"] for q in account_store._questions if q["account_id"] == "acct-1"] == ["q2", "q3", "q4"]
+    assert len(account_store._questions) == 4
+
+
 def test_connect_a_supabase_database_read_only(monkeypatch):
     """
     Integrations lists both kinds; connecting saves the login ENCRYPTED; tables and a
@@ -189,8 +224,14 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
     h = _h(me["access_token"])
     listed = client.get("/api/connections", headers=h).json()
     kinds = {c["connector"]: c["kind"] for c in listed["connectors"]}
-    assert kinds == {"quickbooks": "business_tool", "supabase": "cloud_storage"}
+    assert kinds == {"quickbooks": "business_tool", "xero": "business_tool", "supabase": "cloud_storage"}
     assert listed["kinds"]["cloud_storage"] == "Cloud storage"
+    # The roadmap is listed per section, and none of it can be set up yet.
+    planned = {(p["kind"], p["name"]): p["when"] for p in listed["coming_soon"]}
+    assert planned[("cloud_storage", "Snowflake")] == "soon" and planned[("cloud_storage", "Google BigQuery")] == "soon"
+    assert planned[("business_tool", "Square")] == "soon" and planned[("business_tool", "Gusto")] == "later"
+    assert {p["when"] for p in listed["coming_soon"]} == {"soon", "later"}
+    assert client.put("/api/connections/snowflake/refresh", headers=h, json={"refresh_frequency": "daily"}).status_code in (400, 403, 404)
 
     assert client.post("/api/connections/supabase", headers=h, json={"connection_string": "not a connection string"}).status_code == 400
     private = client.post("/api/connections/supabase", headers=h, json={"connection_string": "postgresql://u:p@127.0.0.1:5432/db"})
@@ -200,14 +241,16 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
 
     async def fake_tables(dsn):
         seen["dsn"] = dsn
-        return [{"schema": "public", "name": "orders", "kind": "table", "rows_estimate": 3}]
+        return [{"schema": "public", "name": "orders", "kind": "table", "rows_estimate": 3, "has_rows": True},
+                {"schema": "public", "name": "returns", "kind": "table", "rows_estimate": 0, "has_rows": False}]
 
     async def fake_read(dsn, schema, name, limit):
-        return pd.DataFrame({"order_id": [1, 2, 3], "amount": [9.5, 4.0, 2.25]})
+        csv = pd.DataFrame({"order_id": [1, 2, 3], "amount": [9.5, 4.0, 2.25]}).to_csv(index=False).encode()
+        return {"csv": csv, "rows": 3, "columns": ["order_id", "amount"], "truncated": False}
 
     monkeypatch.setattr(cloud_sources, "check_host", lambda host: None)
     monkeypatch.setattr(cloud_sources, "list_tables", fake_tables)
-    monkeypatch.setattr(cloud_sources, "read_table", fake_read)
+    monkeypatch.setattr(cloud_sources, "read_table_csv", fake_read)
     dsn = "postgresql://ro:topsecret@db.abcd.supabase.co:5432/postgres"
     res = client.post("/api/connections/supabase", headers=h, json={"connection_string": dsn})
     assert res.status_code == 200 and res.json()["tables"][0]["name"] == "orders"
@@ -216,10 +259,13 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
     supa = next(c for c in res.json()["connectors"] if c["connector"] == "supabase")
     assert supa["display_name"] == "db.abcd.supabase.co / postgres" and "credentials_encrypted" not in supa
 
-    assert client.get("/api/connections/supabase/tables", headers=h).json()["tables"][0]["schema"] == "public"
+    listing = client.get("/api/connections/supabase/tables", headers=h).json()
+    assert listing["tables"][0]["schema"] == "public"
+    assert listing["schemas"] == [{"schema": "public", "tables": 2, "with_rows": 1}]   # the empty one is counted out
     assert seen["dsn"] == dsn                                                   # decrypted for the read only
     csv = client.get("/api/connections/supabase/table?schema=public&name=orders", headers=h)
     assert csv.status_code == 200 and csv.text.startswith("order_id,amount") and csv.headers["X-Data-Origin"] == "cloud"
+    assert csv.headers["X-Rows"] == "3" and csv.headers["X-Truncated"] == "false"
     # Cloud sources have no refresh schedule (nothing is copied).
     assert client.put("/api/connections/supabase/refresh", headers=h, json={"refresh_frequency": "daily"}).status_code == 404
 
