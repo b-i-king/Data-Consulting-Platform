@@ -5,10 +5,24 @@ integrations like QuickBooks and Gusto?"*
 
 ## Where things stand today
 
-**Not yet.** The platform currently reads **files only** (every format pandas
-can safely read — see DATA_CLEANING.md). Cloud warehouses and business apps
-appear in the questionnaire as "coming soon" and route to your booking link,
-which also tells you which ones clients ask for most.
+Settings → **Integrations** has two sections (`api/services/connections.py`):
+
+- **Cloud storage — read where it lives, never copied.** ✅ First one built:
+  **Supabase database** (the client's own Supabase, or any PostgreSQL). The
+  client pastes a connection string (ideally a **read-only** user); the server
+  checks it (a public host, it connects, it lists tables) and saves it
+  **encrypted** (Fernet, key derived from `JWT_SECRET_KEY`). Each table can then
+  be opened in the workspace — for analysis, dashboards, ML and AI — read in a
+  READ ONLY transaction, up to 100,000 rows, never stored. For cloud data,
+  Data Cleaning is a **report only** (what's missing, what looks off — fix it at
+  the source) and "Load into database" is switched off: the client already
+  manages that data. Code: `api/services/cloud_sources.py`.
+- **Business tools — copied into managed storage on a schedule.** QuickBooks
+  first (coming soon: needs an Intuit developer app for OAuth), with its refresh
+  schedule (daily by default). Needs Data Engineering.
+
+Files are still the main way in (every format pandas can safely read — see
+DATA_CLEANING.md).
 
 What *is* ready, and what each connector will plug into:
 
@@ -17,7 +31,8 @@ What *is* ready, and what each connector will plug into:
 | Common pipeline: DataFrame → categorize → clean → preview | ✅ built — a connector only has to return DataFrames |
 | Fuzzy matching for records with no shared ID (`entity_matching.py`) | ✅ built and tested |
 | Table to store synced data (`fact.account_data`, `source_system` = the connector; QuickBooks fields mapped in `fact.field_map`) | ✅ built and tested |
-| Connector code, OAuth sign-in, credential storage, scheduled syncs | ❌ not built |
+| Supabase / PostgreSQL (cloud storage): connect, list tables, read one — encrypted login, read-only | ✅ built and tested |
+| QuickBooks: OAuth sign-in, token storage, scheduled syncs | ❌ not built |
 
 ### A note on the "connectors" in your Claude account
 

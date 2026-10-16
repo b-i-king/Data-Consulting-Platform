@@ -308,6 +308,14 @@ export default function AuthForm({
         </Field>
 
         <div className={mode === "signup" ? "grid gap-3 sm:grid-cols-2" : ""}>
+          {mode === "signin" && (
+            // "Forgot password?" sits on the right of the Password label, like most apps.
+            <div className="-mb-1 flex justify-end">
+              <Link href="/forgot-password" className="text-xs text-brand hover:underline">
+                Forgot password?
+              </Link>
+            </div>
+          )}
           <Field
             label="Password"
             error={errors.password}

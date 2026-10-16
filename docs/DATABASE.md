@@ -39,7 +39,9 @@ erDiagram
     consultants |o--o{ consultations : "confirmed by"
     accounts ||--o{ storage_consents : "store my data"
     accounts ||--o{ load_runs : "loads"
-    accounts ||--o{ data_connections : "connectors (refresh schedule)"
+    accounts ||--o{ data_connections : "integrations (schedule / encrypted login)"
+    accounts ||--o{ dashboard_tabs : "their own dashboard tabs"
+    accounts ||--o{ question_log : "questions asked of the data"
     consultants |o--o{ data_connections : "set up on the client's behalf"
     accounts ||--o{ account_data : "fact: stored data"
     consultants |o--o{ account_data : "loaded by"
@@ -142,10 +144,27 @@ erDiagram
     data_connections {
         uuid id PK
         uuid account_id FK
-        text connector "quickbooks, ..."
+        text connector "quickbooks | supabase"
+        text kind "business_tool | cloud_storage"
+        text display_name "host / database"
+        text credentials_encrypted "Fernet; never plain text"
         text refresh_frequency "manual | weekly | daily | hourly | live"
         text status
         timestamptz next_sync_at
+    }
+    dashboard_tabs {
+        uuid id PK
+        uuid account_id FK
+        text name
+        jsonb questions "saved plain-English questions"
+        int position
+    }
+    question_log {
+        bigint id PK
+        uuid account_id FK
+        text question "text only, never data"
+        bool answered
+        timestamptz asked_at
     }
     account_data {
         bigint row_id PK
@@ -175,7 +194,7 @@ erDiagram
 
 | Table | One row per | Written by | Notes |
 |---|---|---|---|
-| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). |
+| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. |
 | `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. |
 | `dim.teams` | business | business signup | `accounts.team_id` links members. |
 | `dim.subscriptions` | client subscription (a package of tools, or All tools) | **Stripe webhook** (`api/services/billing.py`); in test mode, checkout switches it on at once | The tools are the `items` list (`plan_id` from `pricing.py`, plus Stripe's item id). One billing interval for all of them. `active`, `trialing`, `past_due` keep it on. The tools on sale and their prices live in `pricing.py` and in Stripe, so there is no plans table. |
@@ -183,7 +202,9 @@ erDiagram
 | `dim.usage_events` | cleaned-file download | download endpoint | Metadata only — never the data. `consultant_id` set when a consultant downloaded for the client. `data_fingerprint` is a one-way hash used for fair use ([PAYMENTS.md](PAYMENTS.md#fair-use)). |
 | `dim.storage_consents` | client's "store my data" | first load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. "Delete stored data" sets `withdrawn_at`. |
 | `dim.load_runs` | load into `fact.account_data` | the load | Metadata only: rows new / updated / unchanged, the accepted preview's fingerprint, status, error, and `column_plan` (how each column was stored — "Use my stored data" uses it to give back the client's own column names). |
-| `dim.data_connections` | connector a client set up | `PUT /api/connections/{connector}/refresh` (later: the sync job) | The refresh schedule and status only; pulled data goes to `fact.account_data`. |
+| `dim.data_connections` | integration a client set up | `PUT /api/connections/{connector}/refresh`; `POST /api/connections/supabase` | Business tools (QuickBooks): the refresh schedule and status; pulled data goes to `fact.account_data`. Cloud storage (Supabase database): `credentials_encrypted` = the client's own database login, encrypted (`api/services/cloud_sources.py`); nothing read from it is stored. |
+| `dim.dashboard_tabs` | one of the client's own dashboard tabs | `POST/PUT/DELETE /api/dashboards/tabs` | A name + saved questions, answered again on the open data each time (`api/services/dashboards.py`). |
+| `dim.question_log` | one question asked of the data | `POST /api/questions` (after "Ask your data") | The text only. Questions asked again and again are suggested as dashboard tabs. |
 | `fact.account_data` | **one metric** of one record (or one record with no numbers) | the load (`api/services/warehouse_store.py`) | Every client's stored data in one shape. Explained in [DATA_MODEL.md](DATA_MODEL.md). |
 | `fact.field_map` | source field ("in QuickBooks, `TxnDate` means `transaction_date`") | `db/schema.sql` seed (same pairs as `unified.py`) | Shared by every client: lines names up and says which fields are metrics. |
 

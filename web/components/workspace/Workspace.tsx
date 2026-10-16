@@ -1,70 +1,49 @@
 // The signed-in workspace ("/app"), laid out like Copilot Money on the web:
 // a left pane of high-level options, and the chosen one on the right.
 //
-// LEFT PANE (one row per service, each with its own emoji)
-//   * Services on the account's plan come first and open normally:
-//       - Dashboard (📊, the Data Visualization service) at the top if the
-//         plan has it,
-//       - otherwise Data Cleaning (🧹, always included) at the top,
-//       - then the other services on the plan, in catalog order.
-//   * Every other service is listed below, GRAYED OUT, with an ⓘ button
-//     explaining what it adds and how to get it (price, how payment works).
-//   * On phones the pane becomes a row you can swipe sideways.
+// LEFT PANE — the services in a fixed ORDER (a hierarchy, top to bottom):
+//     📊 Dashboard                 first when there is data already
+//     🧹 Data Cleaning             choose / add data here (first when there's none yet)
+//     Data Engineering             tabs: ER diagram · Data dictionary · Load into database
+//     Data Strategy & Discovery
+//     Data Exploration & Analysis
+//     Data Science & ML
+//     AI                           at the bottom
+//   Services not on the plan stay in their place, GRAYED OUT, with an ⓘ that
+//   explains what they add and how to get them. On phones the pane becomes a
+//   row you can swipe sideways.
+//   At the BOTTOM LEFT: ⚙️ Settings (with your name). It opens the ACCOUNT AREA,
+//   whose own left pane has: Account · Plan & billing · Integrations ·
+//   Consultant (consultants only) · Administration (admins only) — and
+//   "← Back to workspace". Sign out is on the Account page.
 //
-// RIGHT SIDE
-//   Each visit starts by picking files; they stay in this browser tab's memory
-//   and are re-sent when needed. Clients with MANAGED STORAGE (data loaded
-//   through Data Engineering) can instead press "Use my stored data": the
-//   stored table comes back as a CSV file (GET /api/warehouse/export) and goes
-//   through exactly the same flow — so the client, signed in with their own
-//   account, sees the same dashboards and analysis as their consultant. Each service's page has a SKILL MENU at the top and opens on
-//   its primary view:
-//       Data Cleaning       the cleaning report + download
-//       Data Visualization  the dashboard
-//       everything else     the service's primary skill (data_skills/catalog.json
-//                           "primary"), run automatically when it needs no options
-//   Picking another skill from the menu shows that skill instead. Results are
-//   kept while the files stay the same, so switching back is instant.
+// DATA — chosen only on the DATA CLEANING page:
+//   * Choose files (CSV or Excel best) — kept in this browser tab's memory;
+//   * the data stored for this account (managed storage) — opened as the
+//     original table; the most recent upload opens BY ITSELF on each visit;
+//   * a table from the client's own CLOUD database (Settings -> Integrations
+//     -> Supabase database) — read where it lives, never stored. For cloud
+//     data the cleaning page is a REPORT ONLY (what's missing, what looks off
+//     — fix it at the source) and "Load into database" is switched off.
+//   Every other page without data open sends you to Data Cleaning.
 //
-// CONSULTANT MODE (lavender): a consultant sees a "Working on" picker at the
-// top of the left pane (ClientPicker.tsx). Picking a client shows that
-// client's plan and data tools; every signed-in request then carries
-// X-Acting-As, and the server checks the client is assigned to this consultant.
-// "Book a call" prompts are hidden for consultants. Consultants see ALL SEVEN
-// services, including AI (not launched yet) marked "Preview". Working on a
-// client also shows the Consultations card (ConsultationPanel.tsx): confirm
-// the free call happened, which switches the client to the paid booking link.
+// Each service page has its skills as TABS at the top (like Streamlit) and
+// opens on its primary view: Data Cleaning = the cleaning report (+ download);
+// Dashboard = DashboardTabs (Overview, the business context, the client's own
+// tabs); Data Engineering = ER diagram first, "Load into database" last;
+// everything else = its primary skill, run automatically when it needs no options.
 //
-// DATA ENGINEERING opens on "Load into database": a preview of how the data
-// will be transformed for the warehouse, and why, to accept or not
-// (components/explore/WarehouseLoad.tsx).
+// CONSULTANT MODE (lavender): a "Working on" picker at the top of the left pane
+// (ClientPicker.tsx). Picking a client shows that client's plan and tools;
+// every signed-in request then carries X-Acting-As, and the server checks the
+// client is theirs (admins may open any client). Working on a client also
+// shows the Consultations card (ConsultationPanel.tsx).
 //
-// BOOKING LINKS come from the plan (api/services/consultations.py): the free
-// consultation link until a consultant confirms it happened, then the paid one.
-//
-// PLAN & BILLING (💳, bottom of the left pane): plans (monthly / yearly via
-// Stripe Checkout), "Manage billing · cancel anytime", the free 30-minute
-// consultation and prepaid consulting hours — components/billing/BillingPanel.tsx.
-// Coming back from Stripe (?checkout=success) shows a thank-you note.
-//
-// SETTINGS (⚙️): consultants set their capacity (how many clients at once);
-// clients can ask to work as a consultant — components/workspace/SettingsPanel.tsx.
-// ADMIN (🛡️, admins only): approve or deny consultant requests, and every
-// consultant's fill bar — components/workspace/AdminPanel.tsx.
-// Each visit re-reads the account (GET /api/accounts/me), so someone approved
-// as a consultant gets consultant mode without signing in again.
-//
-// STORED DATA OPENS BY ITSELF: when the account (or the client a consultant
-// picks) has data in managed storage, the most recent upload is opened
-// automatically, so the dashboard and every tool show it straight away. When
-// the plan includes Data Engineering but nothing is stored yet (e.g. back from
-// paying at Stripe — files only live in the browser tab), a banner says to
-// choose the file again under Data Engineering.
-//
-// The plan comes from GET /api/accounts/services (api/services/entitlements.py).
-// Tools unlock only through a package: "Add to my package" opens Plan &
-// billing with that tool ticked (the package selector shows the new total). Downloads also
-// ask first, with the estimated wait and charge (DownloadConfirm.tsx).
+// Plan comes from GET /api/accounts/services (api/services/entitlements.py).
+// Tools unlock only through a package: "Add to my package" opens Settings ->
+// Plan & billing with that tool ticked. Downloads ask first, with the
+// estimated wait and charge (DownloadConfirm.tsx). Coming back from Stripe
+// (?checkout=success) opens Plan & billing with a thank-you note.
 
 "use client";
 
@@ -74,6 +53,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeFiles,
   downloadCleaned,
+  getCloudTableFile,
+  getCloudTables,
   getConsultantSettings,
   getIntakeOptions,
   getMe,
@@ -82,56 +63,81 @@ import {
   getSkills,
   getStoredDataFile,
   getWarehouseSummary,
+  logQuestion,
   setActingAs,
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
-import { FALLBACK_BOOKING_URL, fmtUsd } from "@/lib/format";
+import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
-import type { ConsultantClient, ConsultantLoad, IntakeOptions } from "@/lib/types";
+import type {
+  AnalyzeResponse,
+  CleaningInput,
+  CloudTable,
+  ColumnAction,
+  ColumnActions,
+  ColumnNames,
+  ConsultantClient,
+  ConsultantLoad,
+  IntakeOptions,
+  MyServices,
+  Service,
+  SkillInfo,
+  SkillResult,
+  TransformStep,
+  Transforms,
+  WarehouseCounts,
+} from "@/lib/types";
 import ClientPicker, { AddClientForm } from "./ClientPicker";
 import ConsultationPanel from "./ConsultationPanel";
 import AdminPanel from "./AdminPanel";
-import SettingsPanel from "./SettingsPanel";
+import AccountPanel from "./AccountPanel";
+import IntegrationsPanel from "./IntegrationsPanel";
+import { ConsultantSetup } from "./SettingsPanel";
 import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
-
-// The first-visit guide for the workspace (components/ui/Tour.tsx).
-const WORKSPACE_TOUR: TourStep[] = [
-  { target: "ws-nav", title: "Your tools, on the left",
-    body: "Each row is a service. The ones on your plan open normally; grayed-out ones show what they add and how to get them." },
-  { target: "ws-choose", title: "Start with your data",
-    body: "Choose a file (CSV or Excel is best), or open the data stored in your account. Files you pick are cleaned in memory and never kept, unless you store them." },
-  { target: "ws-nav", title: "Build a dashboard",
-    body: "Open Dashboard: it builds itself from any table with a date column — totals over time, comparisons, and filters. Use the bar at the bottom to change the time range." },
-  { target: "ws-billing", title: "Plan & billing",
-    body: "Add tools to your package (monthly or yearly, cancel anytime) and book your free 30-minute consultation." },
-  { target: "ws-settings", title: "Settings",
-    body: "Update your most recent upload, ask to work as a consultant, or delete your account. Consultants set their Cal.com links and capacity here." },
-];
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
-import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult, WarehouseCounts } from "@/lib/types";
-import Dashboard from "@/components/explore/Dashboard";
+import DashboardTabs from "@/components/explore/DashboardTabs";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
-import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
+import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+
+// The first-visit guide for the workspace (components/ui/Tour.tsx).
+const WORKSPACE_TOUR: TourStep[] = [
+  { target: "ws-nav", title: "Your tools, in order",
+    body: "Dashboard first, then Data Cleaning, Data Engineering, analysis, ML and AI. Grayed-out ones show what they add and how to get them." },
+  { target: "ws-nav", title: "Your data lives in Data Cleaning",
+    body: "Choose files, open the data stored for you, or a table from your own database. Every other page uses what you open there." },
+  { target: "ws-nav", title: "Build your dashboard",
+    body: "Dashboard opens on an Overview built from your data. Add your own tabs with the questions your business asks — we suggest them for your industry." },
+  { target: "ws-settings", title: "Settings, bottom left",
+    body: "Your account and password, plan & billing, integrations (QuickBooks, your Supabase database), and — for consultants — your Cal.com links and capacity." },
+];
 
 const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
 const ENGINEERING = "data_engineering";
 const AI = "ai";
-const BILLING = "__billing"; // the "Plan & billing" page (not a service)
-const SETTINGS = "__settings"; // capacity (consultants) / "work as a consultant" (clients)
-const ADMIN = "__admin"; // consultant requests (admins only)
-const VIEW = "__view__";   // menu value for the built-in view (cleaning report / dashboard / database load)
-// The skill each built-in view already shows, so it isn't listed twice in the menu
+// The hierarchy, top to bottom (Dashboard and Data Cleaning swap when there's no data yet).
+const ORDER = [DASHBOARD, CLEANING, ENGINEERING, "data_strategy_discovery", "data_exploration_analysis", "data_science_ml", AI];
+// Data Engineering's tabs: diagram and dictionary first, the load last.
+const ENGINEERING_TABS = ["er-diagram", "data-dictionary-creator"];
+const VIEW = "__view__"; // tab value for the built-in view (cleaning report / dashboard / database load)
+// The skill each built-in view already shows, so it isn't listed twice in the tabs
 // (Data Engineering's load view isn't a skill, so nothing is hidden for it).
 const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
   [CLEANING]: { skill: "data-cleaning", label: "Cleaning report" },
   [DASHBOARD]: { skill: "build-dashboard", label: "Dashboard" },
-  [ENGINEERING]: { skill: "", label: "Load into database (preview first)" },
+  [ENGINEERING]: { skill: "", label: "Load into database" },
 };
+
+/** A service as the plan sends it: the catalog entry plus whether it's on the plan. */
+type PlanService = MyServices["services"][number];
+/** The account area's sections (Settings, bottom left). */
+type AccountTab = "account" | "billing" | "integrations" | "consultant" | "admin";
+/** Where the open data came from: picked files, managed storage, or the client's own cloud database. */
+type Origin = "file" | "stored" | "cloud";
 
 /** The name shown in the left pane: the visualization service IS the dashboard. */
 const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
@@ -172,19 +178,22 @@ export default function Workspace() {
   const [plan, setPlan] = useState<MyServices | null>(null);
   const [bookingUrl, setBookingUrl] = useState(FALLBACK_BOOKING_URL);
   const [section, setSection] = useState<string | null>(null);
+  const [accountTab, setAccountTab] = useState<AccountTab | null>(null); // null = the workspace itself
   const [infoOpen, setInfoOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Data for this visit (never stored on the server).
+  // Data for this visit (never stored on the server unless the client stores it).
   const [files, setFiles] = useState<File[]>([]);
+  const [origin, setOrigin] = useState<Origin>("file");
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
   const [columnNames, setColumnNames] = useState<ColumnNames>({});
   const [transforms, setTransforms] = useState<Transforms>({});
   const [groupIndex, setGroupIndex] = useState(0);
   const [busy, setBusy] = useState(false);
-  // What this client has in managed storage (offered as "Use my stored data").
+  // What this client has in managed storage, and their cloud tables (if connected).
   const [stored, setStored] = useState<WarehouseCounts | null>(null);
+  const [cloudTables, setCloudTables] = useState<CloudTable[] | null>(null);
 
   // Consultant mode: my clients, the one I'm working on (null = my own workspace).
   const [options, setOptions] = useState<IntakeOptions | null>(null);
@@ -195,7 +204,7 @@ export default function Workspace() {
   const [addingClient, setAddingClient] = useState(false);
   const [returnNote, setReturnNote] = useState<string | null>(null); // after paying at Stripe
 
-  // Skill menu: every skill, the choice per service, and results kept for this visit.
+  // Skill tabs: every skill, the tab chosen per service, and results kept for this visit.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [results, setResults] = useState<Record<string, SkillResult>>({});
@@ -247,10 +256,10 @@ export default function Workspace() {
     const q = new URLSearchParams(window.location.search);
     if (q.get("checkout") === "success" || q.get("consulting") === "success") {
       setReturnNote("Thank you! Your payment went through — it can take a few seconds to show here.");
-      setSection(BILLING);
+      setAccountTab("billing");
     } else if (q.get("checkout") === "canceled" || q.get("consulting") === "canceled") {
       setReturnNote("Payment canceled — nothing was charged.");
-      setSection(BILLING);
+      setAccountTab("billing");
     }
     getIntakeOptions()
       .then((o) => {
@@ -260,6 +269,15 @@ export default function Workspace() {
       .catch(() => {});
   }, []);
 
+  function clearData() {
+    setFiles([]);
+    setAnalysis(null);
+    setColumnActions({});
+    setColumnNames({});
+    setTransforms({});
+    setResults({});
+  }
+
   // Consultant: switch to another client (or back to my own workspace). Their
   // data is separate, so the files and results from the last client are cleared.
   async function chooseClient(id: string | null) {
@@ -267,13 +285,9 @@ export default function Workspace() {
     setActingAs(id);
     setActingId(id);
     setAddingClient(false);
-    setFiles([]);
-    setAnalysis(null);
-    setColumnActions({});
-    setColumnNames({});
-    setTransforms({});
-    setResults({});
+    clearData();
     setSection(null);
+    setAccountTab(null);
     setError(null);
     try {
       setPlan(await getMyServices(session.token));
@@ -287,14 +301,37 @@ export default function Workspace() {
   }
 
   // Whenever the workspace's account changes (sign-in, or a consultant switching
-  // client), check what's in managed storage for it.
+  // client): what's in managed storage, and the cloud tables if a database is connected.
   const planAccountId = plan?.account.id;
   useEffect(() => {
     if (!session || !planAccountId) return;
     getWarehouseSummary(session.token)
       .then((s) => setStored(s.warehouse))
       .catch(() => setStored(null));
+    getCloudTables(session.token)
+      .then((r) => setCloudTables(r.tables))
+      .catch(() => setCloudTables(null)); // 404 = no database connected
   }, [session, planAccountId]);
+
+  async function clean(chosen: File[], from: Origin) {
+    setResults({}); // new data: earlier skill results no longer apply
+    setBusy(true);
+    setError(null);
+    try {
+      setFiles(chosen);
+      setOrigin(from);
+      setColumnActions({});
+      setColumnNames({});
+      setTransforms({});
+      setGroupIndex(0);
+      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }));
+    } catch (e) {
+      setAnalysis(null);
+      setError(e instanceof Error ? e.message : "We couldn't read that data.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // "Use my stored data": the stored table comes back as a CSV file and is
   // opened exactly like a picked file.
@@ -303,59 +340,24 @@ export default function Workspace() {
     setBusy(true);
     setError(null);
     try {
-      const file = await getStoredDataFile(session.token, source);
-      await clean([file]);
+      await clean([await getStoredDataFile(session.token, source)], "stored");
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't open the stored data.");
       setBusy(false);
     }
   }
 
-
-  // Left-pane order: Dashboard (if on the plan) or Data Cleaning first, then the
-  // rest of the plan, then everything not on the plan (grayed out).
-  const { open, locked } = useMemo(() => {
-    if (!plan) return { open: [] as Service[], locked: [] as Service[] };
-    const byId = Object.fromEntries(plan.services.map((s) => [s.id, s]));
-    const first = plan.active.includes(DASHBOARD) ? [DASHBOARD, CLEANING] : [CLEANING];
-    const ids = [...first, ...plan.active.filter((id) => !first.includes(id))];
-    return { open: ids.map((id) => byId[id]).filter(Boolean), locked: plan.services.filter((s) => !s.active) };
-  }, [plan]);
-  const current = section ?? open[0]?.id ?? null;
-  const currentService = plan?.services.find((s) => s.id === current);
-
-  const input: CleaningInput = useMemo(
-    () => ({ files, strategy: "keep", columnActions, columnNames, transforms }),
-    [files, columnActions, columnNames, transforms],
-  );
-  const group = analysis?.groups[groupIndex];
-
-  // The current service's skill menu: built-in view first (if any), then its skills.
-  const menu = useMemo(() => {
-    if (!current) return [] as { value: string; label: string }[];
-    const view = VIEW_SKILL[current];
-    const list = skills.filter((k) => k.category === current && k.id !== view?.skill);
-    // Primary skill first, then catalog order.
-    list.sort((a, b) => Number(b.primary) - Number(a.primary));
-    return [...(view ? [{ value: VIEW, label: view.label }] : []), ...list.map((k) => ({ value: k.id, label: k.label }))];
-  }, [skills, current]);
-  const choice = (current && picked[current]) || menu[0]?.value || VIEW;
-
-  async function clean(chosen: File[]) {
-    setResults({});   // new data: earlier skill results no longer apply
+  // A table from the client's own database: read-only, never stored.
+  async function openCloud(t: CloudTable) {
+    if (!session) return;
+    setAccountTab(null);
+    setSection(CLEANING);
     setBusy(true);
     setError(null);
     try {
-      setFiles(chosen);
-      setColumnActions({});
-      setColumnNames({});
-      setTransforms({});
-      setGroupIndex(0);
-      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }));
+      await clean([await getCloudTableFile(session.token, t.schema, t.name)], "cloud");
     } catch (e) {
-      setAnalysis(null);
-      setError(e instanceof Error ? e.message : "We couldn't read those files.");
-    } finally {
+      setError(e instanceof Error ? e.message : "We couldn't read that table.");
       setBusy(false);
     }
   }
@@ -371,6 +373,42 @@ export default function Workspace() {
     // Runs when the stored-data summary arrives; openStored itself is recreated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stored, planAccountId]);
+
+  // The left pane, in the hierarchy's order. With data (open, stored or in the
+  // cloud) the Dashboard leads; without any, Data Cleaning leads.
+  const hasData = !!analysis || (stored?.rows ?? 0) > 0 || (cloudTables?.length ?? 0) > 0;
+  const ordered = useMemo(() => {
+    if (!plan) return [] as PlanService[];
+    const order = hasData ? ORDER : [CLEANING, DASHBOARD, ...ORDER.slice(2)];
+    const byId = Object.fromEntries(plan.services.map((s) => [s.id, s]));
+    const known = order.map((id) => byId[id]).filter(Boolean);
+    return [...known, ...plan.services.filter((s) => !order.includes(s.id))];
+  }, [plan, hasData]);
+  const current = section ?? ordered.find((s) => s.active)?.id ?? null;
+  const currentService = accountTab ? undefined : plan?.services.find((s) => s.id === current);
+
+  const input: CleaningInput = useMemo(
+    () => ({ files, strategy: "keep", columnActions, columnNames, transforms }),
+    [files, columnActions, columnNames, transforms],
+  );
+  const group = analysis?.groups[groupIndex];
+
+  // The current service's skill tabs: its built-in view and its skills.
+  const menu = useMemo(() => {
+    if (!current) return [] as { value: string; label: string }[];
+    const view = VIEW_SKILL[current];
+    const list = skills.filter((k) => k.category === current && k.id !== view?.skill);
+    // Primary skill first, then catalog order; Data Engineering: diagram, dictionary, the rest.
+    list.sort((a, b) =>
+      current === ENGINEERING
+        ? (ENGINEERING_TABS.indexOf(a.id) + 1 || 99) - (ENGINEERING_TABS.indexOf(b.id) + 1 || 99)
+        : Number(b.primary) - Number(a.primary),
+    );
+    const tabs = list.map((k) => ({ value: k.id, label: k.label }));
+    if (!view) return tabs;
+    return current === ENGINEERING ? [...tabs, { value: VIEW, label: view.label }] : [{ value: VIEW, label: view.label }, ...tabs];
+  }, [skills, current]);
+  const choice = (current && picked[current]) || menu[0]?.value || VIEW;
 
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
@@ -395,7 +433,6 @@ export default function Workspace() {
     setResults({}); // skill results used the old data
   }
 
-
   // Every "Add" button opens Plan & billing with that tool already ticked in the
   // package selector: tools unlock only through a package (entitlements.py).
   const [suggestTool, setSuggestTool] = useState<string | null>(null);
@@ -404,7 +441,13 @@ export default function Workspace() {
   function add(id: string) {
     setSuggestTool(id);
     setInfoOpen(null);
-    setSection(BILLING);
+    setAccountTab("billing");
+  }
+
+  function goTo(id: string, tab?: string) {
+    setAccountTab(null);
+    setSection(id);
+    if (tab) setPicked((p) => ({ ...p, [id]: tab }));
   }
 
   async function download(format: DownloadFormat) {
@@ -451,6 +494,7 @@ export default function Workspace() {
   // Whose workspace is on screen: the client a consultant is working on, or me.
   const who = plan?.account ?? session.account;
   const whoName = who.company_name ?? `${who.first_name} ${who.last_name}`;
+  const cloud = origin === "cloud";
   // Free consultation until a consultant confirms it happened; then the paid link.
   // Services paid from the first hour (Data Strategy & Discovery) always use the paid link.
   const bookFor = (s?: Service) =>
@@ -461,115 +505,162 @@ export default function Workspace() {
       Preview
     </span>
   );
+  const ACCOUNT_TABS: { id: AccountTab; emoji: string; label: string }[] = [
+    { id: "account", emoji: "👤", label: "Account" },
+    { id: "billing", emoji: "💳", label: "Plan & billing" },
+    { id: "integrations", emoji: "🔌", label: "Integrations" },
+    ...(isConsultant ? [{ id: "consultant" as const, emoji: "🤝", label: "Consultant" }] : []),
+    ...(session.account.is_admin ? [{ id: "admin" as const, emoji: "🛡️", label: "Administration" }] : []),
+  ];
+  const accountTitle = ACCOUNT_TABS.find((t) => t.id === accountTab);
 
-  const item = (s: Service, isLocked: boolean) => (
-    <li key={s.id} className="shrink-0 lg:shrink">
-      <div
-        className={`flex items-center gap-1 rounded-xl ${
-          current === s.id ? "bg-brand-soft" : "hover:bg-surface-2"
-        } ${isLocked ? "opacity-55" : ""}`}
-      >
-        <button
-          type="button"
-          onClick={() => setSection(s.id)}
-          aria-current={current === s.id ? "page" : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm lg:whitespace-normal"
-        >
-          <span aria-hidden className="text-base">
-            {categoryEmoji(s.id)}
-          </span>
-          <span className={current === s.id ? "font-semibold" : ""}>{navName(s)}</span>
-          {!s.available && !isLocked && previewChip}
-          {isLocked && <span className="sr-only">(not on your plan)</span>}
-        </button>
-        {isLocked && (
+  const item = (s: PlanService) => {
+    const isLocked = !s.active;
+    return (
+      <li key={s.id} className="shrink-0 lg:shrink">
+        <div className={`flex items-center gap-1 rounded-xl ${current === s.id ? "bg-brand-soft" : "hover:bg-surface-2"} ${isLocked ? "opacity-55" : ""}`}>
           <button
             type="button"
-            aria-label={`About ${s.name}: what it adds and how to get it`}
-            aria-expanded={infoOpen === s.id}
-            onClick={() => {
-              setInfoOpen(infoOpen === s.id ? null : s.id);
-              setSection(s.id);
-            }}
-            className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line text-xs font-semibold text-ink-muted hover:border-brand hover:text-brand"
+            onClick={() => goTo(s.id)}
+            aria-current={current === s.id ? "page" : undefined}
+            className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm lg:whitespace-normal"
           >
-            i
+            <span aria-hidden className="text-base">
+              {categoryEmoji(s.id)}
+            </span>
+            <span className={current === s.id ? "font-semibold" : ""}>{navName(s)}</span>
+            {!s.available && !isLocked && previewChip}
+            {isLocked && <span className="sr-only">(not on your plan)</span>}
           </button>
-        )}
-      </div>
-      {/* Desktop: the details open right under the item, inside the pane, so they
-          never cover the page. (Phones see the same details on the right side.) */}
-      {isLocked && infoOpen === s.id && (
-        <div className="mx-1 mb-2 mt-1 hidden rounded-xl border border-line bg-surface p-3 lg:block">
-          <p className="mb-1 text-xs font-semibold" style={{ color: categoryColor(s.id) }}>
-            {s.name}
-          </p>
-          <ServiceInfo service={s} small />
+          {isLocked && (
+            <button
+              type="button"
+              aria-label={`About ${s.name}: what it adds and how to get it`}
+              aria-expanded={infoOpen === s.id}
+              onClick={() => {
+                setInfoOpen(infoOpen === s.id ? null : s.id);
+                goTo(s.id);
+              }}
+              className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line text-xs font-semibold text-ink-muted hover:border-brand hover:text-brand"
+            >
+              i
+            </button>
+          )}
         </div>
-      )}
-    </li>
+        {/* Desktop: the details open right under the item, inside the pane. */}
+        {isLocked && infoOpen === s.id && (
+          <div className="mx-1 mb-2 mt-1 hidden rounded-xl border border-line bg-surface p-3 lg:block">
+            <p className="mb-1 text-xs font-semibold" style={{ color: categoryColor(s.id) }}>
+              {s.name}
+            </p>
+            <ServiceInfo service={s} small />
+          </div>
+        )}
+      </li>
+    );
+  };
+
+  // "Choose your data" — only on the Data Cleaning page.
+  const dataSources = (
+    <div data-tour="ws-choose">
+      <Card>
+        <h2 className="font-semibold">Choose your data</h2>
+        <p className="mt-1 text-sm text-ink-muted">CSV or Excel files work best. Picked files are cleaned in this browser tab.</p>
+        <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
+          {busy ? "Opening your data…" : "Choose files"}
+          <input type="file" multiple className="sr-only" disabled={busy}
+            onChange={(e) => e.target.files?.length && clean(Array.from(e.target.files), "file")} />
+        </label>
+        {stored && stored.rows > 0 && (
+          <div className="mt-5 border-t border-line pt-4">
+            <h3 className="text-sm font-semibold">Stored for {whoName}</h3>
+            <p className="mt-1 text-xs text-ink-muted">Kept in managed storage (Data Engineering). Your consultant sees the same data.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {/* One button per stored file: it opens as the original table again. */}
+              {stored.sources.map((s) => (
+                <Button key={`${s.source_system}/${s.source_name}`} variant="secondary" disabled={busy} onClick={() => openStored(s.source_name)}>
+                  {s.source_name} · {fmtInt(s.records)} rows
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+        {cloudTables && cloudTables.length > 0 && (
+          <div className="mt-5 border-t border-line pt-4">
+            <h3 className="text-sm font-semibold">From your database</h3>
+            <p className="mt-1 text-xs text-ink-muted">Read where it lives — never copied or changed. Managed in Settings → Integrations.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {cloudTables.slice(0, 24).map((t) => (
+                <Button key={`${t.schema}.${t.name}`} variant="secondary" disabled={busy} onClick={() => openCloud(t)}>
+                  {t.schema}.{t.name}
+                  {t.rows_estimate > 0 && ` · ~${fmtInt(t.rows_estimate)}`}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-      {/* ── Left pane ── */}
-      <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+      {/* ── Left pane: the services, or the account area's sections. Settings sits at the bottom. ── */}
+      <aside className="min-w-0 lg:sticky lg:top-20 lg:flex lg:h-[calc(100vh-7rem)] lg:flex-col lg:self-start">
         <Tour id="workspace" steps={WORKSPACE_TOUR} />
-        {isConsultant && (
-          <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad} />
-        )}
-        <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">
-          {who.company_name ?? `${who.first_name} ${who.last_name}`}
-        </p>
-        <nav aria-label="Workspace" data-tour="ws-nav">
-          {/* relative: keeps the screen-reader-only text inside this scrolling row on phones. */}
-          <ul className="relative flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
-            {open.map((s) => item(s, false))}
-            {locked.length > 0 && (
-              <li className="hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted lg:block">
-                Not on your plan
-              </li>
+        {accountTab ? (
+          <nav aria-label="Settings" className="lg:flex-1">
+            <button type="button" onClick={() => setAccountTab(null)} className="mb-3 px-3 text-sm text-brand hover:underline">
+              ← Back to workspace
+            </button>
+            <ul className="flex gap-1 overflow-x-auto pb-1 lg:flex-col">
+              {ACCOUNT_TABS.map((t) => (
+                <li key={t.id} className="shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAccountTab(t.id)}
+                    aria-current={accountTab === t.id ? "page" : undefined}
+                    className={`flex w-full items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm ${
+                      accountTab === t.id ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+                    }`}
+                  >
+                    <span aria-hidden>{t.emoji}</span> {t.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        ) : (
+          <div className="min-h-0 lg:flex-1 lg:overflow-y-auto">
+            {isConsultant && (
+              <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad} />
             )}
-            {locked.map((s) => item(s, true))}
-          </ul>
-        </nav>
-        <button
-          type="button"
-          data-tour="ws-billing"
-          onClick={() => setSection(BILLING)}
-          aria-current={current === BILLING ? "page" : undefined}
-          className={`mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
-            current === BILLING ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
-          }`}
-        >
-          <span aria-hidden>💳</span> Plan &amp; billing
-        </button>
+            <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">{whoName}</p>
+            <nav aria-label="Workspace" data-tour="ws-nav">
+              {/* relative: keeps the screen-reader-only text inside this scrolling row on phones. */}
+              <ul className="relative flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">{ordered.map(item)}</ul>
+            </nav>
+            <TourButton id="workspace" className="mt-3 hidden px-3 lg:block" />
+          </div>
+        )}
+        {/* Settings: bottom left. */}
         <button
           type="button"
           data-tour="ws-settings"
-          onClick={() => setSection(SETTINGS)}
-          aria-current={current === SETTINGS ? "page" : undefined}
-          className={`mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
-            current === SETTINGS ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
+          onClick={() => setAccountTab(accountTab ? null : "account")}
+          aria-pressed={!!accountTab}
+          className={`mt-3 flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm ${
+            accountTab ? "border-brand bg-brand-soft font-semibold" : "border-line bg-surface hover:border-brand"
           }`}
         >
-          <span aria-hidden>⚙️</span> Settings
-        </button>
-        {session.account.is_admin && (
-          <button
-            type="button"
-            onClick={() => setSection(ADMIN)}
-            aria-current={current === ADMIN ? "page" : undefined}
-            className={`mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
-              current === ADMIN ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
-            }`}
-          >
-            <span aria-hidden>🛡️</span> Admin
-          </button>
-        )}
-        <TourButton id="workspace" className="mt-4 hidden px-3 lg:block" />
-        <button type="button" onClick={signOut} className="mt-2 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
-          Sign out
+          <span aria-hidden>⚙️</span>
+          <span className="min-w-0 flex-1">
+            Settings
+            <span className="block truncate text-xs font-normal text-ink-muted">
+              {session.account.first_name} {session.account.last_name}
+            </span>
+          </span>
+          {isConsultant && setupNeeded && <span className="h-2 w-2 rounded-full bg-warn" aria-label="Setup needed" />}
         </button>
       </aside>
 
@@ -577,19 +668,9 @@ export default function Workspace() {
       <section className="min-w-0 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">
-            {current === BILLING && (
+            {accountTitle && (
               <>
-                <span aria-hidden>💳</span> Plan &amp; billing
-              </>
-            )}
-            {current === SETTINGS && (
-              <>
-                <span aria-hidden>⚙️</span> Settings
-              </>
-            )}
-            {current === ADMIN && (
-              <>
-                <span aria-hidden>🛡️</span> Admin
+                <span aria-hidden>{accountTitle.emoji}</span> {accountTitle.label}
               </>
             )}
             {currentService && (
@@ -599,25 +680,26 @@ export default function Workspace() {
               </>
             )}
           </h1>
-          <div className="flex items-center gap-3 text-sm">
-            {analysis && (
-              <Button variant="secondary" onClick={() => setAnalysis(null)}>
-                Change files
+          {analysis && !accountTab && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-xs text-ink-muted">
+                {cloud ? "From your database" : origin === "stored" ? "Stored data" : "Your files"}: {files.map((f) => f.name).join(", ")}
+              </span>
+              <Button variant="secondary" onClick={() => { clearData(); goTo(CLEANING); }}>
+                Change data
               </Button>
-            )}
-            <button type="button" onClick={signOut} className="text-ink-muted hover:text-ink lg:hidden">
-              Sign out
-            </button>
-          </div>
+            </div>
+          )}
         </div>
-        {isConsultant && setupNeeded && current !== SETTINGS && (
+
+        {isConsultant && setupNeeded && accountTab !== "consultant" && (
           <div role="status" className="flex flex-col gap-2 rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
             <span>
-              <strong>Finish setting up:</strong> add your Cal.com booking links and webhook, so your clients book you
-              (and pay you) directly.
+              <strong>Finish setting up:</strong> add your Cal.com booking links and webhook, so your clients book you (and
+              pay you) directly.
             </span>
-            <Button variant="secondary" onClick={() => setSection(SETTINGS)}>
-              Open Settings
+            <Button variant="secondary" onClick={() => setAccountTab("consultant")}>
+              Open Consultant settings
             </Button>
           </div>
         )}
@@ -628,24 +710,18 @@ export default function Workspace() {
             {who.company_name && ` (${who.first_name} ${who.last_name})`}. Downloads are billed to them.
             {plan.interests.length > 0 && (
               <span className="mt-1 block text-xs text-ink-muted">
-                Asked for help with:{" "}
-                {plan.interests.map((id) => plan.services.find((s) => s.id === id)?.name ?? id).join(", ")}
+                Asked for help with: {plan.interests.map((id) => plan.services.find((s) => s.id === id)?.name ?? id).join(", ")}
               </span>
             )}
           </p>
         )}
-        {isConsultant && plan?.acting && !addingClient && current !== BILLING && (
-          <ConsultationPanel
-            token={session.token}
-            summary={plan.consulting}
-            freeMinutes={plan.consulting.free_minutes}
-            onChanged={reloadPlan}
-          />
+        {isConsultant && plan?.acting && !addingClient && !accountTab && (
+          <ConsultationPanel token={session.token} summary={plan.consulting} freeMinutes={plan.consulting.free_minutes} onChanged={reloadPlan} />
         )}
         {isConsultant && current === AI && currentService && !currentService.available && (
           <p className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
-            <strong>AI is in preview.</strong> Only consultants see it here; clients see it as “Early access”. Questions
-            are answered by the built-in plain-English parser (totals, averages, top N, by category, by year) with the
+            <strong>AI is in preview.</strong> Only admins see it open; clients see it as “Early access”. Questions are
+            answered by the built-in plain-English parser (totals, averages, top N, by category, by year) with the
             calculation shown. A language model comes later (docs/ROADMAP.md).
           </p>
         )}
@@ -663,23 +739,11 @@ export default function Workspace() {
         <ErrorBox message={error} />
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
 
-        {plan && plan.active.includes(ENGINEERING) && stored?.set_up && stored.rows === 0 && current !== ENGINEERING && !analysis && (
-          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-brand/40 bg-brand-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-            <span>
-              <strong>Store your data:</strong> your plan includes Data Engineering, but nothing is stored yet. Choose your
-              file under Data Engineering, check the preview, and accept.
-            </span>
-            <Button variant="secondary" onClick={() => setSection(ENGINEERING)}>
-              Open Data Engineering
-            </Button>
-          </div>
-        )}
-
-        {current === SETTINGS && (
-          <SettingsPanel
-            key={`settings-${planAccountId ?? "me"}`}
+        {/* ── The account area (Settings, bottom left) ── */}
+        {accountTab === "account" && (
+          <AccountPanel
+            key={`account-${planAccountId ?? "me"}`}
             token={session.token}
-            onSetupNeeded={setSetupNeeded}
             account={session.account}
             onAccount={(account) => {
               const fresh = { ...session, account };
@@ -692,32 +756,43 @@ export default function Workspace() {
             canStore={!!plan?.active.includes(ENGINEERING)}
             canChange={!!plan?.can_add}
             onStoredChanged={setStored}
+            onSignOut={signOut}
             onDeleted={() => {
               clearSession();
               router.push("/");
             }}
           />
         )}
-        {current === ADMIN && session.account.is_admin && (
-          <AdminPanel token={session.token} />
-        )}
-
-        {current === BILLING && plan && (
+        {accountTab === "billing" && plan && (
           <>
             {returnNote && (
               <p role="status" className="rounded-2xl border border-good/40 bg-good/10 p-3 text-sm">
                 {returnNote}
               </p>
             )}
-            <BillingPanel
-              key={suggestTool ?? "billing"}
-              token={session.token}
-              plan={plan}
-              bookingUrl={bookFor()}
-              onChanged={reloadPlan}
-              suggestTool={suggestTool}
-            />
+            <BillingPanel key={suggestTool ?? "billing"} token={session.token} plan={plan} bookingUrl={bookFor()}
+              onChanged={reloadPlan} suggestTool={suggestTool} />
           </>
+        )}
+        {accountTab === "integrations" && (
+          <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_add}
+            onOpenTable={openCloud} />
+        )}
+        {accountTab === "consultant" && isConsultant && <ConsultantSetup token={session.token} onSetupNeeded={setSetupNeeded} />}
+        {accountTab === "admin" && session.account.is_admin && <AdminPanel token={session.token} />}
+
+        {/* ── The workspace ── */}
+        {!accountTab && plan && plan.active.includes(ENGINEERING) && !cloud && stored?.set_up && stored.rows === 0 &&
+          !(current === ENGINEERING && choice === VIEW) && (
+          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-brand/40 bg-brand-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              <strong>Store your data:</strong> your plan includes Data Engineering, but nothing is stored yet.
+              {analysis ? " Check the preview and accept." : " Choose your file in Data Cleaning first."}
+            </span>
+            <Button variant="secondary" onClick={() => (analysis ? goTo(ENGINEERING, VIEW) : goTo(CLEANING))}>
+              {analysis ? "Load into database" : "Open Data Cleaning"}
+            </Button>
+          </div>
         )}
 
         {currentService && !currentService.active ? (
@@ -731,71 +806,40 @@ export default function Workspace() {
                 <Button onClick={() => add(currentService.id)}>Add {navName(currentService)} to my package</Button>
               ) : null}
               {!isConsultant && (
-                <a
-                  href={bookFor(currentService)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand"
-                >
+                <a href={bookFor(currentService)} target="_blank" rel="noreferrer"
+                  className="rounded-full border border-line px-5 py-2 text-sm font-semibold hover:border-brand">
                   {currentService.consultation.free_minutes > 0 && freeLeft
                     ? `Book a free ${currentService.consultation.free_minutes}-minute call`
                     : `Book a consulting session (${fmtUsd(plan?.consulting.rate_per_hour_usd ?? 0)}/hour)`}
                 </a>
               )}
-
             </div>
           </Card>
         ) : currentService && !analysis ? (
-          // Each visit starts by picking files — they stay in this browser tab.
-          <div data-tour="ws-choose">
-          <Card>
-            <h2 className="font-semibold">Choose your data</h2>
-            <p className="mt-1 text-sm text-ink-muted">
-              CSV or Excel recommended. Your files are processed in memory and never stored, so pick them again on each visit.
-            </p>
-            <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
-              {busy ? "Cleaning your data…" : "Choose files"}
-              <input
-                type="file"
-                multiple
-                className="sr-only"
-                disabled={busy}
-                onChange={(e) => e.target.files?.length && clean(Array.from(e.target.files))}
-              />
-            </label>
-            {stored && stored.rows > 0 && (
-              <div className="mt-5 border-t border-line pt-4">
-                <h3 className="text-sm font-semibold">Or use the data stored for {whoName}</h3>
-                <p className="mt-1 text-xs text-ink-muted">
-                  Kept in managed storage (Data Engineering). Your consultant sees the same data.
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {/* One button per stored file: it opens as the original table again. */}
-                  {stored.sources.map((s) => (
-                    <Button key={`${s.source_system}/${s.source_name}`} variant="secondary" disabled={busy}
-                      onClick={() => openStored(s.source_name)}>
-                      {s.source_name} · {s.records.toLocaleString("en-US")} rows
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </Card>
-          </div>
+          current === CLEANING ? (
+            dataSources
+          ) : (
+            // Every other page uses the data opened in Data Cleaning.
+            <Card>
+              <p className="text-sm">
+                {busy ? "Opening your data…" : <><strong>No data open yet.</strong> Choose it in Data Cleaning — upload files, open your stored data, or a table from your database.</>}
+              </p>
+              {!busy && (
+                <Button className="mt-3" onClick={() => goTo(CLEANING)}>
+                  Go to Data Cleaning
+                </Button>
+              )}
+            </Card>
+          )
         ) : currentService && analysis && group ? (
           <div className="space-y-6">
             {analysis.groups.length > 1 && (
-              <div role="tablist" className="flex flex-wrap gap-2">
+              <div role="tablist" aria-label="Tables" className="flex flex-wrap gap-2">
                 {analysis.groups.map((g, i) => (
-                  <button
-                    key={g.group_id}
-                    role="tab"
-                    aria-selected={i === groupIndex}
-                    onClick={() => setGroupIndex(i)}
+                  <button key={g.group_id} role="tab" aria-selected={i === groupIndex} onClick={() => setGroupIndex(i)}
                     className={`rounded-full border px-3 py-1.5 text-sm ${
                       i === groupIndex ? "border-brand bg-brand-soft font-medium" : "border-line bg-surface hover:border-brand"
-                    }`}
-                  >
+                    }`}>
                     {g.label}
                   </button>
                 ))}
@@ -808,54 +852,50 @@ export default function Workspace() {
                 <p className="text-sm">
                   <strong>Not enough rows to analyze.</strong> {group.report.analysis_note}
                 </p>
-                <Button className="mt-3" variant="secondary" onClick={() => setSection(CLEANING)}>
+                <Button className="mt-3" variant="secondary" onClick={() => goTo(CLEANING)}>
                   Go to Data Cleaning
                 </Button>
               </Card>
             )}
 
-            {/* Skill menu: opens on the service's primary view or skill. */}
+            {/* The service's skills, as tabs. */}
             {(current === CLEANING || group.report.analysis_ready) && menu.length > 1 && (
-              <label className="block max-w-md space-y-1 text-sm">
-                <span className="font-medium">Skill</span>
-                <select
-                  className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
-                  value={choice}
-                  onChange={(e) => current && setPicked((p) => ({ ...p, [current]: e.target.value }))}
-                >
-                  {menu.map((m, i) => (
-                    <option key={m.value} value={m.value}>
+              <div role="tablist" aria-label={`${navName(currentService)} tabs`} className="flex flex-wrap gap-1 border-b border-line">
+                {menu.map((m) => {
+                  const off = cloud && current === ENGINEERING && m.value === VIEW;
+                  return (
+                    <button key={m.value} role="tab" aria-selected={choice === m.value}
+                      onClick={() => current && setPicked((p) => ({ ...p, [current]: m.value }))}
+                      className={`-mb-px rounded-t-xl border-b-2 px-4 py-2 text-sm ${
+                        choice === m.value ? "border-brand font-semibold text-ink" : "border-transparent text-ink-muted hover:text-ink"
+                      } ${off ? "opacity-50" : ""}`}>
                       {m.label}
-                      {i === 0 ? " (default)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                    </button>
+                  );
+                })}
+              </div>
             )}
 
             {current === CLEANING && choice === VIEW && (
               <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button onClick={() => setAskDownload("csv")}>Download CSV</Button>
-                  <Button variant="secondary" onClick={() => setAskDownload("xlsx")}>
-                    Download Excel
-                  </Button>
-                  <span className="text-xs text-ink-muted">
-                    CSV {estimateLine(group.download_estimate, "csv")} · Excel {estimateLine(group.download_estimate, "xlsx")}
-                  </span>
-                </div>
+                {!cloud && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button onClick={() => setAskDownload("csv")}>Download CSV</Button>
+                    <Button variant="secondary" onClick={() => setAskDownload("xlsx")}>
+                      Download Excel
+                    </Button>
+                    <span className="text-xs text-ink-muted">
+                      CSV {estimateLine(group.download_estimate, "csv")} · Excel {estimateLine(group.download_estimate, "xlsx")}
+                    </span>
+                  </div>
+                )}
                 {askDownload && (
-                  <DownloadConfirm
-                    tableLabel={group.label}
-                    format={askDownload}
-                    estimate={group.download_estimate}
-                    included={plan?.downloads_included}
-                    onConfirm={() => download(askDownload)}
-                    onCancel={() => setAskDownload(null)}
-                  />
+                  <DownloadConfirm tableLabel={group.label} format={askDownload} estimate={group.download_estimate}
+                    included={plan?.downloads_included} onConfirm={() => download(askDownload)} onCancel={() => setAskDownload(null)} />
                 )}
                 <GroupDetails
                   key={group.group_id}
+                  readOnly={cloud}
                   group={group}
                   bookingUrl={bookFor()}
                   applied={columnActions[String(group.group_id)] ?? {}}
@@ -868,30 +908,44 @@ export default function Workspace() {
               </>
             )}
 
-            {current === DASHBOARD && choice === VIEW && group.report.analysis_ready &&
-              (group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped") ? (
-                <Dashboard key={group.group_id} input={input} groupId={group.group_id} />
-              ) : (
-                <Card>
-                  <p className="text-sm">
-                    This table has no date column, so there&apos;s no time dashboard. Pick another visualization skill from the menu above.
-                  </p>
-                </Card>
-              ))}
-
-            {current === ENGINEERING && choice === VIEW && (
-              <WarehouseLoad
-                key={`load-${group.group_id}`}
+            {current === DASHBOARD && choice === VIEW && group.report.analysis_ready && (
+              <DashboardTabs
+                key={`dash-${group.group_id}-${planAccountId}`}
                 token={session.token}
                 input={input}
                 groupId={group.group_id}
-                clientName={whoName}
-                canDelete={!!plan?.can_add}
-                onStoredChanged={setStored}
-                tables={analysis.groups.map((g) => ({ group_id: g.group_id, label: g.label, columns: g.preview.columns }))}
-                relationships={analysis.categorization.relationships}
+                columns={group.report.column_reports
+                  .filter((c) => c.action !== "dropped")
+                  .map((c) => ({ name: c.column, type: c.inferred_type === "number" ? "numeric" : c.inferred_type }))}
+                hasDates={group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped")}
+                canBuild={!!plan?.active.includes(DASHBOARD)}
+                onEditContext={() => setAccountTab("account")}
               />
             )}
+
+            {current === ENGINEERING && choice === VIEW &&
+              (cloud ? (
+                <Card>
+                  <h2 className="font-semibold">Storing is off for cloud data</h2>
+                  <p className="mt-1 text-sm text-ink-muted">
+                    This table lives in your own database, which already manages it — we analyze it where it is and don&apos;t
+                    keep a copy. The ER diagram and data dictionary tabs work on it as usual. (Storing is for files and
+                    business tools like QuickBooks.)
+                  </p>
+                </Card>
+              ) : (
+                <WarehouseLoad
+                  key={`load-${group.group_id}`}
+                  token={session.token}
+                  input={input}
+                  groupId={group.group_id}
+                  clientName={whoName}
+                  canDelete={!!plan?.can_add}
+                  onStoredChanged={setStored}
+                  tables={analysis.groups.map((g) => ({ group_id: g.group_id, label: g.label, columns: g.preview.columns }))}
+                  relationships={analysis.categorization.relationships}
+                />
+              ))}
 
             {choice !== VIEW && plan && (current === CLEANING || group.report.analysis_ready) && (
               <SkillsPanel
@@ -906,6 +960,7 @@ export default function Workspace() {
                 autoRun
                 initialResult={results[`${group.group_id}:${choice}`] ?? null}
                 onResult={(r) => setResults((old) => ({ ...old, [`${group.group_id}:${choice}`]: r }))}
+                onAsked={(q, answered) => logQuestion(session.token, q, answered)}
               />
             )}
           </div>

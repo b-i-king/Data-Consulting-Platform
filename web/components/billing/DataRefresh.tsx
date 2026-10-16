@@ -1,5 +1,6 @@
-// "Connected data" in Plan & billing: how often each connector (QuickBooks
-// first) pulls new data into managed storage.
+// "How often it refreshes" for a business tool (QuickBooks first), shown under
+// it in Settings -> Integrations: how often it pulls new data into managed
+// storage. Cloud databases have no schedule (they're read where they live).
 //
 //   QuickBooks Online · coming soon
 //   ( ) Only when I ask   ( ) Once a week   (•) Once a day   ( ) Every hour +$15   ( ) Live +$40
@@ -18,7 +19,7 @@ import { getConnections, setRefresh } from "@/lib/api";
 import type { ConnectionsInfo, RefreshFrequency } from "@/lib/types";
 import { Card, ErrorBox } from "@/components/wizard/ui";
 
-export default function DataRefresh(props: { token: string; canChange: boolean }) {
+export default function DataRefresh(props: { token: string; canChange: boolean; connector?: string }) {
   const [info, setInfo] = useState<ConnectionsInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,16 +47,17 @@ export default function DataRefresh(props: { token: string; canChange: boolean }
 
   if (!info) return error ? <ErrorBox message={error} /> : null;
   const locked = !info.can_connect || !props.canChange;
+  // Only business tools have a schedule; optionally just one of them.
+  const shown = info.connectors.filter((c) => c.stores_data && (!props.connector || c.connector === props.connector));
 
   return (
     <Card>
-      <h2 className="font-semibold">Connected data</h2>
+      <h3 className="font-semibold">How often it refreshes</h3>
       <p className="mt-1 text-sm text-ink-muted">
-        Choose how often each connected source pulls new and changed records. Once a day is the default; faster
-        updates are paid add-ons.
-        {!info.can_connect && " Connected sources need the Data Engineering tool in your package."}
+        How often new and changed records are pulled in. Once a day is the default; faster updates are paid add-ons.
+        {!info.can_connect && " Business tools need the Data Engineering tool in your package (they store the data for you)."}
       </p>
-      {info.connectors.map((c) => (
+      {shown.map((c) => (
         <fieldset key={c.connector} className="mt-3" disabled={locked || busy === c.connector}>
           <legend className="text-sm font-semibold">
             {c.name}

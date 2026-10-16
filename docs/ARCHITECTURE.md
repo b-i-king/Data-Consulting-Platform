@@ -111,6 +111,15 @@ jobs (ML training). At that point, add temporary storage (Supabase Storage with 
 24-hour auto-delete) and a background job queue. Pricing would then add a
 storage component — see [PRICING.md](PRICING.md).
 
+**Clients' own cloud databases: read, never stored.** Settings → Integrations
+→ "Supabase database" (any PostgreSQL). The client's login is saved encrypted
+(Fernet, key from `JWT_SECRET_KEY`) in `dim.data_connections`; tables are read
+in a READ ONLY transaction (up to 100,000 rows) only when the client opens one,
+and nothing read is kept (`api/services/cloud_sources.py`). Hosts on private /
+loopback / link-local addresses are refused, so the server can't be pointed at
+its own network (`ALLOW_PRIVATE_DB_HOSTS` is for local testing only). For
+cloud data, Data Cleaning only reports and "Load into database" is off.
+
 **Managed storage (opt-in exception): Data Engineering.** ✅ Built. Clients with
 Data Engineering (or their consultant, working for them) can have their cleaned
 data stored in `fact.account_data` (`db/schema.sql`, explained in

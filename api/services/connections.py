@@ -1,8 +1,16 @@
 """
-Connected data sources (connectors) and how often they refresh.
+Integrations (connected data sources) and how often they refresh.
 
-A connector (QuickBooks first; more later — see docs/CONNECTORS.md) copies a
-client's data into managed storage, so it needs the Data Engineering tool.
+Two KINDS, shown as two sections in Settings -> Integrations:
+
+  * BUSINESS TOOLS (QuickBooks first) COPY the client's data into managed
+    storage on a schedule, so they need the Data Engineering tool.
+  * CLOUD STORAGE (a client's own Supabase / PostgreSQL database first) is
+    READ WHERE IT LIVES, never copied: the client already manages it. It
+    feeds analysis, dashboards, ML and AI; storing is switched off for it.
+    The reading itself is api/services/cloud_sources.py.
+
+Business tools (see docs/CONNECTORS.md):
 Each pull costs API calls and compute, so the client picks HOW OFTEN their
 data updates, and the faster choices are paid add-ons:
 
@@ -32,8 +40,12 @@ from api.services.pricing import DEFAULT_REFRESH, REFRESH_OPTIONS_BY_ID
 # Connectors a client can set a schedule for. "available" False = shown as
 # coming soon: the schedule can be chosen now and starts once it's connected.
 CONNECTORS: dict[str, dict] = {
-    "quickbooks": {"name": "QuickBooks Online", "available": False},
+    "quickbooks": {"name": "QuickBooks Online", "kind": "business_tool", "available": False, "stores_data": True,
+                   "about": "Invoices, payments, expenses and customers, refreshed on your schedule into your stored data."},
+    "supabase": {"name": "Supabase database", "kind": "cloud_storage", "available": True, "stores_data": False,
+                 "about": "Your own Supabase (or any PostgreSQL) database, read where it lives. Nothing is copied."},
 }
+KINDS = {"cloud_storage": "Cloud storage", "business_tool": "Business tools"}
 
 # The tool a client needs before any connector can store data for them.
 REQUIRED_SERVICE = "data_engineering"
@@ -77,8 +89,8 @@ def validate(connector: str, frequency: str) -> None:
         Traceback (most recent call last):
         ValueError: Unknown refresh frequency: every_second
     """
-    if connector not in CONNECTORS:
-        raise ValueError(f"Unknown connector: {connector}")
+    if connector not in CONNECTORS or not CONNECTORS[connector]["stores_data"]:
+        raise ValueError(f"Unknown connector: {connector}")   # cloud sources have no schedule
     if frequency not in REFRESH_OPTIONS_BY_ID:
         raise ValueError(f"Unknown refresh frequency: {frequency}")
 
@@ -180,8 +192,9 @@ def connector_list(connections: list[dict]) -> list[dict]:
         connections: list[dict], the client's data_connections rows.
 
     Returns:
-        list[dict]: [{"connector", "name", "available", "refresh_frequency", "status",
-        "last_synced_at", "next_sync_at"}, ...] (datetimes as ISO strings or None).
+        list[dict]: [{"connector", "name", "kind", "about", "available", "stores_data",
+        "refresh_frequency", "status", "display_name", "last_synced_at", "next_sync_at"}, ...]
+        (datetimes as ISO strings or None). Saved logins are never included.
 
     Example:
         >>> connector_list([])[0]["refresh_frequency"], connector_list([])[0]["status"]
@@ -192,8 +205,9 @@ def connector_list(connections: list[dict]) -> list[dict]:
     for cid, meta in CONNECTORS.items():
         c = saved.get(cid, {})
         iso = lambda v: v.isoformat() if isinstance(v, datetime) else v   # noqa: E731
-        out.append({"connector": cid, "name": meta["name"], "available": meta["available"],
+        out.append({"connector": cid, "name": meta["name"], "kind": meta["kind"], "about": meta["about"],
+                    "available": meta["available"], "stores_data": meta["stores_data"],
                     "refresh_frequency": c.get("refresh_frequency", DEFAULT_REFRESH),
-                    "status": c.get("status", "not_set_up"),
+                    "status": c.get("status", "not_set_up"), "display_name": c.get("display_name"),
                     "last_synced_at": iso(c.get("last_synced_at")), "next_sync_at": iso(c.get("next_sync_at"))})
     return out

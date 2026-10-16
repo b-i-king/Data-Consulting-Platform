@@ -1038,7 +1038,13 @@ export interface RefreshOption {
 export interface DataConnection {
   connector: string;
   name: string;
+  /** "cloud_storage" = read where it lives (never copied); "business_tool" = copied into storage on a schedule. */
+  kind: "cloud_storage" | "business_tool";
+  about: string;
   available: boolean;
+  stores_data: boolean;
+  /** What's connected, e.g. "db.abcd.supabase.co / postgres" (never the password). */
+  display_name: string | null;
   refresh_frequency: RefreshFrequency;
   status: "not_set_up" | "pending" | "connected" | "paused" | "error" | "disconnected";
   last_synced_at: string | null;
@@ -1048,7 +1054,57 @@ export interface DataConnection {
 export interface ConnectionsInfo {
   options: RefreshOption[];
   connectors: DataConnection[];
+  /** Section titles: {"cloud_storage": "Cloud storage", "business_tool": "Business tools"}. */
+  kinds: Record<string, string>;
   /** True when the client has Data Engineering. */
   can_connect: boolean;
   addon_total_usd: number;
 }
+
+// ── Cloud databases (api/routers/connections.py, api/services/cloud_sources.py) ──
+
+/** One table or view in the client's own database. */
+export interface CloudTable {
+  schema: string;
+  name: string;
+  kind: "table" | "view";
+  rows_estimate: number;
+}
+
+// ── Dashboards (api/routers/dashboards.py, api/services/dashboards.py) ────────
+
+/** "About your business": what dashboards are built around. */
+export interface BusinessContext {
+  about: string;
+  goals: string;
+  key_questions: string[];
+}
+
+/** One of the client's own dashboard tabs: saved questions answered on the current data. */
+export interface DashboardTab {
+  id: string;
+  name: string;
+  questions: string[];
+  position: number;
+  updated_at: string | null;
+}
+
+/** GET /api/dashboards */
+export interface DashboardsInfo {
+  tabs: DashboardTab[];
+  context: BusinessContext;
+  /** The NAICS sector name, e.g. "Retail Trade" (null when not given). */
+  industry: string | null;
+  company: string | null;
+  frequent: { question: string; times: number }[];
+  max_tabs: number;
+  max_questions: number;
+}
+
+/** A question worth a dashboard tab ("yours" = their key question, "asked" = asked often, "industry"). */
+export interface DashboardSuggestion {
+  question: string;
+  why: string;
+  source: "yours" | "asked" | "industry";
+}
+

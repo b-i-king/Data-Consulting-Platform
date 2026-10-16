@@ -132,8 +132,15 @@ export default function StepResults(props: {
   );
 }
 
-/** The cleaning report for one table (also used by the signed-in workspace). */
+/**
+ * The cleaning report for one table (also used by the signed-in workspace).
+ * readOnly (data from a client's CLOUD database): the same findings — rows,
+ * duplicates, missing values by column, enough data?, preview — but no fix /
+ * rename / transform tools: we point out what to fix in their own system and
+ * never change their data.
+ */
 export function GroupDetails(props: {
+  readOnly?: boolean;
   group: GroupOutput;
   bookingUrl: string;
   applied: Record<string, ColumnAction>;
@@ -186,6 +193,18 @@ export function GroupDetails(props: {
         </ul>
       )}
 
+      {props.readOnly && (
+        <div className="space-y-3">
+          <p role="status" className="rounded-2xl border border-brand/40 bg-brand-soft p-3 text-sm">
+            <strong>Report only.</strong> This data lives in your own database, so we don&apos;t change it here — below is
+            what we found, to fix at the source if you want to.
+          </p>
+          <ReadOnlyMissing report={r} />
+        </div>
+      )}
+
+      {!props.readOnly && (
+      <>
       {/* a2. Column names — blank / repeated headers, and renaming */}
       {/* key: start fresh whenever the names in effect change (e.g. after saving). */}
       <ColumnNames
@@ -205,6 +224,8 @@ export function GroupDetails(props: {
       {/* b. Missing values by column — advice + fill / remove choices */}
       {/* key: start fresh when the choices in effect change elsewhere (e.g. "remove unnamed columns"). */}
       <MissingValues key={JSON.stringify(props.applied)} report={r} applied={props.applied} onApply={props.onApply} />
+      </>
+      )}
 
       {/* c. Sample-size snapshot (adapted from the sample-size skill) */}
       <div>
@@ -242,3 +263,42 @@ export function GroupDetails(props: {
     </div>
   );
 }
+
+/** Read-only findings by column (cloud data): type, missing values and the advice — no fix buttons. */
+function ReadOnlyMissing({ report }: { report: GroupOutput["report"] }) {
+  const cols = report.column_reports.filter((c) => c.missing_count > 0 || c.inferred_type === "empty");
+  return (
+    <div>
+      <h3 className="mb-1 font-semibold">Missing values by column</h3>
+      {cols.length === 0 ? (
+        <p className="text-sm text-ink-muted">No missing values — nice.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-line">
+          <table className="min-w-full text-sm">
+            <thead className="bg-surface-2 text-left text-xs text-ink-muted">
+              <tr>
+                <th className="px-3 py-2">Column</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2 text-right">Missing</th>
+                <th className="px-3 py-2">What it means</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cols.map((c) => (
+                <tr key={c.column} className="border-t border-line">
+                  <td className="px-3 py-2 font-mono text-xs">{c.column}</td>
+                  <td className="px-3 py-2 text-xs">{c.inferred_type}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">
+                    {fmtInt(c.missing_count)} ({fmtPct(c.missing_pct)})
+                  </td>
+                  <td className="px-3 py-2 text-xs text-ink-muted">{c.recommendation}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+

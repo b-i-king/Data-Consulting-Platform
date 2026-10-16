@@ -39,7 +39,8 @@ from api.core.config import get_settings  # noqa: E402
 # Every table db/schema.sql creates, by schema.
 TABLES = {
     "dim": ["accounts", "consultants", "teams", "subscriptions", "consultations", "usage_events",
-            "storage_consents", "load_runs", "data_connections"],
+            "storage_consents", "load_runs", "data_connections",
+            "dashboard_tabs", "question_log"],
     "fact": ["account_data", "field_map"],
 }
 

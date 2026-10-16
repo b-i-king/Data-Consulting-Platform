@@ -9,6 +9,10 @@
 import type {
   Account,
   AdminPanelData,
+  BusinessContext,
+  CloudTable,
+  DashboardSuggestion,
+  DashboardsInfo,
   BillingInterval,
   CheckoutResult,
   ConsultantClient,
@@ -483,3 +487,98 @@ export async function downloadCleaned(opts: {
   // repeat = the exact same data was downloaded recently, so this copy was free.
   return { amountUsd: res.headers.get("X-Amount-USD"), repeat: res.headers.get("X-Repeat-Download") === "1" };
 }
+
+// ── Passwords (api/routers/accounts.py, api/services/auth.py) ─────────────────
+
+/** "Forgot password?": email a reset link (the reply is the same for any email). */
+export const forgotPassword = (email: string) => postJson<{ message: string }>("/api/accounts/forgot-password", { email });
+
+/** The reset page: the token from the emailed link + the new password. */
+export const resetPassword = (token: string, password: string) =>
+  postJson<{ message: string; email: string }>("/api/accounts/reset-password", { token, password });
+
+/** Signed in (Account page): email myself a reset link. */
+export const sendMyResetLink = (token: string) => postJson<{ message: string }>("/api/accounts/reset-link", {}, token);
+
+// ── Business context and dashboards (api/routers/dashboards.py) ──────────────
+
+/** Save "About your business" for the workspace's account. */
+export async function saveBusinessContext(token: string, context: BusinessContext): Promise<{ context: BusinessContext }> {
+  const res = await apiFetch(`${API_URL}/api/accounts/business-context`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify(context),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** The client's dashboard tabs, business context, industry and most-asked questions. */
+export async function getDashboards(token: string): Promise<DashboardsInfo> {
+  const res = await apiFetch(`${API_URL}/api/dashboards`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Questions worth a tab, for this table (its columns) and this business. */
+export const getDashboardSuggestions = (token: string, columns: { name: string; type: string }[]) =>
+  postJson<{ suggestions: DashboardSuggestion[] }>("/api/dashboards/suggestions", { columns }, token);
+
+/** Add a tab (id null) or change one. Returns everything GET /api/dashboards returns. */
+export async function saveDashboardTab(token: string, tab: { id: string | null; name: string; questions: string[] }): Promise<DashboardsInfo> {
+  const res = await apiFetch(`${API_URL}/api/dashboards/tabs${tab.id ? `/${encodeURIComponent(tab.id)}` : ""}`, {
+    method: tab.id ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify({ name: tab.name, questions: tab.questions }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Remove a tab. */
+export async function deleteDashboardTab(token: string, id: string): Promise<DashboardsInfo> {
+  const res = await apiFetch(`${API_URL}/api/dashboards/tabs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Remember a question asked of the data (text only) — repeated ones become suggested tabs. Fire and forget. */
+export function logQuestion(token: string, question: string, answered: boolean) {
+  postJson("/api/questions", { question, answered }, token).catch(() => {});
+}
+
+// ── Cloud databases (api/routers/connections.py) ──────────────────────────────
+
+/** Connect the client's own Supabase / PostgreSQL database (read-only; the login is saved encrypted). */
+export const connectSupabase = (token: string, connectionString: string) =>
+  postJson<{ connectors: DataConnection[]; tables: CloudTable[] }>(
+    "/api/connections/supabase", { connection_string: connectionString }, token);
+
+/** The connected database's tables and views. */
+export async function getCloudTables(token: string): Promise<{ tables: CloudTable[]; max_rows: number }> {
+  const res = await apiFetch(`${API_URL}/api/connections/supabase/tables`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** One table of the client's database as a CSV File (read-only, never stored) — opened like any file. */
+export async function getCloudTableFile(token: string, schema: string, name: string): Promise<File> {
+  const q = `schema=${encodeURIComponent(schema)}&name=${encodeURIComponent(name)}`;
+  const res = await apiFetch(`${API_URL}/api/connections/supabase/table?${q}`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return new File([await res.blob()], `${schema}.${name}.csv`, { type: "text/csv" });
+}
+
+/** Disconnect an integration (its saved login is deleted). */
+export async function disconnectIntegration(token: string, connector: string): Promise<{ connectors: DataConnection[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+

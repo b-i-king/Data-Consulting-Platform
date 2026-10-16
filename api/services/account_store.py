@@ -242,6 +242,8 @@ async def create_account(
         "consultant_decided_by": None,
         "terms_accepted_at": _now() if terms_version else None,
         "terms_version": terms_version,
+        "password_reset_hash": None, "password_reset_expires_at": None,
+        "business_context": {},
     }
 
     if database.pool is None:
@@ -892,6 +894,9 @@ async def delete_account(account_id: str) -> list[str]:
         _load_runs[:] = [r for r in _load_runs if r["account_id"] not in ids]
         for k in [k for k in _connections if k[0] in ids]:
             _connections.pop(k)
+        for k in [k for k, t in _tabs.items() if t["account_id"] in ids]:
+            _tabs.pop(k)
+        _questions[:] = [q for q in _questions if q["account_id"] not in ids]
         return ids
     uids = [uuid.UUID(i) for i in ids]
     async with database.pool.acquire() as conn:
@@ -1605,3 +1610,254 @@ async def set_connection_frequency(*, account_id: str, connector: str, refresh_f
         refresh_frequency, next_sync_at,
     )
     return dict(row)
+
+
+# ── Passwords: "forgot password" in local mode (api/services/auth.py) ─────────
+
+async def set_password_reset(account_id: str, token_hash: str | None, expires_at: datetime | None) -> None:
+    """
+    Save (or clear, with None) the one-way hash of a password-reset token and its expiry.
+
+    Args:
+        account_id: str, the account.
+        token_hash: str | None, sha256 of the emailed token (never the token itself).
+        expires_at: datetime | None, when the link stops working.
+
+    Returns:
+        None.
+
+    Example:
+        >>> await set_password_reset(aid, "9f2c...", datetime.now(timezone.utc) + timedelta(hours=1))
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(password_reset_hash=token_hash, password_reset_expires_at=expires_at)
+        return
+    await database.pool.execute(
+        "UPDATE dim.accounts SET password_reset_hash = $2, password_reset_expires_at = $3 WHERE id = $1",
+        uuid.UUID(account_id), token_hash, expires_at)
+
+
+async def get_account_by_reset_hash(token_hash: str) -> dict | None:
+    """
+    Find the account whose reset link this is, if it hasn't expired.
+
+    Args:
+        token_hash: str, sha256 of the token from the link.
+
+    Returns:
+        dict | None: the accounts row, or None (unknown or expired).
+    """
+    if database.pool is None:
+        return next((a for a in _accounts.values() if a.get("password_reset_hash") == token_hash
+                     and a.get("password_reset_expires_at") and a["password_reset_expires_at"] > _now()), None)
+    row = await database.pool.fetchrow(
+        "SELECT * FROM dim.accounts WHERE password_reset_hash = $1 AND password_reset_expires_at > now()", token_hash)
+    return dict(row) if row else None
+
+
+async def get_account_by_auth_user(auth_user_id: str) -> dict | None:
+    """
+    Find an account by its Supabase Auth user id (after a Supabase password reset).
+
+    Args:
+        auth_user_id: str, the Supabase user id.
+
+    Returns:
+        dict | None: the accounts row.
+    """
+    if database.pool is None:
+        return next((a for a in _accounts.values() if str(a.get("auth_user_id") or "") == auth_user_id), None)
+    row = await database.pool.fetchrow("SELECT * FROM dim.accounts WHERE auth_user_id = $1", uuid.UUID(auth_user_id))
+    return dict(row) if row else None
+
+
+# ── Business context (dashboards) ─────────────────────────────────────────────
+
+async def set_business_context(account_id: str, context: dict) -> None:
+    """
+    Save "About your business" ({"about", "goals", "key_questions"}) on the plan holder.
+
+    Args:
+        account_id: str, the plan holder.
+        context: dict, the cleaned-up context (api/services/dashboards.py).
+
+    Returns:
+        None.
+
+    Example:
+        >>> await set_business_context(aid, {"about": "Two bakeries in Atlanta", "goals": "", "key_questions": []})
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id]["business_context"] = dict(context)
+        return
+    await database.pool.execute("UPDATE dim.accounts SET business_context = $2::jsonb WHERE id = $1",
+                                uuid.UUID(account_id), json.dumps(context))
+
+
+def business_context_of(account: dict) -> dict:
+    """The account's business context as a dict (asyncpg returns JSON as text)."""
+    raw = account.get("business_context") or {}
+    return json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+
+# ── Integrations: saved logins (encrypted) ──────────────────────────────────────
+
+async def save_integration(*, account_id: str, connector: str, kind: str, display_name: str,
+                           credentials_encrypted: str | None, consultant_id: str | None = None) -> dict:
+    """
+    Create or update an integration as CONNECTED, with its (already encrypted) login.
+
+    Args:
+        account_id: str, the client account (plan holder).
+        connector: str, e.g. "supabase" (api/services/connections.py CONNECTORS).
+        kind: str, "cloud_storage" or "business_tool".
+        display_name: str, what to show ("db.abcd.supabase.co / postgres").
+        credentials_encrypted: str | None, from cloud_sources.encrypt — never plain text.
+        consultant_id: str | None, the consultant who set it up, if any.
+
+    Returns:
+        dict: the saved data_connections row.
+    """
+    if database.pool is None:
+        row = _connections.setdefault((account_id, connector), {
+            "id": str(uuid.uuid4()), "account_id": account_id, "connector": connector, "refresh_frequency": "manual",
+            "next_sync_at": None, "last_synced_at": None, "created_at": _now()})
+        row.update(kind=kind, display_name=display_name, credentials_encrypted=credentials_encrypted,
+                   status="connected", consultant_id=consultant_id, updated_at=_now())
+        return dict(row)
+    row = await database.pool.fetchrow(
+        """INSERT INTO dim.data_connections (account_id, consultant_id, connector, refresh_frequency, status,
+                                            kind, display_name, credentials_encrypted)
+           VALUES ($1, $2, $3, 'manual', 'connected', $4, $5, $6)
+           ON CONFLICT (account_id, connector) DO UPDATE
+               SET status = 'connected', kind = EXCLUDED.kind, display_name = EXCLUDED.display_name,
+                   credentials_encrypted = EXCLUDED.credentials_encrypted, updated_at = now()
+           RETURNING *""",
+        uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, connector, kind,
+        display_name, credentials_encrypted)
+    return dict(row)
+
+
+async def get_integration(account_id: str, connector: str) -> dict | None:
+    """One integration row (with its encrypted login), or None."""
+    if database.pool is None:
+        row = _connections.get((account_id, connector))
+        return dict(row) if row else None
+    row = await database.pool.fetchrow("SELECT * FROM dim.data_connections WHERE account_id = $1 AND connector = $2",
+                                       uuid.UUID(account_id), connector)
+    return dict(row) if row else None
+
+
+async def delete_integration(account_id: str, connector: str) -> bool:
+    """Disconnect: delete the integration row and its saved login. Returns True when one was removed."""
+    if database.pool is None:
+        return _connections.pop((account_id, connector), None) is not None
+    result = await database.pool.execute("DELETE FROM dim.data_connections WHERE account_id = $1 AND connector = $2",
+                                         uuid.UUID(account_id), connector)
+    return result.endswith(" 1")
+
+
+# ── Dashboard tabs and the question log (api/services/dashboards.py) ──────────
+
+_tabs: dict[str, dict] = {}            # tab id -> dashboard_tabs row (memory path)
+_questions: list[dict] = []            # question_log rows (memory path)
+
+
+def _tab_out(row) -> dict:
+    """A dashboard_tabs row as a dict, with questions as a Python list."""
+    out = dict(row)
+    if isinstance(out.get("questions"), str):
+        out["questions"] = json.loads(out["questions"])
+    return out
+
+
+async def list_dashboard_tabs(account_id: str) -> list[dict]:
+    """A client's dashboard tabs, left to right."""
+    if database.pool is None:
+        return sorted((dict(t) for t in _tabs.values() if t["account_id"] == account_id),
+                      key=lambda t: (t["position"], t["created_at"]))
+    rows = await database.pool.fetch(
+        "SELECT * FROM dim.dashboard_tabs WHERE account_id = $1 ORDER BY position, created_at", uuid.UUID(account_id))
+    return [_tab_out(r) for r in rows]
+
+
+async def save_dashboard_tab(*, account_id: str, name: str, questions: list[str], tab_id: str | None = None,
+                             created_by: str | None = None) -> dict | None:
+    """
+    Create a dashboard tab (no tab_id) or rename / change its questions.
+
+    Returns:
+        dict | None: the saved row; None when tab_id isn't this account's.
+    """
+    if database.pool is None:
+        if tab_id:
+            tab = _tabs.get(tab_id)
+            if not tab or tab["account_id"] != account_id:
+                return None
+            tab.update(name=name, questions=list(questions), updated_at=_now())
+            return dict(tab)
+        tid = str(uuid.uuid4())
+        position = len([t for t in _tabs.values() if t["account_id"] == account_id])
+        _tabs[tid] = {"id": tid, "account_id": account_id, "name": name, "questions": list(questions),
+                      "position": position, "created_by": created_by, "created_at": _now(), "updated_at": _now()}
+        return dict(_tabs[tid])
+    if tab_id:
+        row = await database.pool.fetchrow(
+            """UPDATE dim.dashboard_tabs SET name = $3, questions = $4::jsonb, updated_at = now()
+               WHERE id = $1 AND account_id = $2 RETURNING *""",
+            uuid.UUID(tab_id), uuid.UUID(account_id), name, json.dumps(questions))
+        return _tab_out(row) if row else None
+    row = await database.pool.fetchrow(
+        """INSERT INTO dim.dashboard_tabs (account_id, name, questions, position, created_by)
+           VALUES ($1, $2, $3::jsonb,
+                   (SELECT count(*) FROM dim.dashboard_tabs WHERE account_id = $1), $4)
+           RETURNING *""",
+        uuid.UUID(account_id), name, json.dumps(questions), uuid.UUID(created_by) if created_by else None)
+    return _tab_out(row)
+
+
+async def delete_dashboard_tab(account_id: str, tab_id: str) -> bool:
+    """Delete one of this account's tabs. Returns True when one was removed."""
+    if database.pool is None:
+        tab = _tabs.get(tab_id)
+        if not tab or tab["account_id"] != account_id:
+            return False
+        del _tabs[tab_id]
+        return True
+    result = await database.pool.execute("DELETE FROM dim.dashboard_tabs WHERE id = $1 AND account_id = $2",
+                                         uuid.UUID(tab_id), uuid.UUID(account_id))
+    return result.endswith(" 1")
+
+
+async def log_question(account_id: str, question: str, answered: bool) -> None:
+    """Remember one question asked of the data (the text only)."""
+    if database.pool is None:
+        _questions.append({"account_id": account_id, "question": question, "answered": answered, "asked_at": _now()})
+        return
+    await database.pool.execute("INSERT INTO dim.question_log (account_id, question, answered) VALUES ($1, $2, $3)",
+                                uuid.UUID(account_id), question, answered)
+
+
+async def frequent_questions(account_id: str, limit: int = 8) -> list[dict]:
+    """
+    The client's most-asked questions (answered ones, case and spaces ignored), most asked first.
+
+    Returns:
+        list[dict]: [{"question", "times"}].
+    """
+    if database.pool is None:
+        counts: dict[str, list] = {}
+        for q in _questions:
+            if q["account_id"] == account_id and q["answered"]:
+                key = " ".join(q["question"].lower().split())
+                counts.setdefault(key, [q["question"], 0])[1] += 1
+        ranked = sorted(counts.values(), key=lambda v: -v[1])[:limit]
+        return [{"question": q, "times": n} for q, n in ranked]
+    rows = await database.pool.fetch(
+        """SELECT min(question) AS question, count(*)::int AS times FROM dim.question_log
+           WHERE account_id = $1 AND answered
+           GROUP BY lower(regexp_replace(question, '\\s+', ' ', 'g'))
+           ORDER BY times DESC, max(asked_at) DESC LIMIT $2""", uuid.UUID(account_id), limit)
+    return [dict(r) for r in rows]

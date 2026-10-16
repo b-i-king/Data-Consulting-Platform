@@ -21,7 +21,10 @@
 --        │      ──< dim.usage_events          one row per download (billing)
 --        │      ──< dim.storage_consents      "yes, store my data"
 --        │      ──< dim.load_runs             one row per load into fact.account_data
---        │      ──< dim.data_connections      QuickBooks & co.: refresh schedule
+--        │      ──< dim.data_connections      integrations: QuickBooks (schedule), a client's own
+--        │                                    Supabase/PostgreSQL database (read-only, encrypted login)
+--        │      ──< dim.dashboard_tabs        the client's own dashboard tabs (saved questions)
+--        │      ──< dim.question_log          questions asked of the data (to suggest dashboard tabs)
 --        │      ──< fact.account_data         the stored data (one row per metric)
 --        ├─ team_id ──> dim.teams             businesses: owner + colleagues
 --        └─ consultant_id ──> dim.consultants who manages this client
@@ -157,6 +160,13 @@ ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_decided_at TIMESTAM
 ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_decided_by UUID;
 ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_version TEXT;
+-- "Forgot password" when Supabase Auth is off (local mode): a one-way hash of
+-- the emailed token and when it stops working. Supabase mode keeps its own.
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS password_reset_hash TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
+-- Business context for dashboards (Account -> "About your business"):
+-- {"about": "...", "goals": "...", "key_questions": ["...", ...]}.
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS business_context JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 3
     CHECK (capacity BETWEEN 1 AND 10);
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS free_booking_url TEXT;
@@ -330,6 +340,43 @@ CREATE TABLE IF NOT EXISTS dim.data_connections (
 );
 CREATE INDEX IF NOT EXISTS idx_data_connections_due ON dim.data_connections (next_sync_at) WHERE status = 'connected';
 
+-- Integrations (Settings -> Integrations): what KIND of source, a name to show,
+-- and — for a client's own database — the login, ENCRYPTED with a key derived
+-- from JWT_SECRET_KEY (api/services/cloud_sources.py). We only ever read it,
+-- read-only; nothing from a cloud database is stored here.
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS kind TEXT
+    CHECK (kind IN ('business_tool', 'cloud_storage'));
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS credentials_encrypted TEXT;
+
+-- ── dim.dashboard_tabs: the client's own dashboard tabs ─────────────────────
+-- The dashboard opens on "Overview" (built from the data automatically). Each
+-- extra tab is a list of saved plain-English questions ("total amount by
+-- store") answered again on the current data every time it opens — so a tab
+-- grows with the business's own questions (api/services/dashboards.py).
+CREATE TABLE IF NOT EXISTS dim.dashboard_tabs (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id  UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- plan holder
+    name        TEXT NOT NULL,                                   -- "Sales by store"
+    questions   JSONB NOT NULL DEFAULT '[]',                     -- ["total amount by store", ...]
+    position    INTEGER NOT NULL DEFAULT 0,                      -- left-to-right order
+    created_by  UUID REFERENCES dim.accounts (id) ON DELETE SET NULL,   -- client or consultant
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_tabs_account ON dim.dashboard_tabs (account_id, position);
+
+-- ── dim.question_log: questions asked of the data ──────────────────────────
+-- Each plain-English question (AI, "Ask your data") — the TEXT only, never
+-- the data. Questions asked again and again become suggested dashboard tabs.
+CREATE TABLE IF NOT EXISTS dim.question_log (
+    id          BIGSERIAL PRIMARY KEY,
+    account_id  UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- plan holder
+    question    TEXT NOT NULL,
+    answered    BOOLEAN NOT NULL DEFAULT true,                   -- false = "I can't answer that yet"
+    asked_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_question_log_account ON dim.question_log (account_id, asked_at DESC);
 
 -- ############################################################################
 -- fact: client data (Data Engineering, with consent)
@@ -534,7 +581,7 @@ DO $$
 DECLARE t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY['accounts', 'consultants', 'teams', 'subscriptions', 'consultations', 'usage_events',
-                             'storage_consents', 'load_runs', 'data_connections']
+                             'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;

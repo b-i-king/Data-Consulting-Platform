@@ -544,6 +544,53 @@ class ConsultantSettingsIn(BaseModel):
         return v
 
 
+class CloudConnectIn(BaseModel):
+    """Connect a client's own Supabase / PostgreSQL database (read-only)."""
+
+    connection_string: str = Field(min_length=12, max_length=1000)
+
+
+class ForgotPasswordIn(BaseModel):
+    """ "Forgot password?": the email to send the reset link to."""
+
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        """Validate and lowercase the email (same rules as sign-in)."""
+        return validation.clean_email(v)
+
+
+class ResetPasswordIn(BaseModel):
+    """The reset page: the token from the emailed link and the new password."""
+
+    token: str = Field(min_length=10, max_length=4000)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class BusinessContextIn(BaseModel):
+    """ "About your business" (Account page): what dashboards are built around."""
+
+    about: str = Field(default="", max_length=1000)          # what the business does, who it serves
+    goals: str = Field(default="", max_length=1000)          # what they want to improve
+    key_questions: list[str] = Field(default_factory=list, max_length=12)   # the questions they ask most
+
+
+class DashboardTabIn(BaseModel):
+    """A dashboard tab: a name and its saved plain-English questions."""
+
+    name: str = Field(min_length=1, max_length=60)
+    questions: list[str] = Field(default_factory=list, max_length=12)
+
+
+class QuestionLogIn(BaseModel):
+    """One question asked of the data (only the text is kept)."""
+
+    question: str = Field(min_length=1, max_length=300)
+    answered: bool = True
+
+
 class DeleteAccountIn(BaseModel):
     """ "Delete my account": the person types their own email to confirm."""
 

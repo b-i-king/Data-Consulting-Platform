@@ -249,6 +249,23 @@ own consultant's links see yours. `BOOKING_URL`, `PAID_BOOKING_URL` and
 
 Made a mistake? The card's **History** has **undo** on a confirmed free call.
 
+## Step 8b — Settings, passwords, integrations, dashboard tabs
+
+- **Settings** is at the bottom left of the workspace. It opens Account, Plan &
+  billing, Integrations, Consultant (consultants) and Administration (admins).
+- **Forgot password:** sign out → Sign in → "Forgot password?" → your email.
+  With Supabase on, the email's link opens `/reset-password` (add that address
+  to Supabase → Authentication → URL Configuration → Redirect URLs). Without
+  Supabase, the link is printed in the API's terminal. Signed in: Settings →
+  Account → **Reset password**.
+- **Supabase database integration:** Settings → Integrations → Supabase database
+  → paste a connection string (Supabase → Project → Connect; a read-only user is
+  best) → its tables appear → **Open in workspace**. Data Cleaning shows a
+  report only, and Data Engineering's "Load into database" is off for it.
+- **Dashboard tabs:** Settings → Account → "About your business" (what you do,
+  goals, key questions). Then Dashboard → **+ Add tab** → pick suggested
+  questions (yours, asked often, for your industry) → Save.
+
 ## Step 9 — Is the database right?
 
 ```bash
