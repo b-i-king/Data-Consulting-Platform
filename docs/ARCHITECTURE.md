@@ -167,6 +167,26 @@ flow never writes to it. The design change, and its safeguards:
 8. **AI needs stored data.** The AI tool answers questions about stored data,
    so it can't be added to a package until the account has rows in
    `fact.account_data` (`billing.ai_ready`).
+9. **Each customer stored once (design change, October 2026).** Customers,
+   vendors, products, payees and store locations are client data too. They
+   now live ONCE in `fact.entities` (name + details such as email and
+   address), with one `fact.entity_sources` row per way a source names them
+   ("QuickBooks customer 58", "sales.csv: Blue Door Cafe"); stored rows keep
+   only a link (`{"customer_link": 12}`) instead of repeating the details on
+   every row (`api/services/entities.py`). Same safeguards: both tables have
+   `account_id`, the same forced RLS policy, and are deleted with "Delete my
+   stored data" and with the account. Matching a name across sources is a
+   SUGGESTION at 80–91% alike: a person confirms it ("Is this the same
+   customer?", Settings → Integrations) before two customers are merged.
+   Existing stored data is converted once by `scripts/backfill_entities.py`.
+10. **No duplicates across sources.** The preview compares each record's
+   fingerprint (money in / out, date, amount, reference number) with what
+   other sources already stored (`api/services/dedupe.py`) and offers "load
+   only the new records" (on by default).
+11. **The stored sync (QuickBooks, Xero).** Same consent and Data Engineering
+   rule as a file load; only what changed since the last run is fetched, and
+   every call is counted against the tool's free-plan limits
+   (`api/services/sync.py`). The free quick look stays live and unstored.
 
 ### 2. Guest first, account only at download
 

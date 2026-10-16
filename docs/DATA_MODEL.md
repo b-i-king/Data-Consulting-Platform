@@ -64,12 +64,15 @@ erDiagram
     field_map ||..o{ account_data : "names + describes (by source_field)"
     accounts ||--o{ load_runs : "each load (column_plan)"
     accounts ||--o{ storage_consents : "store my data"
+    accounts ||--o{ entities : "each customer / vendor / item, once"
+    entities ||--o{ entity_sources : "how each source names it"
+    entity_sources ||..o{ account_data : "attributes.customer_link"
 
     account_data {
         bigint row_id PK
         uuid account_id FK "dim.accounts, the plan holder"
         uuid consultant_id FK "who loaded it, if a consultant"
-        text source_system "file_upload | quickbooks"
+        text source_system "file_upload | quickbooks | xero"
         text source_name "sales.csv"
         text record_id "50001, Invoice:130, sha256:..."
         int line_number "0, or 1, 2, 3 for order lines"
@@ -91,7 +94,7 @@ erDiagram
     }
     field_map {
         int field_map_id PK
-        text system "quickbooks | file_upload"
+        text system "quickbooks | xero | file_upload"
         text source_field "TxnDate, order_date"
         text field_name "transaction_date"
         text value_type
@@ -119,6 +122,23 @@ erDiagram
         bigint id PK
         uuid account_id FK
         timestamptz withdrawn_at
+    }
+    entities {
+        bigint entity_id PK
+        uuid account_id FK
+        text entity_type "customer | vendor | item | payee | location"
+        text display_name "Blue Door Cafe"
+        jsonb details "email, phone, address: once"
+    }
+    entity_sources {
+        bigint link_id PK
+        uuid account_id FK
+        bigint entity_id FK
+        text source_system "quickbooks | xero | file_upload"
+        text source_key "id:58 or name:blue door cafe"
+        text source_label "the name as this source writes it"
+        text match_method "new | email | phone | name | fuzzy | review | confirmed"
+        bigint suggested_entity_id "waiting for a person"
     }
 ```
 
@@ -199,13 +219,54 @@ smallest the source provides".
 - Every row keeps `source_name` and `source_field`, so you can always answer
   "where did this number come from?".
 
-## Customers without IDs (fuzzy matching)
+## Entities: each customer stored once (and matched across sources)
 
-QuickBooks has customer IDs; a client's spreadsheet often doesn't. Matching
-the same customer across sources (exact email → exact phone → fuzzy name ≥ 92
-automatically, 80–91 for a person to confirm) is done in pandas when the data
-is read (`api/services/entity_matching.py`, [CONNECTORS.md](CONNECTORS.md)),
-not stored as a separate customer table.
+Before: a customer's name, email and address were copied onto every metric
+row of every invoice, and "Blue Door Cafe" from QuickBooks and "BLUE DOOR
+CAFE LLC" from a spreadsheet were unrelated text. Now (`api/services/entities.py`):
+
+| Table | One row per | Holds |
+|---|---|---|
+| `fact.entities` | one real customer, vendor, product, payee or store location | type, display name, details (email, phone, address) — once |
+| `fact.entity_sources` | one way a source refers to it | "QuickBooks customer 58" / "file_upload: name blue door cafe" → the entity, and how it was matched |
+| `fact.account_data` | one metric (as before) | attributes hold `customer_link` (an entity_sources id) instead of the name, ID and details |
+
+**Matching a new mention**, most confident first: the same source already
+linked it → same email → same phone → same normalized name ("Acme Bakery,
+LLC" = "acme bakery") → a fuzzy name ≥ 92% alike. 80–91% makes a NEW entity
+with the other one suggested: a person answers "Is this the same customer?"
+(`GET/POST /api/entities/review`). Rows point at the SOURCE's link, not the
+entity, so merging re-points one row: no stored metric changes, and each
+source still gets its own spelling back.
+
+**Reading back:** "Use my stored data" puts each source's names and IDs and
+the entity's details back (`entities.expand`), so the table looks as loaded.
+Details are kept once per customer (the first value seen).
+
+**Customers across sources in SQL:**
+
+```sql
+SELECT e.display_name AS customer, SUM(a.metric_value) AS revenue
+FROM fact.account_data a
+JOIN fact.entity_sources s ON s.link_id = (a.attributes->>'customer_link')::bigint
+JOIN fact.entities e ON e.entity_id = s.entity_id
+WHERE a.account_id = '<account uuid>' AND a.field_name = 'line_amount'
+GROUP BY e.display_name ORDER BY revenue DESC;
+```
+
+Unstored data (the quick look, "Add another source") is matched in memory
+when read, as before (`api/services/entity_matching.py`).
+
+## Duplicates across sources
+
+Within one source the unique key and `row_hash` prevent duplicates. Across
+sources (QuickBooks syncing the invoices, and an exported file of the same
+invoices) the IDs differ, so `api/services/dedupe.py` compares what records
+say: **money in / out, date, amount** (total; else payment; else the sum of
+the lines) **and the reference number** when both have one. The load preview
+shows "N of these records are already stored from QuickBooks Online" with
+"load only the new records" (default). The stored sync reports how many
+synced records were also in uploaded files.
 
 ## Privacy: Row Level Security (tested)
 
@@ -237,3 +298,14 @@ peer groups of 5+ clients so no single business can be identified.
 - **Fast dashboards on huge data:** a materialized view per common question
   (monthly revenue by store), refreshed after each load.
 - **Dedicated database for one big client:** same schema, separate instance.
+
+## Xero in the unified model
+
+`XERO_FIELD_MAP` / `flatten_xero()` in `api/services/unified.py` (seeded in
+`fact.field_map` with system `xero`): invoices (ACCREC = invoice/sent,
+ACCPAY = invoice/received), bank transactions (RECEIVE = income, SPEND =
+expense; transfers not stored) and payments. The header is line 0 and
+`LineItems` are lines 1, 2, 3, like QuickBooks' `Line`. On bills, money
+spent and bill payments the contact is a supplier (`vendor_*`), else a
+customer. Drafts, voided and deleted records aren't stored, and a record
+voided later is removed by the next sync.

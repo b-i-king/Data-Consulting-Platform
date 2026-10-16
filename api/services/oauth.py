@@ -131,9 +131,14 @@ def _state_fernet() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-def make_state(provider: str, account_id: str, consultant_id: str | None, verifier: str | None = None) -> str:
-    """Encrypt who is connecting (and the PKCE verifier) into the `state` value."""
-    payload = {"p": provider, "a": account_id, "c": consultant_id, "v": verifier, "n": secrets.token_hex(8)}
+RETURN_PAGES = {"app": "/app", "start": "/start"}   # where the browser goes after sign-in
+
+
+def make_state(provider: str, account_id: str, consultant_id: str | None, verifier: str | None = None,
+               return_to: str = "app") -> str:
+    """Encrypt who is connecting, where to go back (workspace or Get Started) and the PKCE verifier."""
+    payload = {"p": provider, "a": account_id, "c": consultant_id, "v": verifier, "n": secrets.token_hex(8),
+               "r": return_to if return_to in RETURN_PAGES else "app"}
     return _state_fernet().encrypt(json.dumps(payload).encode()).decode()
 
 
@@ -142,7 +147,7 @@ def read_state(state: str) -> dict:
     Open a state ticket.
 
     Returns:
-        dict: {"provider", "account_id", "consultant_id", "verifier"}.
+        dict: {"provider", "account_id", "consultant_id", "verifier", "return_to" ("app" | "start")}.
 
     Raises:
         HTTPException: 400 when it was changed, made by someone else, or is older than 15 minutes.
@@ -153,12 +158,13 @@ def read_state(state: str) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             detail="That sign-in link expired or isn't valid. Please click Connect again.")
     p = json.loads(raw)
-    return {"provider": p["p"], "account_id": p["a"], "consultant_id": p.get("c"), "verifier": p.get("v")}
+    return {"provider": p["p"], "account_id": p["a"], "consultant_id": p.get("c"), "verifier": p.get("v"),
+            "return_to": p.get("r", "app")}
 
 
 # ── Steps 1 and 3 ────────────────────────────────────────────────────────────
 
-def authorize_url(provider: str, account_id: str, consultant_id: str | None = None) -> str:
+def authorize_url(provider: str, account_id: str, consultant_id: str | None = None, return_to: str = "app") -> str:
     """
     The provider's sign-in page address, for "Connect".
 
@@ -166,6 +172,7 @@ def authorize_url(provider: str, account_id: str, consultant_id: str | None = No
         provider: str, "quickbooks", "xero" or "supabase".
         account_id: str, the client (plan holder) the connection is saved on.
         consultant_id: str | None, the consultant connecting it for them.
+        return_to: str, "app" (Settings -> Integrations) or "start" (Get Started).
 
     Returns:
         str: a URL to send the browser to.
@@ -193,7 +200,7 @@ def authorize_url(provider: str, account_id: str, consultant_id: str | None = No
         params["code_challenge_method"] = "S256"
     if p["scope"]:
         params["scope"] = p["scope"]
-    params["state"] = make_state(provider, account_id, consultant_id, verifier)
+    params["state"] = make_state(provider, account_id, consultant_id, verifier, return_to)
     return f"{p['authorize_url']}?{urlencode(params)}"
 
 

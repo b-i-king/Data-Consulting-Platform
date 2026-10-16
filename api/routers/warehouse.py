@@ -45,7 +45,7 @@ from fastapi.responses import StreamingResponse
 from api.core import database
 from api.core.security import get_acting_context
 from api.models.accounts import DeleteStoredIn
-from api.services import account_store, combine, entitlements, warehouse_store
+from api.services import account_store, combine, dedupe, entitlements, warehouse_store
 from api.services.entitlements import plan_holder
 
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
@@ -192,7 +192,9 @@ async def preview_load(
     Returns:
         dict: the LoadPlan (steps with "why", column plan, preview rows,
         round-trip check, counts, fingerprint, ready/problem) plus "storage":
-        {"mode", "consented", "terms_version"}.
+        {"mode", "consented", "terms_version"} and "duplicates": {"records",
+        "of", "record_ids", "sources"} — records already stored from ANOTHER
+        source (api/services/dedupe.py), which the load can skip.
 
     Raises:
         HTTPException: 403 without Data Engineering; 400/404 as in `_plan`.
@@ -207,7 +209,8 @@ async def preview_load(
     target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
                        choices, event_type, combine_spec, target)
-    return {**plan.to_dict(), "storage": await _storage_status(holder), "replacing": target}
+    duplicates = await dedupe.find_duplicates(str(holder["id"]), plan.rows, plan.source_system, plan.source_name)
+    return {**plan.to_dict(), "storage": await _storage_status(holder), "replacing": target, "duplicates": duplicates}
 
 
 @router.post("/load")
@@ -225,6 +228,7 @@ async def accept_and_load(
     event_type: Annotated[str, Form()] = "",
     combine_spec: Annotated[str, Form(alias="combine")] = "{}",
     replace_source: Annotated[str, Form()] = "",
+    skip_duplicates: Annotated[bool, Form()] = False,
 ):
     """
     POST /api/warehouse/load — the client ACCEPTED the preview: load it.
@@ -243,6 +247,8 @@ async def accept_and_load(
         choices, event_type, combine_spec, replace_source: exactly as sent to /preview.
         With replace_source, that source's stored rows are deleted and replaced
         by this upload (in one transaction).
+        skip_duplicates: bool, "load only the new records": records the preview
+        found already stored from another source are left out.
 
     Returns:
         dict: {"load_run": {...}, "result": {"rows_loaded", "rows_updated",
@@ -283,10 +289,13 @@ async def accept_and_load(
         "plan_fingerprint": plan.fingerprint, "status": "running",
         "started_by": str(ctx["consultant"]["account_id"]) if ctx["acting"] else str(ctx["account"]["id"]),
     })
+    skip = None
+    if skip_duplicates:
+        skip = set((await dedupe.find_duplicates(holder_id, plan.rows, plan.source_system, plan.source_name))["record_ids"])
     try:
         result = await warehouse_store.load(holder, plan,
                                             consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
-                                            replace=target is not None)
+                                            replace=target is not None, skip_records=skip)
     except Exception as exc:
         await account_store.save_load_run({"id": run["id"], "status": "failed", "error": str(exc)[:500],
                                            "finished_at": datetime.now(timezone.utc)})

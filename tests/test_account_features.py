@@ -272,3 +272,22 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
     gone = client.delete("/api/connections/supabase", headers=h).json()["connectors"]
     assert next(c for c in gone if c["connector"] == "supabase")["status"] == "not_set_up"
     assert client.get("/api/connections/supabase/tables", headers=h).status_code == 404
+
+
+def test_add_another_source_combines_live_and_file_tables():
+    """
+    "Add another source": a QuickBooks record type (as it arrives from the live
+    reader) and a customer list from a database open together — two tables side
+    by side, matched by customer name although they share no ID.
+    """
+    invoices = "\n".join(["record_id,line_number,transaction_date,customer_name,line_amount",
+                          "Invoice:1,1,2026-01-02,Blue Door Cafe LLC,40", "Invoice:2,1,2026-01-05,Corner Market,25",
+                          "Invoice:3,1,2026-01-09,Blue Door Cafe LLC,15"]).encode()
+    customers = "\n".join(["customer_id,customer,email", "1,Blue Door Cafe,bd@example.com",
+                           "2,Corner Market Inc,cm@example.com"]).encode()
+    res = client.post("/api/files/analyze", files=[("files", ("quickbooks.Invoice.csv", invoices, "text/csv")),
+                                                   ("files", ("public.customers.csv", customers, "text/csv"))])
+    assert res.status_code == 200
+    cat = res.json()["categorization"]
+    assert [g["label"] for g in cat["groups"]] == ["Transactions", "Customers"]
+    assert cat["relationships"][0]["method"] == "fuzzy"

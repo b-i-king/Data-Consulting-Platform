@@ -24,24 +24,27 @@
 //     WITHOUT this step nothing is stored (files are in this tab only), so the
 //     consultant would have to ask for the files again.
 //
-// THE STORE POP-UP: as soon as the account's plan includes Data Engineering
-// (a package with it, once started — "after they paid"), a pop-up opens on its
-// own: "You're storing your data — here's a preview of everything that will be
-// stored", with the load preview for each table (and the option to stack or
-// join tables first). Accept = stored; close = nothing stored (a "Review and
-// store" button stays on the page). Where the data came from decides how hard
-// we push:
-//   * files and business apps (QuickBooks, ...): the pop-up opens on its own —
-//     storing is what Data Engineering is for;
-//   * cloud storage (Snowflake, BigQuery, ...): the data is already structured
-//     and lives somewhere safe, so we RECOMMEND analyzing it in place; storing
-//     is offered as an option (no automatic pop-up).
+// THE STORE POP-UP (files path): as soon as the account's plan includes Data
+// Engineering (a package with it, once started — "after they paid"), a pop-up
+// opens on its own: "You're storing your data — here's a preview of everything
+// that will be stored", with the load preview for each table (and the option to
+// stack or join tables first). Accept = stored; close = nothing stored (a
+// "Review and store" button stays on the page).
+//
+// THE OTHER PATHS (the same rules as the workspace):
+//   * cloud storage: no download and no storing — the data stays in their
+//     database; the workspace opens on the table they previewed.
+//   * business apps (QuickBooks, Xero): no download; with Data Engineering,
+//     "Turn on the stored sync" (storage consent, then the first sync:
+//     api/services/sync.py) — their records are stored on a schedule.
+// On those paths the account was created BEFORE connecting, so this step is
+// already signed in; projects picked on "Your needs" are saved here.
 
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { chooseConsultant, downloadCleaned, getMyServices, startCheckout } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { addMyService, chooseConsultant, downloadCleaned, getMyServices, startCheckout, startSync } from "@/lib/api";
 import AuthForm from "@/components/auth/AuthForm";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
@@ -51,6 +54,7 @@ import type { AccountType, AnalyzeResponse, CleaningInput, ConsultantLoad, Consu
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
 import { packageTotal } from "@/components/billing/PackageBuilder";
 import type { NextPath } from "./StepServices";
+import type { DataSource } from "./StepDataLocation";
 import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 
 const ENGINEERING = "data_engineering";
@@ -72,13 +76,20 @@ export default function StepAccount(props: {
   onSignedIn: (s: Session) => void;
   onSignOut: () => void;
   input: CleaningInput;
-  analysis: AnalyzeResponse;
+  /** The cleaned (files) or previewed (cloud / records) data; null when nothing was previewed. */
+  analysis: AnalyzeResponse | null;
   onBack: () => void;
+  /** Where the data is (StepDataLocation.tsx): decides what this step offers. */
+  source?: DataSource;
+  /** The connected integration on the cloud / business app paths ("supabase", "quickbooks", "xero"). */
+  connector?: string | null;
+  /** Where "Open your workspace" goes (it can open straight on the previewed table). */
+  workspaceHref?: string;
 }) {
   return (
     <section>
       {props.session ? (
-        <NextSteps {...props} session={props.session} />
+        <NextSteps {...props} session={props.session} source={props.source ?? "files"} />
       ) : (
         <AuthForm
           defaultType={props.defaultType}
@@ -102,10 +113,14 @@ export default function StepAccount(props: {
 
 function NextSteps(props: {
   location: string | null;
+  source: DataSource;
+  connector?: string | null;
+  workspaceHref?: string;
+  serviceIds: string[];
   session: Session;
   onSignOut: () => void;
   input: CleaningInput;
-  analysis: AnalyzeResponse;
+  analysis: AnalyzeResponse | null;
   path: NextPath;
   subscription: SubscriptionChoice | null;
   plans: Subscription[];
@@ -138,6 +153,15 @@ function NextSteps(props: {
       .catch((e) => setNote(e instanceof Error ? e.message : "We couldn't load your plan."));
   }, [token, props.wantsConsultant, props.consultantId, props.consultantPlan]);
 
+  // Signed up before "Your needs" (cloud / business app paths): save the projects picked there now.
+  const savedInterests = useRef(false);
+  useEffect(() => {
+    if (props.source === "files" || props.path !== "consultant" || savedInterests.current) return;
+    savedInterests.current = true;
+    const ids = props.serviceIds.filter((id) => id !== "data_cleaning");
+    Promise.all(ids.map((id) => addMyService(token, id).catch(() => null))).catch(() => {});
+  }, [props.source, props.path, props.serviceIds, token]);
+
   const planStarted = (plan?.subscriptions.length ?? 0) > 0;
   const canStore = !!plan?.active.includes(ENGINEERING);
   const consultantName = plan?.account.consultant_name ?? null;
@@ -162,30 +186,24 @@ function NextSteps(props: {
     }
   }
 
-  // The store pop-up: opens on its own once Data Engineering is on (unless the
-  // data is in cloud storage), until it's closed or the data is stored.
-  const cloud = props.location === "cloud_storage";
+  // The store pop-up (files path only): opens on its own once Data Engineering
+  // is on, until it's closed or the data is stored.
+  const files = props.source === "files" && !!props.analysis;
   const [dismissed, setDismissed] = useState(false);
   const [openedByHand, setOpenedByHand] = useState(false);
   const [storedOk, setStoredOk] = useState(false);
-  const showStore = canStore && !storedOk && (openedByHand || (!cloud && !dismissed));
+  const showStore = files && canStore && !storedOk && (openedByHand || !dismissed);
   const forConsultant = props.path === "consultant" ? consultantName : null;
 
-  const download = <DownloadBox {...props} included={!!plan?.downloads_included} />;
-  const store = canStore && (
+  const download = files && props.analysis && (
+    <DownloadBox {...props} analysis={props.analysis} included={!!plan?.downloads_included} />
+  );
+  const store = files && canStore && (
     <Card className="mb-4 border-brand/40">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm">
           {storedOk ? (
             <strong>Your data is stored. ✓ {forConsultant ? `${forConsultant} can open it now.` : "It opens in your workspace."}</strong>
-          ) : cloud ? (
-            <>
-              <strong>Your data is in cloud storage — we recommend analyzing it where it is.</strong>
-              <span className="block text-xs text-ink-muted">
-                It&apos;s already structured, so every service (analysis, dashboards, ML) can work on it directly. You can
-                still store a copy here if you&apos;d like.
-              </span>
-            </>
           ) : (
             <>
               <strong>Store your cleaned data{forConsultant ? ` so ${forConsultant} can open it` : ""}.</strong>
@@ -194,9 +212,7 @@ function NextSteps(props: {
           )}
         </div>
         {!storedOk && (
-          <Button variant={cloud ? "secondary" : "primary"} onClick={() => setOpenedByHand(true)}>
-            {cloud ? "Store a copy anyway" : "Review and store"}
-          </Button>
+          <Button onClick={() => setOpenedByHand(true)}>Review and store</Button>
         )}
       </div>
     </Card>
@@ -259,18 +275,35 @@ function NextSteps(props: {
       )}
       {note && <p className="mb-4 text-sm" role="status">{note}</p>}
 
-      {/* Storing comes first (when the plan includes it), then the download. */}
-      {store ||
+      {/* Files: storing comes first (when the plan includes it), then the download. */}
+      {files && (store ||
         (props.path === "consultant" && (
           <Card className="mb-4 text-sm text-ink-muted">
             Sharing your data with your consultant needs Data Engineering in your package (the tools are paid here; your
             consultant&apos;s time on Cal.com). Meanwhile you can download it below.
           </Card>
-        ))}
-      <h2 className="mb-2 mt-6 font-semibold">{store ? "Want a copy too?" : "Download"}</h2>
-      {download}
+        )))}
+      {files && (
+        <>
+          <h2 className="mb-2 mt-6 font-semibold">{store ? "Want a copy too?" : "Download"}</h2>
+          {download}
+        </>
+      )}
 
-      {showStore && (
+      {/* Cloud: the data stays where it is. */}
+      {props.source === "cloud" && (
+        <Card className="mb-4 text-sm">
+          <strong>Your data stays in your database.</strong> Your workspace opens on the table you previewed
+          {forConsultant ? `, and ${forConsultant} sees the same connection` : ""}. Nothing is copied.
+        </Card>
+      )}
+
+      {/* Business apps: the stored sync, with Data Engineering. */}
+      {props.source === "business" && props.connector && (
+        <SyncBox token={token} connector={props.connector} canStore={canStore} planStarted={planStarted} />
+      )}
+
+      {showStore && props.analysis && (
         <StoreDialog
           onClose={() => {
             setDismissed(true);
@@ -284,7 +317,7 @@ function NextSteps(props: {
 
       <p className="mt-6 text-sm text-ink-muted">
         Signed in as {props.session.account.email}.{" "}
-        <Link href="/app" className="text-brand hover:underline">
+        <Link href={props.workspaceHref ?? "/app"} className="text-brand hover:underline">
           Open your workspace
         </Link>{" "}
         ·{" "}
@@ -293,6 +326,64 @@ function NextSteps(props: {
         </button>
       </p>
     </>
+  );
+}
+
+/**
+ * Business apps: "Turn on the stored sync" — Data Engineering stores the
+ * records on the refresh schedule (daily by default), after the storage
+ * consent. The first sync runs now (api/routers/connections.py sync).
+ */
+function SyncBox(props: { token: string; connector: string; canStore: boolean; planStarted: boolean }) {
+  const name = props.connector === "xero" ? "Xero" : "QuickBooks";
+  const [consent, setConsent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function turnOn() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await startSync(props.token, props.connector, consent);
+      setResult(
+        `Stored: ${fmtInt(r.sync.rows_loaded)} new rows from ${fmtInt(r.sync.records)} records` +
+          (r.sync.complete ? "." : " so far — the rest follows on the next sync (daily limits).") +
+          (r.sync.duplicates_elsewhere ? ` ${fmtInt(r.sync.duplicates_elsewhere)} of them were already in your uploaded files.` : ""),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't start the sync.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="mb-4 space-y-3 border-brand/40 text-sm">
+      <strong>Store your {name} records on a schedule</strong>
+      {!props.canStore ? (
+        <p className="text-ink-muted">
+          The quick look stays free. To keep your full history — trends over the years, combining {name} with your
+          other sources — add Data Engineering to your package{props.planStarted ? "" : " above"}.
+        </p>
+      ) : result ? (
+        <p role="status" className="text-good">{result} It refreshes daily; change that in Settings → Integrations.</p>
+      ) : (
+        <>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" />
+            <span>
+              Yes, store my {name} data in my account (the{" "}
+              <Link href="/storage-terms" className="text-brand underline">storage terms</Link>). I can delete it anytime.
+            </span>
+          </label>
+          <Button disabled={busy} onClick={turnOn}>
+            {busy ? "Storing…" : "Turn on the stored sync"}
+          </Button>
+        </>
+      )}
+      <ErrorBox message={error} />
+    </Card>
   );
 }
 

@@ -247,8 +247,82 @@ FILE_UPLOAD_FIELD_MAP: dict[str, FieldSpec] = {
     "notes":           ("memo", "text", None, None, None),
 }
 
+# ── Xero ─────────────────────────────────────────────────────────────────────
+# endpoint -> how its items become events. The item's type field decides the
+# event; types not listed (transfers, overpayments, prepayments) are not stored.
+# `vendor_types`: the contact on these is a supplier, so Contact.* becomes
+# vendor_* instead of customer_*.
+XERO_ENDPOINTS: dict[str, dict] = {
+    "Invoices": {"record": "Invoice", "id": "InvoiceID", "type_field": "Type", "vendor_types": {"ACCPAY"},
+                 "events": {"ACCREC": ("invoice", "sent"), "ACCPAY": ("invoice", "received")}},
+    "BankTransactions": {"record": "BankTransaction", "id": "BankTransactionID", "type_field": "Type",
+                         "vendor_types": {"SPEND"},
+                         "events": {"RECEIVE": ("transaction", "income"), "SPEND": ("transaction", "expense")}},
+    "Payments": {"record": "Payment", "id": "PaymentID", "type_field": "PaymentType", "vendor_types": {"ACCPAYPAYMENT"},
+                 "events": {"ACCRECPAYMENT": ("transaction", "income"), "ACCPAYPAYMENT": ("invoice", "paid")}},
+}
+# Statuses that mean "this record no longer counts": not stored, and removed if it was.
+XERO_GONE_STATUSES = {"DELETED", "VOIDED", "DRAFT"}
+# API bookkeeping and nested lists we don't store (paths without list positions).
+XERO_SKIP = ("HasAttachments", "HasErrors", "IsDiscounted", "Payments", "CreditNotes", "Prepayments",
+             "Overpayments", "BrandingThemeID", "Url", "SentToContact", "ValidationErrors", "Warnings",
+             "StatusAttributeString", "Contact.Addresses", "Contact.Phones", "Contact.ContactGroups",
+             "Contact.ContactPersons", "Contact.HasValidationErrors", "Contact.ContactStatus",
+             "LineItems.Tracking", "LineItems.ValidationErrors", "Invoice.Contact.Addresses",
+             "Invoice.Contact.Phones", "Invoice.Payments", "Invoice.CreditNotes", "Invoice.Prepayments",
+             "Invoice.Overpayments", "Invoice.LineItems", "Account", "HasAccount")
+
+XERO_FIELD_MAP: dict[str, FieldSpec] = {
+    "InvoiceID":            ("source_record_id", "text", None, None, None),
+    "BankTransactionID":    ("source_record_id", "text", None, None, None),
+    "PaymentID":            ("source_record_id", "text", None, None, None),
+    "InvoiceNumber":        ("reference_number", "text", None, None, None),
+    "Reference":            ("reference_note", "text", None, None, None),
+    "Type":                 ("xero_type", "text", None, None, None),
+    "PaymentType":          ("xero_type", "text", None, None, None),
+    "Status":               ("status", "text", None, None, None),
+    "DateString":           ("transaction_date", "date", None, None, None),
+    "DueDateString":        ("due_date", "date", None, None, None),
+    "CurrencyCode":         ("currency", "text", None, None, None),
+    "CurrencyRate":         ("exchange_rate", "number", "rate", "exchange", "ratio"),
+    "LineAmountTypes":      ("line_amount_types", "text", None, None, None),
+    "SubTotal":             ("subtotal_amount", "number", "amount", "subtotal", "usd"),
+    "TotalTax":             ("tax_amount", "number", "tax", None, "usd"),
+    "Total":                ("total_amount", "number", "amount", "total", "usd"),
+    "AmountDue":            ("balance_due", "number", "balance", "due", "usd"),
+    "AmountPaid":           ("amount_paid", "number", "amount", "paid", "usd"),
+    "AmountCredited":       ("amount_credited", "number", "amount", "credited", "usd"),
+    "Amount":               ("payment_amount", "number", "amount", "payment", "usd"),
+    "Contact.ContactID":    ("customer_source_id", "text", None, None, None),
+    "Contact.Name":         ("customer_name", "text", None, None, None),
+    "Contact.EmailAddress": ("customer_email", "text", None, None, None),
+    "Invoice.InvoiceID":    ("linked_txn_id", "text", None, None, None),
+    "Invoice.InvoiceNumber": ("linked_reference_number", "text", None, None, None),
+    "Invoice.Contact.ContactID": ("customer_source_id", "text", None, None, None),
+    "Invoice.Contact.Name": ("customer_name", "text", None, None, None),
+    "BankAccount.AccountID": ("payment_account_id", "text", None, None, None),
+    "BankAccount.Name":     ("payment_account_name", "text", None, None, None),
+    "IsReconciled":         ("is_reconciled", "boolean", None, None, None),
+    "UpdatedDateUTC":       ("source_updated_at", "timestamp", None, None, None),
+    "LineItems.LineItemID": ("line_source_id", "text", None, None, None),
+    "LineItems.Description": ("line_description", "text", None, None, None),
+    "LineItems.Quantity":   ("quantity", "number", "quantity", None, "count"),
+    "LineItems.UnitAmount": ("unit_price", "number", "price", "unit", "usd"),
+    "LineItems.LineAmount": ("line_amount", "number", "amount", "line", "usd"),
+    "LineItems.TaxAmount":  ("line_tax_amount", "number", "tax", "line", "usd"),
+    "LineItems.DiscountRate": ("discount_percent", "number", "discount", None, "percent"),
+    "LineItems.ItemCode":   ("item_source_id", "text", None, None, None),
+    "LineItems.Item.Name":  ("item_name", "text", None, None, None),
+    "LineItems.AccountCode": ("account_code", "text", None, None, None),
+    "LineItems.TaxType":    ("tax_code", "text", None, None, None),
+}
+# On a bill, money spent or a bill payment, the contact is a SUPPLIER.
+_XERO_VENDOR_FIELDS = {"Contact.ContactID": "vendor_source_id", "Contact.Name": "vendor_name",
+                       "Contact.EmailAddress": "vendor_email", "Invoice.Contact.ContactID": "vendor_source_id",
+                       "Invoice.Contact.Name": "vendor_name"}
+
 # system name (fact.account_data.source_system, fact.field_map.system) -> its map.
-FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP}
+FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP, "xero": XERO_FIELD_MAP}
 
 # ── Guessing metrics nobody mapped ──────────────────────────────────────────
 # (word in the name) -> (metric_type, metric_unit, subtype when the word itself
@@ -854,6 +928,56 @@ def _field_name_for(lookup_path: str, indexes: list[int], field_map: dict) -> tu
     return name, spec
 
 
+def _flatten_lines(*, record_id: str, event_type: str, event_subtype: str, event_date: Any,
+                   source_modified_at: Any, currency: str | None, expense: str | None,
+                   groups: list[tuple[int, dict, list[str]]], fmap: dict,
+                   skip: tuple[str, ...] = ()) -> list[dict]:
+    """
+    The unified rows of one API object, line by line (shared by QuickBooks and Xero).
+
+    Args:
+        record_id, event_type, event_subtype, event_date, source_modified_at: the record's identity.
+        currency: the record's currency code ("USD", "CAD"), for metric units.
+        expense: _expense_context(...) for the record.
+        groups: [(line_number, content, path prefix)] — the header is line 0,
+            each item of the line list ("Line" / "LineItems") line 1, 2, 3.
+        fmap: source path -> FieldSpec.
+        skip: path prefixes that are API bookkeeping, not business data.
+
+    Returns:
+        list[dict]: rows with the UNIFIED_COLUMNS keys.
+    """
+    rows: list[dict] = []
+    for line_number, content, prefix in groups:
+        attributes: dict[str, Any] = {}
+        metrics: list[dict] = []
+        used: set[str] = set()       # field names already used on this line
+        for lookup_path, source_field, indexes, value in _walk(content, prefix, []):
+            if _is_missing(value) or lookup_path.startswith(skip):
+                continue
+            name, spec = _field_name_for(lookup_path, indexes, fmap)
+            if name in used:         # two paths mapped to one name: keep both
+                name, spec = snake_case(source_field), None
+            used.add(name)
+            kind, typed = _typed_value(value, spec[1] if spec else _infer_type(value))
+            # A metric: a number the map calls a metric, or an unmapped number
+            # whose name doesn't look like an ID ("LineNum" is mapped as NOT a metric).
+            is_metric = kind == "number" and (
+                spec[2] is not None if spec else not ID_NAME.search(snake_case(lookup_path.split(".")[-1])))
+            if not is_metric:
+                attributes[name] = typed
+                continue
+            # Unmapped: guess from the path's last part ("TaxPercent"), not the whole path.
+            meta = _describe(spec, lookup_path.split(".")[-1], expense=expense, currency=currency, override=None)
+            metrics.append({"field_name": name, "source_field": source_field, "type": meta["type"],
+                            "subtype": meta["subtype"], "unit": meta["unit"], "value": typed,
+                            "mapped": spec is not None})
+        rows += _line_rows(record_id=record_id, line_number=line_number, event_type=event_type,
+                           event_subtype=event_subtype, event_date=event_date,
+                           source_modified_at=source_modified_at, attributes=attributes, metrics=metrics)
+    return rows
+
+
 def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = None) -> list[dict]:
     """
     Turn one QuickBooks Online API object into unified rows (one per metric).
@@ -906,35 +1030,9 @@ def flatten_quickbooks(entity_name: str, obj: dict, *, field_map: dict | None = 
     groups = [(0, header, [])]
     groups += [(n, line, ["Line"]) for n, line in enumerate(obj.get("Line") or [], start=1)]
 
-    rows: list[dict] = []
-    for line_number, content, prefix in groups:
-        attributes: dict[str, Any] = {}
-        metrics: list[dict] = []
-        used: set[str] = set()       # field names already used on this line
-        for lookup_path, source_field, indexes, value in _walk(content, prefix, []):
-            if _is_missing(value):
-                continue
-            name, spec = _field_name_for(lookup_path, indexes, fmap)
-            if name in used:         # two paths mapped to one name: keep both
-                name, spec = snake_case(source_field), None
-            used.add(name)
-            kind, typed = _typed_value(value, spec[1] if spec else _infer_type(value))
-            # A metric: a number the map calls a metric, or an unmapped number
-            # whose name doesn't look like an ID ("LineNum" is mapped as NOT a metric).
-            is_metric = kind == "number" and (
-                spec[2] is not None if spec else not ID_NAME.search(snake_case(lookup_path.split(".")[-1])))
-            if not is_metric:
-                attributes[name] = typed
-                continue
-            # Unmapped: guess from the path's last part ("TaxPercent"), not the whole path.
-            meta = _describe(spec, lookup_path.split(".")[-1], expense=expense, currency=currency, override=None)
-            metrics.append({"field_name": name, "source_field": source_field, "type": meta["type"],
-                            "subtype": meta["subtype"], "unit": meta["unit"], "value": typed,
-                            "mapped": spec is not None})
-        rows += _line_rows(record_id=record_id, line_number=line_number, event_type=event_type,
-                           event_subtype=event_subtype, event_date=event_date,
-                           source_modified_at=source_modified_at, attributes=attributes, metrics=metrics)
-    return rows
+    return _flatten_lines(record_id=record_id, event_type=event_type, event_subtype=event_subtype,
+                          event_date=event_date, source_modified_at=source_modified_at, currency=currency,
+                          expense=expense, groups=groups, fmap=fmap)
 
 
 def quickbooks_response_to_unified(response: dict) -> pd.DataFrame:
@@ -963,6 +1061,107 @@ def quickbooks_response_to_unified(response: dict) -> pd.DataFrame:
         if entity_name in QUICKBOOKS_ENTITIES and isinstance(objects, list):
             for obj in objects:
                 rows.extend(flatten_quickbooks(entity_name, obj))
+    return _to_frame(rows)
+
+
+_XERO_MS_DATE = re.compile(r"^/Date\((-?\d+)([+-]\d{4})?\)/$")
+
+
+def _xero_plain(value: Any, key: str = "") -> Any:
+    """
+    Xero's "/Date(1767225600000+0000)/" values as ISO text (a timestamp for
+    *DateUTC fields, else a date), throughout nested JSON; everything else as is.
+
+    Example:
+        >>> _xero_plain({"Date": "/Date(1767225600000+0000)/"})
+        {'Date': '2026-01-01'}
+    """
+    if isinstance(value, dict):
+        return {k: _xero_plain(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_xero_plain(v, key) for v in value]
+    if isinstance(value, str):
+        m = _XERO_MS_DATE.match(value)
+        if m:
+            moment = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc)
+            return moment.isoformat() if key.endswith("UTC") else moment.date().isoformat()
+    return value
+
+
+def xero_event(endpoint: str, obj: dict) -> tuple[str, str] | None:
+    """The (event_type, event_subtype) of one Xero item, or None when it isn't stored (a transfer, a draft...)."""
+    spec = XERO_ENDPOINTS[endpoint]
+    if str(obj.get("Status", "")).upper() in XERO_GONE_STATUSES:
+        return None
+    return spec["events"].get(str(obj.get(spec["type_field"], "")).upper())
+
+
+def xero_record_id(endpoint: str, obj: dict) -> str:
+    """'Invoice:<InvoiceID>' — Xero IDs are only unique within one kind of record."""
+    spec = XERO_ENDPOINTS[endpoint]
+    return f"{spec['record']}:{obj[spec['id']]}"
+
+
+def flatten_xero(endpoint: str, obj: dict, *, field_map: dict | None = None) -> list[dict]:
+    """
+    Turn one Xero API item (an invoice, bank transaction or payment) into unified rows.
+
+    Like flatten_quickbooks: header fields are line 0, the n-th of `LineItems`
+    is line n; mapped names come from XERO_FIELD_MAP, unknown fields are kept
+    under a snake_case name. The contact is a customer (sales) or a supplier
+    (bills, money spent, bill payments). Xero's /Date(...)/ values become
+    ISO dates; "Date" / "DueDate" are skipped when their *String twin exists.
+
+    Args:
+        endpoint: "Invoices", "BankTransactions" or "Payments" (XERO_ENDPOINTS).
+        obj: one item of the response list.
+
+    Returns:
+        list[dict]: rows with the UNIFIED_COLUMNS keys; [] for an item that is
+        not stored (xero_event is None).
+
+    Example:
+        >>> rows = flatten_xero("Invoices", {"InvoiceID": "a1", "Type": "ACCREC", "Status": "PAID",
+        ...     "DateString": "2026-02-01T00:00:00", "Total": 108.0, "Contact": {"Name": "Blue Door Cafe"},
+        ...     "LineItems": [{"LineAmount": 100.0}]})
+        >>> [(r["line_number"], r["field_name"]) for r in rows]
+        [(0, 'total_amount'), (1, 'line_amount')]
+    """
+    if endpoint not in XERO_ENDPOINTS:
+        raise ValueError(f"Unknown Xero endpoint {endpoint!r}; known: {sorted(XERO_ENDPOINTS)}")
+    event = xero_event(endpoint, obj)
+    if event is None:
+        return []
+    obj = _xero_plain(obj)
+    for twin in ("Date", "DueDate"):
+        if f"{twin}String" in obj:
+            obj = {k: v for k, v in obj.items() if k != twin}
+    spec = XERO_ENDPOINTS[endpoint]
+    fmap = dict(XERO_FIELD_MAP if field_map is None else field_map)
+    if str(obj.get(spec["type_field"], "")).upper() in spec["vendor_types"]:
+        for path, name in _XERO_VENDOR_FIELDS.items():
+            if path in fmap:
+                fmap[path] = (name, *fmap[path][1:])
+    event_type, event_subtype = event
+    raw_date = obj.get("DateString") or obj.get("Date")
+    event_date = None if _is_missing(raw_date) else _typed_value(str(raw_date)[:10], "date")[1]
+    raw_updated = obj.get("UpdatedDateUTC")
+    source_modified_at = None if _is_missing(raw_updated) else _typed_value(raw_updated, "timestamp")[1]
+    header = {k: v for k, v in obj.items() if k != "LineItems"}
+    groups = [(0, header, [])]
+    groups += [(n, line, ["LineItems"]) for n, line in enumerate(obj.get("LineItems") or [], start=1)]
+    return _flatten_lines(record_id=xero_record_id(endpoint, obj), event_type=event_type,
+                          event_subtype=event_subtype, event_date=event_date,
+                          source_modified_at=source_modified_at, currency=obj.get("CurrencyCode"),
+                          expense=_expense_context(event_type, event_subtype, []), groups=groups, fmap=fmap,
+                          skip=XERO_SKIP)
+
+
+def xero_response_to_unified(endpoint: str, items: list[dict]) -> pd.DataFrame:
+    """Flatten a list of Xero items from one endpoint into one unified DataFrame (unstored types skipped)."""
+    rows: list[dict] = []
+    for obj in items:
+        rows.extend(flatten_xero(endpoint, obj))
     return _to_frame(rows)
 
 

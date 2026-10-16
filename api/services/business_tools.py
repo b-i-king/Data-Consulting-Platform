@@ -51,7 +51,7 @@ import asyncio
 import re
 import time
 from collections import Counter, defaultdict, deque
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 from fastapi import HTTPException, status
@@ -62,6 +62,7 @@ from api.services.cloud_sources import csv_within
 from api.services.unified import quickbooks_response_to_unified, unified_to_wide
 
 LIVE_MAX_ROWS = 20_000      # records per open (provider APIs are paged and rate limited)
+QUICK_LOOK_DAYS = 365       # the free quick look covers the last 12 months; longer history = the stored sync
 QB_PAGE = 1000              # QuickBooks' largest page
 XERO_PAGE = 1000            # Xero's largest page (pageSize)
 QB_MINOR_VERSION = "75"     # QuickBooks API version (older ones are retired)
@@ -258,6 +259,28 @@ class CallMeter:
             return self._used_up()
         return HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                              detail=f"{self.name} asked us to slow down. Please try again in a minute.")
+
+
+async def meter_for(connector: str, row: dict, creds: dict) -> CallMeter:
+    """
+    The call meter for one connected company, with today's count (its
+    dim.data_connections row) and this month's app-wide count (dim.api_usage).
+    """
+    from api.services import account_store
+
+    company = creds["extra"]["tenant_id"] if connector == "xero" else creds["extra"]["realm_id"]
+    month = datetime.now(timezone.utc).date().replace(day=1)
+    return CallMeter(connector, company, row.get("api_calls_day"), row.get("api_calls_count") or 0,
+                     await account_store.get_api_usage(connector, month))
+
+
+async def save_meter(row: dict, meter: CallMeter) -> None:
+    """Save today's count on the connection and add this request's calls to the month (also after a failure)."""
+    from api.services import account_store
+
+    if meter.changed:
+        await account_store.save_api_usage(str(row["account_id"]), row["connector"], meter.day, meter.used)
+    await account_store.add_api_usage(row["connector"], meter.month, meter.request_calls)
 
 
 # ############################################################################
@@ -599,13 +622,30 @@ def xero_frame(items: list[dict]) -> pd.DataFrame:
 # One front door for the router
 # ############################################################################
 
-def _dates(start: date | None, end: date | None) -> tuple[date, date]:
-    """Default period: this year so far. Refuses a start after the end."""
+def quick_look_earliest(today: date | None = None) -> date:
+    """The earliest date the FREE quick look covers: 12 months back. Older history needs the stored sync."""
+    return (today or datetime.now(timezone.utc).date()) - timedelta(days=QUICK_LOOK_DAYS)
+
+
+def _dates(start: date | None, end: date | None) -> tuple[date, date, bool]:
+    """
+    The period to read: default this year so far, never before the last 12
+    months (free quick look) and never after today.
+
+    Returns:
+        tuple[date, date, bool]: (start, end, True when the start was moved up to 12 months ago).
+
+    Raises:
+        HTTPException: 400 when the start is after the end.
+    """
     today = datetime.now(timezone.utc).date()
-    start, end = start or date(today.year, 1, 1), end or today
+    earliest = quick_look_earliest(today)
+    start, end = start or max(date(today.year, 1, 1), earliest), min(end or today, today)
+    limited = start < earliest
+    start = max(start, earliest)
     if start > end:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="The start date is after the end date.")
-    return start, end
+    return start, end, limited
 
 
 async def quick_look(provider: str, company: str, token: str, extra: dict,
@@ -614,7 +654,8 @@ async def quick_look(provider: str, company: str, token: str, extra: dict,
     The quick look for a connected QuickBooks or Xero (live, nothing stored).
 
     Returns:
-        dict: {"source", "company", "start", "end", "currency", "estimate", "basis",
+        dict: {"source", "company", "start", "end", "earliest" (12 months back: the free quick
+        look's limit), "history_limited" (the asked-for start was earlier), "currency", "estimate", "basis",
         "totals": {"income", "expenses", "net_income", "owed_to_you", "you_owe"},
         "monthly": [{"month", "income", "expenses", "net"}], "top_customers": [{"name", "amount"}],
         "stored": False}.
@@ -623,7 +664,7 @@ async def quick_look(provider: str, company: str, token: str, extra: dict,
         >>> (await quick_look("quickbooks", "Bakery", tok, {"realm_id": "123"}))["totals"]["income"]
         18210.5
     """
-    start, end = _dates(start, end)
+    start, end, limited = _dates(start, end)
     if provider == "quickbooks":
         body = await qb_quick_look(token, extra["realm_id"], start, end, meter)
     elif provider == "xero":
@@ -631,7 +672,8 @@ async def quick_look(provider: str, company: str, token: str, extra: dict,
     else:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No quick look for that integration.")
     return {"source": oauth.PROVIDERS[provider]["name"], "company": company, "start": start.isoformat(),
-            "end": end.isoformat(), "stored": False, **body}
+            "end": end.isoformat(), "stored": False, "earliest": quick_look_earliest().isoformat(),
+            "history_limited": limited, **body}
 
 
 async def list_datasets(provider: str, token: str, extra: dict, meter: CallMeter | None = None) -> list[dict]:

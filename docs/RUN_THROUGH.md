@@ -266,6 +266,30 @@ Made a mistake? The card's **History** has **undo** on a confirmed free call.
   goals, key questions). Then Dashboard → **+ Add tab** → pick suggested
   questions (yours, asked often, for your industry) → Save.
 
+## Step 8c — Get Started paths, stored sync, customers across sources
+
+1. **Files path:** `/start` → Files on my computer → Upload → Clean & preview → Your needs → Next steps (unchanged).
+2. **Cloud path:** `/start` → Cloud storage → **Supabase / PostgreSQL** ("connect now") → create the
+   account → paste a connection string (or Sign in with Supabase) → "Preview this table" → the
+   read-only report → Your needs ("Just download" is grayed out, with a note) → Next steps →
+   "Open your workspace" opens on that table.
+3. **Business app path** (needs Xero or QuickBooks keys): `/start` → Business apps → **Xero** →
+   account → Connect (Xero's sign-in, then back to `/start`) → Quick look (last 12 months) →
+   optionally preview a record type → Your needs → Next steps → with Data Engineering,
+   "Turn on the stored sync".
+4. **Add another source:** in the workspace, with a file open → "Add another source" → a database
+   table or Xero records → both open as tabs, with "can be matched by name".
+5. **Customers once:** load a file with customer names; sync QuickBooks with the same customers →
+   Settings → Integrations shows no duplicates of them; a near-match ("Corner Market ATL") appears
+   under "Is this the same customer?". In SQL: `SELECT * FROM fact.entities` — one row each.
+6. **Moving around:** every page but the first has "← Previous"; from the third page on there is
+   "« First step" (answers kept); every page but the first and the last has "Skip to download".
+   With a cleaned file it goes straight to Next steps (just download); on the cloud or app path,
+   or before uploading, it goes to Upload first and then straight to the download.
+7. **Duplicates:** upload an export of invoices QuickBooks already synced → the preview says
+   "N of these records are already stored from QuickBooks Online"; accept with "load only the new
+   records" → only the new ones are stored.
+
 ## Step 9 — Is the database right?
 
 ```bash

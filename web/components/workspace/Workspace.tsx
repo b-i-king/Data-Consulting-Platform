@@ -26,6 +26,12 @@
 //     data the cleaning page is a REPORT ONLY (what's missing, what looks off
 //     — fix it at the source) and "Load into database" is switched off.
 //   Every other page without data open sends you to Data Cleaning.
+//   "ADD ANOTHER SOURCE" (AddSourceDialog.tsx, next to "Change data") opens a
+//   second source NEXT TO the open data — a file, stored data, a cloud table
+//   or QuickBooks / Xero records — combined in this tab, never stored. The
+//   stricter rule wins: any cloud or live source makes it all report-only,
+//   with storing off. Same-column tables are stacked; the others become tabs,
+//   with how they relate (shared IDs, or names matched across sources).
 //
 // Each service page has its skills as TABS at the top (like Streamlit) and
 // opens on its primary view: Data Cleaning = the cleaning report (+ download);
@@ -50,6 +56,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import AddSourceDialog, { type AddedSource, type SourceKind } from "./AddSourceDialog";
 import {
   analyzeFiles,
   downloadCleaned,
@@ -187,6 +194,9 @@ export default function Workspace() {
   // Data for this visit (never stored on the server unless the client stores it).
   const [files, setFiles] = useState<File[]>([]);
   const [origin, setOrigin] = useState<Origin>("file");
+  // What each open file is (by file name): its kind and a label for the header.
+  const [sourceInfo, setSourceInfo] = useState<Record<string, { kind: SourceKind; label: string }>>({});
+  const [adding, setAdding] = useState(false); // the "Add another source" dialog
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [columnActions, setColumnActions] = useState<ColumnActions>({});
   const [columnNames, setColumnNames] = useState<ColumnNames>({});
@@ -197,6 +207,8 @@ export default function Workspace() {
   const [stored, setStored] = useState<WarehouseCounts | null>(null);
   const [cloudTables, setCloudTables] = useState<CloudTable[] | null>(null); // only tables with rows
   const [cloudNote, setCloudNote] = useState<string | null>(null); // "the first 100,000 rows" when cut short
+  // Get Started's cloud path ends with "Open your workspace" on the table it previewed (?open_table=).
+  const pendingTable = useRef<CloudTable | null>(null);
   const [cloudFrom, setCloudFrom] = useState("From your database"); // or "Live from QuickBooks"
   // Back from a provider's sign-in (QuickBooks, Xero, Supabase): what happened.
   const [integrationNotice, setIntegrationNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -267,6 +279,15 @@ export default function Workspace() {
       setReturnNote("Payment canceled — nothing was charged.");
       setAccountTab("billing");
     }
+    // From Get Started's last step: open Integrations (business apps), or the
+    // cloud table that was previewed (opened once the session is ready, below).
+    if (q.get("show") === "integrations") setAccountTab("integrations");
+    const table = q.get("open_table");
+    if (table && table.includes(".")) {
+      const [schema, ...rest] = table.split(".");
+      pendingTable.current = { schema, name: rest.join("."), kind: "table", rows_estimate: 0, has_rows: true };
+    }
+    if (q.get("show") || table) window.history.replaceState(null, "", window.location.pathname);
     // Back from "Connect QuickBooks / Xero / Supabase" (api/routers/connections.py oauth_callback).
     const integration = q.get("integration");
     if (integration) {
@@ -289,6 +310,7 @@ export default function Workspace() {
 
   function clearData() {
     setFiles([]);
+    setSourceInfo({});
     setAnalysis(null);
     setColumnActions({});
     setColumnNames({});
@@ -332,13 +354,14 @@ export default function Workspace() {
       .catch(() => setCloudTables(null)); // 404 = no database connected
   }, [session, planAccountId]);
 
-  async function clean(chosen: File[], from: Origin) {
+  async function clean(chosen: File[], from: Origin, info?: Record<string, { kind: SourceKind; label: string }>) {
     setResults({}); // new data: earlier skill results no longer apply
     setBusy(true);
     setError(null);
     try {
       setFiles(chosen);
       setOrigin(from);
+      setSourceInfo(info ?? Object.fromEntries(chosen.map((f) => [f.name, { kind: from, label: f.name }])));
       setColumnActions({});
       setColumnNames({});
       setTransforms({});
@@ -350,6 +373,25 @@ export default function Workspace() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // "Add another source": the new source joins the open files; the stricter rule wins.
+  function addSources(added: AddedSource[]) {
+    const names = new Set(files.map((f) => f.name));
+    const renamed = added.map((a) => {
+      // Two sources with the same file name would collide: "sales.csv" -> "sales (2).csv".
+      let name = a.file.name;
+      for (let i = 2; names.has(name); i++) name = a.file.name.replace(/(\.[^.]*)?$/, (ext) => ` (${i})${ext}`);
+      names.add(name);
+      return { ...a, file: name === a.file.name ? a.file : new File([a.file], name, { type: a.file.type }) };
+    });
+    const info = { ...sourceInfo, ...Object.fromEntries(renamed.map((a) => [a.file.name, { kind: a.kind, label: a.label }])) };
+    const kinds = Object.values(info).map((i) => i.kind);
+    const merged: Origin = kinds.includes("cloud") ? "cloud" : kinds.includes("stored") ? "stored" : "file";
+    if (merged === "cloud") setCloudFrom("Combined sources (read live, not stored)");
+    setCloudNote(null);
+    setAdding(false);
+    void clean([...files, ...renamed.map((a) => a.file)], merged, info);
   }
 
   // "Use my stored data": the stored table comes back as a CSV file and is
@@ -414,6 +456,17 @@ export default function Workspace() {
     // Runs when the stored-data summary arrives; openStored itself is recreated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stored, planAccountId]);
+
+  // Open the table Get Started previewed (instead of the latest stored upload).
+  useEffect(() => {
+    if (!session || !planAccountId || !pendingTable.current) return;
+    const t = pendingTable.current;
+    pendingTable.current = null;
+    autoOpened.current.add(planAccountId);
+    void Promise.resolve().then(() => openCloud(t));
+    // openCloud is recreated every render; this runs once the account is known.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, planAccountId]);
 
   // The left pane, in the hierarchy's order. With data (open, stored or in the
   // cloud) the Dashboard leads; without any, Data Cleaning leads.
@@ -724,9 +777,13 @@ export default function Workspace() {
           {analysis && !accountTab && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-xs text-ink-muted">
-                {cloud ? cloudFrom : origin === "stored" ? "Stored data" : "Your files"}: {files.map((f) => f.name).join(", ")}
+                {Object.keys(sourceInfo).length > 1 ? "Sources" : cloud ? cloudFrom : origin === "stored" ? "Stored data" : "Your files"}:{" "}
+                {files.map((f) => sourceInfo[f.name]?.label ?? f.name).join(", ")}
                 {cloud && cloudNote && ` — ${cloudNote}`}
               </span>
+              <Button variant="secondary" disabled={busy} onClick={() => setAdding(true)}>
+                Add another source
+              </Button>
               <Button variant="secondary" onClick={() => { clearData(); goTo(CLEANING); }}>
                 Change data
               </Button>
@@ -816,6 +873,10 @@ export default function Workspace() {
               onChanged={reloadPlan} suggestTool={suggestTool} />
           </>
         )}
+        {adding && session && (
+          <AddSourceDialog token={session.token} stored={stored} cloudTables={cloudTables}
+            openNames={files.map((f) => f.name)} onAdd={addSources} onClose={() => setAdding(false)} />
+        )}
         {accountTab === "integrations" && (
           <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_add}
             onOpenTable={openCloud} onOpenLive={openLive} notice={integrationNotice} />
@@ -884,6 +945,16 @@ export default function Workspace() {
                     }`}>
                     {g.label}
                   </button>
+                ))}
+              </div>
+            )}
+            {/* How the open tables relate: 🔗 a shared ID, ≈ customers matched by name / email / phone. */}
+            {analysis.groups.length > 1 && analysis.categorization.relationships.length > 0 && (
+              <div className="space-y-1 text-sm">
+                {analysis.categorization.relationships.map((r) => (
+                  <p key={`${r.left_group}-${r.right_group}`}>
+                    <span aria-hidden>{r.method === "fuzzy" ? "≈" : "🔗"}</span> {r.description}
+                  </p>
                 ))}
               </div>
             )}

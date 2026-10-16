@@ -343,6 +343,8 @@ export default function WarehouseLoad(props: {
     replaceSource: props.replaceSource ?? null,
   });
   const [consent, setConsent] = useState(false);
+  // Records another source already stored (the preview's duplicates): skipped unless unticked.
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [declined, setDeclined] = useState(false);
@@ -434,7 +436,8 @@ export default function WarehouseLoad(props: {
     setBusy(true);
     setError(null);
     try {
-      const r = await loadToWarehouse(props.token, props.input, choices, plan.fingerprint, consent);
+      const dupes = (plan.duplicates?.records ?? 0) > 0;
+      const r = await loadToWarehouse(props.token, props.input, choices, plan.fingerprint, consent, dupes && skipDuplicates);
       setResult(r);
       refreshSummary();
       props.onLoaded?.();
@@ -563,6 +566,21 @@ export default function WarehouseLoad(props: {
 
           {!result && !declined && (
             <div className="space-y-3 border-t border-line pt-4">
+              {(plan.duplicates?.records ?? 0) > 0 && plan.duplicates && (
+                <div role="status" className="space-y-2 rounded-xl border border-warn/40 bg-warn/10 p-3 text-sm">
+                  <p>
+                    <strong>
+                      {fmtInt(plan.duplicates.records)} of these {fmtInt(plan.duplicates.of)} records are already stored
+                    </strong>{" "}
+                    from {plan.duplicates.sources.join(", ")} (same date, amount and reference number).
+                  </p>
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" className="mt-0.5" checked={skipDuplicates}
+                      onChange={(e) => setSkipDuplicates(e.target.checked)} />
+                    <span>Load only the new records (recommended: nothing is counted twice)</span>
+                  </label>
+                </div>
+              )}
               {needsConsent && (
                 <label className="flex items-start gap-3 text-sm">
                   <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
@@ -606,6 +624,13 @@ export default function WarehouseLoad(props: {
                 <> — {fmtInt(result.result.rows_already_stored)} were already stored unchanged (no duplicates)</>
               )}
               .
+              {(result.result.records_skipped_as_duplicates ?? 0) > 0 && (
+                <> {fmtInt(result.result.records_skipped_as_duplicates ?? 0)} record(s) were left out: another source already had them.</>
+              )}
+              {(result.result.matches_to_review ?? 0) > 0 && (
+                <> {fmtInt(result.result.matches_to_review ?? 0)} name(s) look like customers you already have — confirm them in
+                  Settings → Integrations.</>
+              )}
             </p>
           )}
         </Card>

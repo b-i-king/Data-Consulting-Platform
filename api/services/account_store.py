@@ -1755,6 +1755,43 @@ async def get_integration(account_id: str, connector: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def save_sync_state(account_id: str, connector: str, state: dict) -> None:
+    """Save the stored sync's progress (per record type: the newest change already stored)."""
+    if database.pool is None:
+        row = _connections.get((account_id, connector))
+        if row:
+            row["sync_state"] = dict(state)
+        return
+    await database.pool.execute(
+        "UPDATE dim.data_connections SET sync_state = $3::jsonb, updated_at = now() WHERE account_id = $1 AND connector = $2",
+        uuid.UUID(account_id), connector, json.dumps(state))
+
+
+async def finish_sync(account_id: str, connector: str, *, last_synced_at, next_sync_at, status: str) -> None:
+    """After a sync: when it last finished, when the scheduler runs it next, and its status."""
+    if database.pool is None:
+        row = _connections.get((account_id, connector))
+        if row:
+            row.update(last_synced_at=last_synced_at, next_sync_at=next_sync_at, status=status, updated_at=_now())
+        return
+    await database.pool.execute(
+        """UPDATE dim.data_connections SET last_synced_at = coalesce($3, last_synced_at), next_sync_at = $4,
+                  status = $5, updated_at = now() WHERE account_id = $1 AND connector = $2""",
+        uuid.UUID(account_id), connector, last_synced_at, next_sync_at, status)
+
+
+async def list_due_connections(now: datetime) -> list[dict]:
+    """Connections the scheduler should sync now: connected, on a schedule, and due."""
+    if database.pool is None:
+        return [dict(c) for c in _connections.values()
+                if c.get("status") == "connected" and c.get("next_sync_at") and c["next_sync_at"] <= now
+                and c.get("refresh_frequency") != "manual"]
+    rows = await database.pool.fetch(
+        """SELECT * FROM dim.data_connections WHERE status = 'connected' AND next_sync_at <= $1
+           AND refresh_frequency <> 'manual' ORDER BY next_sync_at""", now)
+    return [dict(r) for r in rows]
+
+
 async def count_connected(connector: str) -> int:
     """
     How many clients have this integration connected, across the whole platform
