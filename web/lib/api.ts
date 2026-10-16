@@ -12,7 +12,9 @@ import type {
   BillingInterval,
   CheckoutResult,
   ConsultantClient,
+  CombineSpec,
   ConsultantLoad,
+  ConsultantPage,
   ConsultantPlan,
   ConsultantSettings,
   ConnectionsInfo,
@@ -150,8 +152,20 @@ export async function getMe(token: string): Promise<Account> {
   return res.json();
 }
 
-/** Every consultant and how full they are (public: the "pick your consultant" fill bars). */
-export const getConsultants = () => getJson<{ consultants: ConsultantLoad[] }>("/api/accounts/consultants");
+/** One page of consultants and how full they are (public: the "pick your consultant" panel). */
+export const getConsultants = (page = 1, pageSize = 8, q = "") =>
+  getJson<ConsultantPage>(`/api/accounts/consultants?page=${page}&page_size=${pageSize}&q=${encodeURIComponent(q)}`);
+
+/** Delete my account and EVERYTHING in it (type your own email to confirm). Cannot be undone. */
+export async function deleteMyAccount(token: string, confirmEmail: string): Promise<{ deleted: number }> {
+  const res = await apiFetch(`${API_URL}/api/accounts/me`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ confirm_email: confirmEmail }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
 
 /** A signed-in client asks for a consultant (empty id = keep mine, or the server picks one with room). */
 export const chooseConsultant = (token: string, consultantId: string | null, plan: ConsultantPlan) =>
@@ -308,12 +322,16 @@ export interface LoadChoices {
   groupId: number;
   eventType: string; // "" = let the server guess
   choices: LoadChoicesBody; // column roles / metric descriptions changed by the client
+  combine?: CombineSpec | null; // stack or join other tables first (null = this table alone)
+  replaceSource?: string | null; // "Update my most recent upload": the stored source to replace
 }
 
 const loadFields = (input: CleaningInput, c: LoadChoices) => ({
   group_id: String(c.groupId),
   choices: JSON.stringify(c.choices),
   event_type: c.eventType,
+  ...(c.combine ? { combine: JSON.stringify(c.combine) } : {}),
+  ...(c.replaceSource ? { replace_source: c.replaceSource } : {}),
   ...choiceFields(input),
 });
 

@@ -54,6 +54,13 @@
 // Each visit re-reads the account (GET /api/accounts/me), so someone approved
 // as a consultant gets consultant mode without signing in again.
 //
+// STORED DATA OPENS BY ITSELF: when the account (or the client a consultant
+// picks) has data in managed storage, the most recent upload is opened
+// automatically, so the dashboard and every tool show it straight away. When
+// the plan includes Data Engineering but nothing is stored yet (e.g. back from
+// paying at Stripe — files only live in the browser tab), a banner says to
+// choose the file again under Data Engineering.
+//
 // The plan comes from GET /api/accounts/services (api/services/entitlements.py).
 // Tools unlock only through a package: "Add to my package" opens Plan &
 // billing with that tool ticked (the package selector shows the new total). Downloads also
@@ -63,7 +70,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeFiles,
   downloadCleaned,
@@ -85,6 +92,21 @@ import ClientPicker, { AddClientForm } from "./ClientPicker";
 import ConsultationPanel from "./ConsultationPanel";
 import AdminPanel from "./AdminPanel";
 import SettingsPanel from "./SettingsPanel";
+import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
+
+// The first-visit guide for the workspace (components/ui/Tour.tsx).
+const WORKSPACE_TOUR: TourStep[] = [
+  { target: "ws-nav", title: "Your tools, on the left",
+    body: "Each row is a service. The ones on your plan open normally; grayed-out ones show what they add and how to get them." },
+  { target: "ws-choose", title: "Start with your data",
+    body: "Choose a file (CSV or Excel is best), or open the data stored in your account. Files you pick are cleaned in memory and never kept, unless you store them." },
+  { target: "ws-nav", title: "Build a dashboard",
+    body: "Open Dashboard: it builds itself from any table with a date column — totals over time, comparisons, and filters. Use the bar at the bottom to change the time range." },
+  { target: "ws-billing", title: "Plan & billing",
+    body: "Add tools to your package (monthly or yearly, cancel anytime) and book your free 30-minute consultation." },
+  { target: "ws-settings", title: "Settings",
+    body: "Update your most recent upload, ask to work as a consultant, or delete your account. Consultants set their Cal.com links and capacity here." },
+];
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
 import type { AnalyzeResponse, CleaningInput, ColumnAction, ColumnActions, ColumnNames, TransformStep, Transforms, MyServices, Service, SkillInfo, SkillResult, WarehouseCounts } from "@/lib/types";
@@ -338,6 +360,18 @@ export default function Workspace() {
     }
   }
 
+  // Open the most recent stored upload automatically, once per account per visit.
+  const autoOpened = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!stored || !planAccountId || analysis || files.length) return;
+    const source = stored.latest_upload ?? stored.sources[0]?.source_name;
+    if (!source || autoOpened.current.has(planAccountId)) return;
+    autoOpened.current.add(planAccountId);
+    void Promise.resolve().then(() => openStored(source));
+    // Runs when the stored-data summary arrives; openStored itself is recreated every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stored, planAccountId]);
+
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
     setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames, transforms }));
@@ -480,13 +514,14 @@ export default function Workspace() {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
       {/* ── Left pane ── */}
       <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+        <Tour id="workspace" steps={WORKSPACE_TOUR} />
         {isConsultant && (
           <ClientPicker clients={clients} actingId={actingId} onChoose={chooseClient} onAddClient={() => setAddingClient(true)} load={myLoad} />
         )}
         <p className="mb-2 hidden px-3 text-xs text-ink-muted lg:block">
           {who.company_name ?? `${who.first_name} ${who.last_name}`}
         </p>
-        <nav aria-label="Workspace">
+        <nav aria-label="Workspace" data-tour="ws-nav">
           {/* relative: keeps the screen-reader-only text inside this scrolling row on phones. */}
           <ul className="relative flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
             {open.map((s) => item(s, false))}
@@ -500,6 +535,7 @@ export default function Workspace() {
         </nav>
         <button
           type="button"
+          data-tour="ws-billing"
           onClick={() => setSection(BILLING)}
           aria-current={current === BILLING ? "page" : undefined}
           className={`mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
@@ -510,6 +546,7 @@ export default function Workspace() {
         </button>
         <button
           type="button"
+          data-tour="ws-settings"
           onClick={() => setSection(SETTINGS)}
           aria-current={current === SETTINGS ? "page" : undefined}
           className={`mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
@@ -530,7 +567,8 @@ export default function Workspace() {
             <span aria-hidden>🛡️</span> Admin
           </button>
         )}
-        <button type="button" onClick={signOut} className="mt-4 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
+        <TourButton id="workspace" className="mt-4 hidden px-3 lg:block" />
+        <button type="button" onClick={signOut} className="mt-2 hidden px-3 text-sm text-ink-muted hover:text-ink lg:block">
           Sign out
         </button>
       </aside>
@@ -625,9 +663,21 @@ export default function Workspace() {
         <ErrorBox message={error} />
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
 
+        {plan && plan.active.includes(ENGINEERING) && stored?.set_up && stored.rows === 0 && current !== ENGINEERING && !analysis && (
+          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-brand/40 bg-brand-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              <strong>Store your data:</strong> your plan includes Data Engineering, but nothing is stored yet. Choose your
+              file under Data Engineering, check the preview, and accept.
+            </span>
+            <Button variant="secondary" onClick={() => setSection(ENGINEERING)}>
+              Open Data Engineering
+            </Button>
+          </div>
+        )}
+
         {current === SETTINGS && (
           <SettingsPanel
-            key="settings"
+            key={`settings-${planAccountId ?? "me"}`}
             token={session.token}
             onSetupNeeded={setSetupNeeded}
             account={session.account}
@@ -635,6 +685,16 @@ export default function Workspace() {
               const fresh = { ...session, account };
               saveSession(fresh);
               setSession(fresh);
+            }}
+            acting={!!plan?.acting}
+            workspaceName={whoName}
+            stored={stored}
+            canStore={!!plan?.active.includes(ENGINEERING)}
+            canChange={!!plan?.can_add}
+            onStoredChanged={setStored}
+            onDeleted={() => {
+              clearSession();
+              router.push("/");
             }}
           />
         )}
@@ -687,6 +747,7 @@ export default function Workspace() {
           </Card>
         ) : currentService && !analysis ? (
           // Each visit starts by picking files — they stay in this browser tab.
+          <div data-tour="ws-choose">
           <Card>
             <h2 className="font-semibold">Choose your data</h2>
             <p className="mt-1 text-sm text-ink-muted">
@@ -720,6 +781,7 @@ export default function Workspace() {
               </div>
             )}
           </Card>
+          </div>
         ) : currentService && analysis && group ? (
           <div className="space-y-6">
             {analysis.groups.length > 1 && (
@@ -826,6 +888,8 @@ export default function Workspace() {
                 clientName={whoName}
                 canDelete={!!plan?.can_add}
                 onStoredChanged={setStored}
+                tables={analysis.groups.map((g) => ({ group_id: g.group_id, label: g.label, columns: g.preview.columns }))}
+                relationships={analysis.categorization.relationships}
               />
             )}
 

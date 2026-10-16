@@ -45,7 +45,7 @@ from fastapi.responses import StreamingResponse
 from api.core import database
 from api.core.security import get_acting_context
 from api.models.accounts import DeleteStoredIn
-from api.services import account_store, entitlements, warehouse_store
+from api.services import account_store, combine, entitlements, warehouse_store
 from api.services.entitlements import plan_holder
 
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
@@ -62,14 +62,15 @@ TERMS_VERSION = "2026-10-15"
 
 async def _require_service(ctx: dict) -> None:
     """403 unless the account (or the consultant looking) has Data Engineering."""
-    active = await entitlements.active_services(ctx["account"], preview_all=ctx["consultant"] is not None)
+    active = await entitlements.active_services(ctx["account"], preview_all=ctx.get("admin", False))
     if SERVICE not in active:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             detail="Loading into a warehouse is part of Data Engineering. Add it to your package first.")
 
 
 async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, column_actions: str,
-                column_names: str, transforms: str, choices: str, event_type: str) -> LoadPlan:
+                column_names: str, transforms: str, choices: str, event_type: str,
+                combine_spec: str = "{}", source_name: str | None = None) -> LoadPlan:
     """
     Re-run the cleaning pipeline on the upload and build the load plan for one table.
 
@@ -79,6 +80,10 @@ async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, c
         choices: str, JSON {"metric_columns", "id_columns", "metric_map"} — the client's
             changes to the guessed column roles and metric descriptions (all optional).
         event_type: str, an event type id ("transaction/income") or "" to guess.
+        combine_spec: str, JSON — stack or join other tables of the upload with
+            this one first (api/services/combine.py); "{}" = this table alone.
+        source_name: str | None, store under this name instead (the source
+            being replaced by "Update my most recent upload").
 
     Returns:
         LoadPlan: the plan (see api/services/warehouse_loader.py).
@@ -89,10 +94,11 @@ async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, c
     """
     try:
         chosen = json.loads(choices or "{}")
-        if not isinstance(chosen, dict):
+        spec = json.loads(combine_spec or "{}")
+        if not isinstance(chosen, dict) or not isinstance(spec, dict):
             raise ValueError
     except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="'choices' must be a JSON object.")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="'choices' and 'combine' must be JSON objects.")
     datasets = await load_uploads(files)
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))
@@ -102,12 +108,44 @@ async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, c
     # The source's name in fact.account_data: the file's own name ("sales.csv")
     # when the table came from one file; the table's label when several files
     # were combined (e.g. one file per year).
-    members = next((g.members for g in result.categorization.groups if g.group_id == group_id), [])
-    source_name = members[0] if len(members) == 1 else group.label
+    def name_of(gid: int, label: str) -> str:
+        members = next((g.members for g in result.categorization.groups if g.group_id == gid), [])
+        return members[0] if len(members) == 1 else label
+
+    table, name = group.cleaned, name_of(group_id, group.label)
     try:
-        return build_plan(group.cleaned, source_name, chosen, event_type or None)
-    except ValueError as exc:
+        if spec.get("mode") and spec.get("groups"):
+            others = []
+            for gid in spec["groups"]:
+                other = next((g for g in result.groups if g.group_id == int(gid) and g.group_id != group_id), None)
+                if other is None:
+                    raise ValueError("A table to combine with was not found in the upload.")
+                others.append((name_of(other.group_id, other.label), other.cleaned))
+            table, name = combine.combine(table, name, others, spec)
+        return build_plan(table, source_name or name, chosen, event_type or None)
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+async def _replace_target(holder: dict, replace_source: str) -> str | None:
+    """
+    Check "Update my most recent upload": the name must be this client's latest
+    stored FILE upload (connector data is edited in the connected app instead).
+
+    Returns:
+        str | None: the source name to replace, or None when not replacing.
+
+    Raises:
+        HTTPException: 400 when it isn't the latest stored file upload.
+    """
+    if not replace_source:
+        return None
+    latest = (await warehouse_store.summary(holder)).get("latest_upload")
+    if replace_source != latest:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Only your most recent uploaded file can be updated here. Connected apps "
+                                   "(QuickBooks, ...) are edited in that app, then refreshed.")
+    return replace_source
 
 
 async def _storage_status(holder: dict) -> dict:
@@ -133,6 +171,8 @@ async def preview_load(
     transforms: Annotated[str, Form()] = "{}",
     choices: Annotated[str, Form()] = "{}",
     event_type: Annotated[str, Form()] = "",
+    combine_spec: Annotated[str, Form(alias="combine")] = "{}",
+    replace_source: Annotated[str, Form()] = "",
 ):
     """
     POST /api/warehouse/preview — how the data will be transformed, why, and how it will look.
@@ -145,6 +185,9 @@ async def preview_load(
             as for /api/files/analyze.
         choices: str, JSON {"metric_columns", "id_columns", "metric_map"} to change the guesses.
         event_type: str, the event type, or "" to guess.
+        combine_spec: str (form field "combine"), JSON — stack or join other tables first
+            (api/services/combine.py), e.g. {"mode": "join", "groups": [1], "left_on": "customer_id"}.
+        replace_source: str, "Update my most recent upload": the stored source to replace.
 
     Returns:
         dict: the LoadPlan (steps with "why", column plan, preview rows,
@@ -160,9 +203,11 @@ async def preview_load(
                 "tables": {"columns": {...}, "account_data": {...}}, "fingerprint": "9f2c...", ...}
     """
     await _require_service(ctx)
+    holder = await plan_holder(ctx["account"])
+    target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
-                       choices, event_type)
-    return {**plan.to_dict(), "storage": await _storage_status(await plan_holder(ctx["account"]))}
+                       choices, event_type, combine_spec, target)
+    return {**plan.to_dict(), "storage": await _storage_status(holder), "replacing": target}
 
 
 @router.post("/load")
@@ -178,6 +223,8 @@ async def accept_and_load(
     transforms: Annotated[str, Form()] = "{}",
     choices: Annotated[str, Form()] = "{}",
     event_type: Annotated[str, Form()] = "",
+    combine_spec: Annotated[str, Form(alias="combine")] = "{}",
+    replace_source: Annotated[str, Form()] = "",
 ):
     """
     POST /api/warehouse/load — the client ACCEPTED the preview: load it.
@@ -193,7 +240,9 @@ async def accept_and_load(
         fingerprint: str, the preview's fingerprint (what was accepted).
         consent: bool, True when the person ticked "store my data" now.
         group_id, missing_strategy, column_actions, column_names, transforms,
-        choices, event_type: exactly as sent to /preview.
+        choices, event_type, combine_spec, replace_source: exactly as sent to /preview.
+        With replace_source, that source's stored rows are deleted and replaced
+        by this upload (in one transaction).
 
     Returns:
         dict: {"load_run": {...}, "result": {"rows_loaded", "rows_updated",
@@ -220,8 +269,9 @@ async def accept_and_load(
                                 detail="Please tick the box to agree to storing this data before loading it.")
         await account_store.add_storage_consent(holder_id, TERMS_VERSION, str(ctx["account"]["id"]) if not ctx["acting"]
                                                 else str(ctx["consultant"]["account_id"]))
+    target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
-                       choices, event_type)
+                       choices, event_type, combine_spec, target)
     if plan.problem:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=plan.problem)
     if plan.fingerprint != fingerprint:
@@ -235,7 +285,8 @@ async def accept_and_load(
     })
     try:
         result = await warehouse_store.load(holder, plan,
-                                            consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None)
+                                            consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
+                                            replace=target is not None)
     except Exception as exc:
         await account_store.save_load_run({"id": run["id"], "status": "failed", "error": str(exc)[:500],
                                            "finished_at": datetime.now(timezone.utc)})

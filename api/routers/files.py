@@ -221,8 +221,8 @@ async def download_cleaned(
     if confirmed_amount_usd is not None:
         # Safeguard: never charge more than the total the client confirmed.
         cost["amount_usd"] = min(cost["amount_usd"], round(confirmed_amount_usd, 2))
-    if await entitlements.downloads_included(ctx["account"]):
-        cost["amount_usd"] = 0.0   # their plan includes Data Cleaning: no per-minute charge
+    if ctx.get("admin") or await entitlements.downloads_included(ctx["account"]):
+        cost["amount_usd"] = 0.0   # an admin, or their plan includes Data Cleaning: no per-minute charge
     if decision.repeat:
         cost["amount_usd"] = 0.0   # same data already downloaded (and paid for) recently
     await account_store.record_usage(

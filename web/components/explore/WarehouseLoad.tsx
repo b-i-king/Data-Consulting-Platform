@@ -18,6 +18,16 @@
 // "Accept and load" — or "Don't load", which stores nothing. The server only
 // loads if the data and choices still match this preview (its fingerprint).
 //
+// SEVERAL TABLES IN ONE UPLOAD: "Combine with another table (optional)" —
+// STACK them (append rows) or JOIN them on a shared ID (each row gets the other
+// table's columns), before storing (api/services/combine.py). Files with the
+// same columns were already stacked by the cleaning step. A suggested key
+// (from "How your files fit together") is filled in for a join.
+//
+// REPLACE MODE (`replaceSource`, from Settings → "Update my most recent
+// upload"): the new file replaces that stored file under the same name; rows
+// no longer in the file are removed too.
+//
 // The "Stored for ..." card underneath lists what's stored per file, with
 // "Download as CSV" and "Delete stored data" (the plan holder or their
 // consultant; it also withdraws the storage consent). Terms: /storage-terms.
@@ -42,7 +52,9 @@ import type {
   CleaningInput,
   ColumnPlanEntry,
   ColumnRole,
+  CombineSpec,
   LoadPlan,
+  Relationship,
   LoadResult,
   PreviewTable,
   WarehouseCounts,
@@ -202,6 +214,106 @@ function ColumnPlanTable(props: {
   );
 }
 
+/** Other tables of the same upload, to stack or join with the one being loaded. */
+export interface UploadTable {
+  group_id: number;
+  label: string;
+  columns: string[];
+}
+
+/** "Combine with another table (optional)": none, stack, or join on a key. */
+function CombinePicker(props: {
+  groupId: number;
+  tables: UploadTable[];
+  relationships: Relationship[];
+  value: CombineSpec | null;
+  busy: boolean;
+  onChange: (spec: CombineSpec | null) => void;
+}) {
+  const me = props.tables.find((t) => t.group_id === props.groupId);
+  const others = props.tables.filter((t) => t.group_id !== props.groupId);
+  const [mode, setMode] = useState<"none" | "union" | "join">(props.value?.mode ?? "none");
+  const [other, setOther] = useState<number>(props.value?.groups[0] ?? others[0]?.group_id ?? -1);
+  const otherTable = others.find((t) => t.group_id === other);
+  // A suggested key between the two tables ("How your files fit together").
+  const suggested = props.relationships.find(
+    (r) => r.method === "key" && [r.left_group, r.right_group].includes(props.groupId) && [r.left_group, r.right_group].includes(other),
+  )?.key_columns[0];
+  const [leftOn, setLeftOn] = useState(props.value?.left_on ?? suggested ?? me?.columns[0] ?? "");
+  const [rightOn, setRightOn] = useState(props.value?.right_on ?? suggested ?? otherTable?.columns[0] ?? "");
+  const [how, setHow] = useState<"left" | "inner">(props.value?.how ?? "left");
+  if (!me || others.length === 0) return null;
+
+  const apply = () =>
+    props.onChange(
+      mode === "none"
+        ? null
+        : mode === "union"
+          ? { mode: "union", groups: others.map((t) => t.group_id) }
+          : { mode: "join", groups: [other], left_on: leftOn, right_on: rightOn, how },
+    );
+  const select = "rounded-xl border border-line bg-surface px-3 py-1.5 text-sm";
+
+  return (
+    <Card className="space-y-3">
+      <h3 className="font-semibold">Combine with another table (optional)</h3>
+      <p className="text-sm text-ink-muted">
+        Your upload has {props.tables.length} tables. Store <strong>{me.label}</strong> on its own, stack the tables into
+        one (same kind of rows), or join another table to it by a shared ID (adds its columns to each row).
+      </p>
+      <div className="flex flex-wrap gap-2 text-sm">
+        {(["none", "union", "join"] as const).map((m) => (
+          <label key={m} className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 ${mode === m ? "border-brand bg-brand-soft" : "border-line"}`}>
+            <input type="radio" name="combine-mode" checked={mode === m} onChange={() => setMode(m)} />
+            {m === "none" ? "On its own" : m === "union" ? "Stack all tables (append rows)" : "Join another table"}
+          </label>
+        ))}
+      </div>
+      {mode === "join" && (
+        <div className="grid gap-2 text-sm sm:grid-cols-2">
+          <label className="space-y-1">
+            <span className="block">Table to join</span>
+            <select className={select} value={other} onChange={(e) => setOther(Number(e.target.value))}>
+              {others.map((t) => (
+                <option key={t.group_id} value={t.group_id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="block">Keep</span>
+            <select className={select} value={how} onChange={(e) => setHow(e.target.value as "left" | "inner")}>
+              <option value="left">Every row of {me.label}</option>
+              <option value="inner">Only rows with a match</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="block">Shared ID in {me.label}</span>
+            <select className={select} value={leftOn} onChange={(e) => setLeftOn(e.target.value)}>
+              {me.columns.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="block">…matches in {otherTable?.label}</span>
+            <select className={select} value={rightOn} onChange={(e) => setRightOn(e.target.value)}>
+              {(otherTable?.columns ?? []).map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          {suggested && <p className="text-xs text-ink-muted sm:col-span-2">Suggested key: {suggested}</p>}
+        </div>
+      )}
+      <Button variant="secondary" disabled={props.busy} onClick={apply}>
+        Update the preview
+      </Button>
+    </Card>
+  );
+}
+
 export default function WarehouseLoad(props: {
   token: string;
   input: CleaningInput;
@@ -211,11 +323,25 @@ export default function WarehouseLoad(props: {
   canDelete: boolean;
   /** Tell the workspace what's stored now (for its "Use my stored data" buttons). */
   onStoredChanged?: (counts: WarehouseCounts) => void;
+  /** Every table of the upload and the suggested keys between them (for "Combine"). */
+  tables?: UploadTable[];
+  relationships?: Relationship[];
+  /** "Update my most recent upload": replace this stored source with the new file. */
+  replaceSource?: string | null;
+  /** Called after a successful load (e.g. to close a pop-up). */
+  onLoaded?: () => void;
+  /** Hide the "Stored for ..." card (when shown inside a pop-up). */
+  compact?: boolean;
 }) {
   const [askDelete, setAskDelete] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [plan, setPlan] = useState<LoadPlan | null>(null);
-  const [choices, setChoices] = useState<LoadChoices>({ groupId: props.groupId, eventType: "", choices: {} });
+  const [choices, setChoices] = useState<LoadChoices>({
+    groupId: props.groupId,
+    eventType: "",
+    choices: {},
+    replaceSource: props.replaceSource ?? null,
+  });
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -311,6 +437,7 @@ export default function WarehouseLoad(props: {
       const r = await loadToWarehouse(props.token, props.input, choices, plan.fingerprint, consent);
       setResult(r);
       refreshSummary();
+      props.onLoaded?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The load failed. Nothing was stored.");
     } finally {
@@ -323,7 +450,15 @@ export default function WarehouseLoad(props: {
   return (
     <div className="space-y-5">
       <Card className="space-y-2">
-        <h2 className="font-semibold">Store this data — check it first</h2>
+        <h2 className="font-semibold">
+          {props.replaceSource ? `Replace “${props.replaceSource}” — check it first` : "Store this data — check it first"}
+        </h2>
+        {props.replaceSource && (
+          <p className="rounded-xl bg-warn/10 p-2 text-xs">
+            This file replaces your stored <strong>{props.replaceSource}</strong>: rows that are no longer in the file are
+            removed too. It keeps the same name.
+          </p>
+        )}
         <p className="text-sm text-ink-muted">
           Below is exactly how your data will be stored, why, and how it will look. <strong>Nothing is stored until you
           press “Accept and load”.</strong>
@@ -338,6 +473,17 @@ export default function WarehouseLoad(props: {
           <p className="rounded-xl bg-bad/10 p-2 text-xs">The database isn&apos;t reachable right now, so loading is off.</p>
         )}
       </Card>
+
+      {!props.replaceSource && (props.tables?.length ?? 0) > 1 && (
+        <CombinePicker
+          groupId={props.groupId}
+          tables={props.tables ?? []}
+          relationships={props.relationships ?? []}
+          value={choices.combine ?? null}
+          busy={busy}
+          onChange={(combine) => setChoices((c) => ({ ...c, combine }))}
+        />
+      )}
 
       {plan && (
         <Card className="space-y-4">
@@ -465,7 +611,7 @@ export default function WarehouseLoad(props: {
         </Card>
       )}
 
-      {stored && (
+      {stored && !props.compact && (
         <Card className="space-y-2">
           <h3 className="font-semibold">Stored for {props.clientName}</h3>
           {!stored.warehouse.set_up ? (

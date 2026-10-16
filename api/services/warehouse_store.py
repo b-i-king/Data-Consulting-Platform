@@ -81,7 +81,7 @@ def _tables_missing(exc: Exception) -> bool:
     return isinstance(exc, (asyncpg.exceptions.UndefinedTableError, asyncpg.exceptions.InvalidSchemaNameError))
 
 
-async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None) -> dict:
+async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, replace: bool = False) -> dict:
     """
     Write an accepted plan into fact.account_data.
 
@@ -89,6 +89,10 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None) -
         holder: dict, the plan holder's accounts row (whose data it is).
         plan: LoadPlan, the plan the client accepted (with its prepared rows).
         consultant_id: str | None, the consultant who loaded it, if one did.
+        replace: bool, True = "update my most recent upload": every stored row of
+            this source is deleted first, in the same transaction, so rows that
+            are no longer in the new file disappear too (a normal load only
+            adds and updates).
 
     Returns:
         dict: {"rows_loaded": new rows, "rows_updated": stored rows whose content
@@ -105,6 +109,8 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None) -
     aid = str(holder["id"])
     rows = plan.rows
     if database.pool is None:
+        if replace:
+            _stored.pop((aid, plan.source_system, plan.source_name), None)
         return _load_in_memory(aid, plan)
 
     data = rows[_ROW_COLUMNS].to_dict("records")
@@ -114,6 +120,11 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None) -
             async with conn.transaction():
                 # Row Level Security: this transaction may only touch this account's rows.
                 await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
+                if replace:
+                    await conn.execute(
+                        """DELETE FROM fact.account_data
+                           WHERE account_id = $1 AND source_system = $2 AND source_name = $3""",
+                        uuid.UUID(aid), plan.source_system, plan.source_name)
                 changed = await conn.fetch(
                     """INSERT INTO fact.account_data AS a
                            (account_id, consultant_id, source_system, source_name, record_id, line_number,
@@ -220,7 +231,11 @@ async def summary(holder: dict) -> dict:
         dict: {"set_up": bool (the table exists), "rows": stored rows,
         "records": stored record lines, "sources": [{"source_system",
         "source_name", "event_type", "label", "rows", "records", "first_date",
-        "last_date"}], "first_date", "last_date"} — dates as "YYYY-MM-DD" or None.
+        "last_date"}], "first_date", "last_date", "latest_upload"} — dates as
+        "YYYY-MM-DD" or None. latest_upload = the source name of the most
+        recent successful FILE load that is still stored (what "Update my most
+        recent upload" replaces), or None. Connector data is never offered:
+        it is edited in the connected app.
 
     Example:
         >>> (await summary(holder))["sources"][0]["source_name"]
@@ -251,15 +266,20 @@ async def summary(holder: dict) -> dict:
                            GROUP BY source_system, source_name ORDER BY source_name""", uuid.UUID(aid))
         except Exception as exc:
             if _tables_missing(exc):
-                return {"set_up": False, "rows": 0, "records": 0, "sources": [], "first_date": None, "last_date": None}
+                return {"set_up": False, "rows": 0, "records": 0, "sources": [], "first_date": None, "last_date": None,
+                        "latest_upload": None}
             raise
         sources = [_source_row(r["source_system"], r["source_name"], r["event_type"], r["rows"], r["records"],
                                r["first_date"], r["last_date"]) for r in found]
     firsts = [s["first_date"] for s in sources if s["first_date"]]
     lasts = [s["last_date"] for s in sources if s["last_date"]]
+    files = {s["source_name"] for s in sources if s["source_system"] == "file_upload"}
+    latest = next((r["source_name"] for r in await account_store.list_load_runs(aid)
+                   if r["status"] == "succeeded" and r.get("source", "file_upload") == "file_upload"
+                   and r["source_name"] in files), None)
     return {"set_up": True, "rows": sum(s["rows"] for s in sources), "records": sum(s["records"] for s in sources),
             "sources": sources, "first_date": min(firsts) if firsts else None,
-            "last_date": max(lasts) if lasts else None}
+            "last_date": max(lasts) if lasts else None, "latest_upload": latest}
 
 
 # ── Reading stored data back, and deleting it ────────────────────────────────

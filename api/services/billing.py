@@ -53,6 +53,7 @@ from api.services import account_store, pricing
 
 log = logging.getLogger(__name__)
 
+ADMIN_FREE = "Admins have every tool for free — there's nothing to buy."
 AI_NEEDS_DATA = ("AI answers questions about your stored data, so load your data first: "
                  "Data Engineering -> Load into database. Then add AI.")
 
@@ -234,7 +235,8 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
             mode), "updated" is True when an existing subscription was changed.
 
     Raises:
-        HTTPException: 400 for an invalid package or interval, or AI without
+        HTTPException: 400 for an admin (ADMIN_FREE: everything is free for
+            them), an invalid package or interval, or AI without
             stored data (AI_NEEDS_DATA); 409 if the package
             and interval are already the current ones; 503 if a Stripe price is
             missing.
@@ -243,6 +245,8 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         >>> await start_checkout(account, ["data_visualization"], "month")   # test mode
         {'url': None, 'activated': True, 'updated': False, 'test_mode': True}
     """
+    if account.get("is_admin") or account["email"].lower() in get_settings().admin_email_list:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ADMIN_FREE)
     picked = _selection(plan_ids, interval)
     if "ai" in picked and not await ai_ready(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=AI_NEEDS_DATA)
@@ -339,6 +343,38 @@ async def cancel_placeholder(account: dict) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="There's no active subscription to cancel.")
     for s in live:
         await account_store.set_subscription_status(str(s["id"]), "canceled")
+
+
+async def cancel_everything(account: dict) -> int:
+    """
+    Stop all billing for an account that is being deleted ("Delete my account").
+
+    With Stripe on, each live subscription is canceled IN STRIPE right away (so
+    the card is never charged again), and the Stripe customer is deleted. In
+    test mode the rows are just marked canceled. The account's rows are then
+    removed by account_store.delete_account.
+
+    Args:
+        account: dict, the plan holder's accounts row.
+
+    Returns:
+        int: how many subscriptions were canceled.
+
+    Example:
+        >>> await cancel_everything(owner)
+        1
+    """
+    live = await account_store.list_subscriptions(str(account["id"]))
+    if stripe_enabled():
+        stripe = _stripe()
+        for s in live:
+            if s.get("stripe_subscription_id"):
+                stripe.Subscription.cancel(s["stripe_subscription_id"])
+        if account.get("stripe_customer_id"):
+            stripe.Customer.delete(account["stripe_customer_id"])
+    for s in live:
+        await account_store.set_subscription_status(str(s["id"]), "canceled")
+    return len(live)
 
 
 async def live_plan_services(account_id: str) -> tuple[list[str], list[dict]]:

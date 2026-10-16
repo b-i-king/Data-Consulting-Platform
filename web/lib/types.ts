@@ -256,6 +256,28 @@ export interface DatasetGroup {
   recommendation: string;
 }
 
+/**
+ * Stack or join other tables of the upload with the one being loaded
+ * (api/services/combine.py). union = append rows; join = add the other
+ * table's columns by a shared key (left keeps every row, inner only matches).
+ */
+export interface CombineSpec {
+  mode: "union" | "join";
+  groups: number[];
+  left_on?: string;
+  right_on?: string;
+  how?: "left" | "inner";
+}
+
+/** GET /api/accounts/consultants — one page of the consultant directory. */
+export interface ConsultantPage {
+  consultants: ConsultantLoad[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+}
+
 export interface Relationship {
   left_group: number;
   right_group: number;
@@ -812,6 +834,8 @@ export interface MyServices {
   downloads_included: boolean;
   /** False until the account has stored data: the AI tool can't be added before that. */
   ai_ready: boolean;
+  /** The person looking is an admin: every tool free, nothing to buy. */
+  admin: boolean;
   /** Hourly rate and free first call; consulting is booked and paid on Cal.com. */
   consulting: { rate_per_hour_usd: number; free_minutes: number } & ConsultationSummary;
 }
@@ -920,6 +944,8 @@ export interface LoadPlan {
   round_trip: RoundTrip;
   /** Send back to /load to accept exactly this preview. */
   fingerprint: string;
+  /** "Update my most recent upload": the stored source this load replaces (null = a normal load). */
+  replacing?: string | null;
   ready: boolean;
   problem: string | null;
   storage: StorageStatus;
@@ -967,6 +993,8 @@ export interface WarehouseCounts {
   sources: StoredSource[];
   first_date: string | null;
   last_date: string | null;
+  /** The most recent uploaded FILE still stored ("Update my most recent upload"); null = none. */
+  latest_upload: string | null;
 }
 
 /** GET /api/warehouse/summary */

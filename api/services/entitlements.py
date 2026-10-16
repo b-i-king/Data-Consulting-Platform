@@ -16,13 +16,20 @@ An individual holds their own plan. In a business, the team OWNER holds it
 and every team member shares it — so a colleague sees the same services, and
 only the owner can add more.
 
-EVERY SERVICE AT ONCE
----------------------
-Two kinds of accounts get every available service (not "early access" ones):
-  * consultants (they work on any service for their clients, and test the app)
-  * clients assigned to a consultant ("I'd like a consultant to do this for me")
-A consultant LOOKING (own workspace or a client's) also sees the early-access
-services (AI) as a preview, so every one of the seven services can be tested.
+EVERY SERVICE AT ONCE: ADMINS ONLY
+----------------------------------
+ADMINS (ADMIN_EMAILS / accounts.is_admin) get every service free, including
+early-access ones (AI) as a preview — in their own workspace AND when working
+on any client's (`preview_all`). Downloads are free for them too.
+
+EVERYONE ELSE PAYS FOR WHAT THEY USE
+------------------------------------
+  * A CONSULTANT working on a client gets exactly what that client's plan
+    pays for (the client's package) — nothing more.
+  * A consultant's OWN workspace (their own data) needs their own package,
+    like any client.
+  * A "done for you" client also needs a package for the tools: the
+    consultant's time is paid on Cal.com; the tools are paid here.
 
 SUBSCRIPTIONS
 -------------
@@ -34,14 +41,14 @@ them). A plan that includes Data Cleaning also makes downloads free
 WHAT UNLOCKS A TOOL (and what doesn't)
 -------------------------------------
 Only these unlock tools: a live subscription (a package of tools, or All
-tools), being a consultant, or being a consultant-managed client. Data
-Cleaning is always open. Services picked as "Projects with a consultant" are
+tools), or being an admin. Data Cleaning is always open. Services picked as "Projects with a consultant" are
 INTERESTS only (column dim.accounts.interested_services): one-time work a consultant scopes
 after the free 30-minute consultation.
 """
 
 from __future__ import annotations
 
+from api.core.config import get_settings
 from api.services import account_store, billing
 from api.services.pricing import SERVICES, SERVICES_BY_ID
 
@@ -101,49 +108,59 @@ async def plan_holder(account: dict) -> dict:
     return await account_store.get_account(holder_id) or account
 
 
-async def gets_everything(account: dict) -> bool:
+def is_admin(account: dict | None) -> bool:
     """
-    Tell whether an account gets every available service at once.
-
-    True for consultants (they work on any service for their clients) and for
-    consultant-managed clients. For a business, the consultant is set on the team
-    owner, so a colleague of a consultant-managed owner also gets everything.
+    Tell whether an account is an admin (accounts.is_admin, or an ADMIN_EMAILS address).
 
     Args:
-        account: dict, an accounts row (needs "id"; "team_id" is optional).
+        account: dict | None, an accounts row.
 
     Returns:
-        bool: True for consultants and consultant-managed clients; False otherwise
-            (also when the plan holder's account can no longer be found).
+        bool: True for admins.
 
     Example:
-        >>> await gets_everything(consultant_account)
+        >>> is_admin({"email": "me@example.com", "is_admin": True})
         True
     """
-    if await account_store.get_consultant_by_account(str(account["id"])):
-        return True
-    holder_id = await plan_holder_id(account)
-    holder = account if holder_id == str(account["id"]) else await account_store.get_account(holder_id)
-    if not holder:
+    if not account:
         return False
-    return bool(holder.get("consultant_id"))
+    return bool(account.get("is_admin")) or str(account.get("email", "")).lower() in get_settings().admin_email_list
+
+
+async def gets_everything(account: dict) -> bool:
+    """
+    Tell whether an account gets every service free: ADMINS only.
+
+    Consultants and consultant-managed clients pay for tools like everyone
+    else (see the module notes).
+
+    Args:
+        account: dict, an accounts row.
+
+    Returns:
+        bool: True for admins.
+
+    Example:
+        >>> await gets_everything(admin_account), await gets_everything(consultant_account)
+        (True, False)
+    """
+    return is_admin(account)
 
 
 async def active_services(account: dict, *, preview_all: bool = False) -> list[str]:
     """
     List the service ids this account can use, in catalog order (Data Cleaning always included).
 
-    - `preview_all` (a CONSULTANT is looking, in their own workspace or a
-      client's): every service, INCLUDING ones not launched yet (AI), so the
-      consultant can test the whole product. Clients never get this.
-    - Consultants and consultant-managed clients get every available service.
-    - Everyone else gets the services unlocked by the plan holder's live
-      subscriptions, plus Data Cleaning.
+    - `preview_all` (an ADMIN is looking, in their own workspace or a
+      client's) or the account is an admin: every service, INCLUDING ones not
+      launched yet (AI), free.
+    - Everyone else — consultants and their clients included — gets the
+      services unlocked by the plan holder's live subscriptions, plus Data Cleaning.
     Project interests (dim.accounts.interested_services) do NOT unlock anything here.
 
     Args:
         account: dict, an accounts row.
-        preview_all: bool, True when the person looking is a consultant.
+        preview_all: bool, True when the person looking is an admin.
 
     Returns:
         list[str]: service ids in the order of pricing.SERVICES.
@@ -151,13 +168,11 @@ async def active_services(account: dict, *, preview_all: bool = False) -> list[s
     Example:
         >>> await active_services(new_client)   # no subscription yet
         ['data_cleaning']
-        >>> len(await active_services(new_client, preview_all=True))   # a consultant looking
+        >>> len(await active_services(new_client, preview_all=True))   # an admin looking
         7
     """
-    if preview_all:
+    if preview_all or await gets_everything(account):
         return [s.id for s in SERVICES]
-    if await gets_everything(account):
-        return [s.id for s in SERVICES if s.available]
     holder = await plan_holder_id(account)
     unlocked = set((await billing.live_plan_services(holder))[0])     # the tools in their package
     unlocked.add(ALWAYS_INCLUDED)
@@ -188,7 +203,7 @@ async def interests(account: dict) -> list[str]:
 
 async def downloads_included(account: dict) -> bool:
     """
-    Tell whether downloads are free because a live plan includes Data Cleaning.
+    Tell whether downloads are free: an admin, or a live plan that includes Data Cleaning.
 
     The plan holder's live subscriptions are checked (a Data Cleaning tool or the
     All tools bundle both count). Without one, downloads are charged by runtime.
@@ -203,6 +218,8 @@ async def downloads_included(account: dict) -> bool:
         >>> await downloads_included(subscriber)   # subscribed to All tools
         True
     """
+    if is_admin(account):
+        return True
     return ALWAYS_INCLUDED in (await billing.live_plan_services(await plan_holder_id(account)))[0]
 
 

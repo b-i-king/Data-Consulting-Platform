@@ -159,6 +159,8 @@ export default function StepServices(props: {
               onChange={props.onConsultantId}
               plan={props.consultantPlan}
               onPlan={props.onConsultantPlan}
+              // Choosing "Help from a consultant" slides the consultant panel in.
+              autoOpen={!props.consultantId}
             />
           </Card>
 

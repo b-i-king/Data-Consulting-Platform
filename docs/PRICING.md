@@ -166,8 +166,13 @@ Code: `api/services/entitlements.py`.
 - **Data Cleaning** is always open.
 - **The tools in a live subscription** (`active`, `trialing`, `past_due`) —
   a "build your own" package, or All tools (every available service).
-- **Every available service** for consultants and consultant-managed ("done
-  for you") clients (`entitlements.gets_everything`).
+- **Every service, free, for admins** (`ADMIN_EMAILS`), AI included as a
+  preview — in their own workspace and any client's (`entitlements.gets_everything`).
+  Admins can't buy a package (there's nothing to buy).
+- **Consultants pay like clients.** Working on a client, a consultant gets
+  exactly the client's package; for their own data they need their own package.
+  A "done for you" client pays for the tools here, and for the consultant's
+  time on Cal.com.
 - **Nothing else.** "Projects with a consultant" picked on Your needs are
   recorded as **interest** (`dim.accounts.interested_services`) and shown to the
   consultant ("Asked for help with: …"); they don't unlock tools. A locked

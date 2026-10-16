@@ -8,7 +8,8 @@ Account endpoints.
     POST /api/accounts/services       record interest in a project with a consultant (doesn't unlock tools)
     GET  /api/accounts/team           list my team (business accounts)
     POST /api/accounts/team/members   add a colleague (business owners only)
-    GET  /api/accounts/consultants    every consultant and how full they are (public: the picker)
+    DELETE /api/accounts/me           delete my account and EVERYTHING in it (type your email to confirm)
+    GET  /api/accounts/consultants    consultants and how full they are, one page at a time (public: the picker)
     POST /api/accounts/consultant     a signed-in client picks a consultant (one-time or monthly)
     POST /api/accounts/consultant-request   "I'd like to work as a consultant" (an admin decides)
 
@@ -51,11 +52,13 @@ from api.models.accounts import (
     AddServiceIn,
     AuthOut,
     ChooseConsultantIn,
+    DeleteAccountIn,
     SigninIn,
     SignupIn,
     TeamMemberIn,
 )
-from api.services import account_store, auth, billing, consultants, consultations, entitlements, locations, pricing
+from api.services import (account_store, auth, billing, consultants, consultations, entitlements, locations, pricing,
+                          warehouse_store)
 from api.services.pricing import catalog, subscription_catalog
 
 router = APIRouter(prefix="/accounts")
@@ -571,9 +574,9 @@ async def _services_out(ctx: dict) -> dict:
         data["can_add"], data["billing"]   # -> (True, {"stripe": False})
     """
     acc = ctx["account"]
-    # A consultant (own workspace or a client's) also sees services not launched
-    # yet (AI) as a preview, so they can test all seven.
-    active = await entitlements.active_services(acc, preview_all=ctx["consultant"] is not None)
+    # An admin (own workspace or a client's) gets every service free, including
+    # ones not launched yet (AI) as a preview. Everyone else: what's paid for.
+    active = await entitlements.active_services(acc, preview_all=ctx.get("admin", False))
     holder_id = await entitlements.plan_holder_id(acc)
     subs = await account_store.list_subscriptions(holder_id)
     return {
@@ -592,7 +595,9 @@ async def _services_out(ctx: dict) -> dict:
         "billing": {"stripe": billing.stripe_enabled()},   # False = test mode, nothing is charged
         # AI can be added only once data is stored (fact.account_data) — billing.ai_ready.
         "ai_ready": await billing.ai_ready(await entitlements.plan_holder(acc)),
-        "downloads_included": await entitlements.downloads_included(acc),
+        "downloads_included": ctx.get("admin", False) or await entitlements.downloads_included(acc),
+        # The person looking is an admin: every tool free, nothing to buy.
+        "admin": ctx.get("admin", False),
         "consulting": {
             "rate_per_hour_usd": pricing.consulting_rate(),
             "free_minutes": pricing.FREE_CONSULTATION_MINUTES,
@@ -698,23 +703,69 @@ async def add_service(body: AddServiceIn, ctx: Annotated[dict, Depends(get_actin
 
 
 @router.get("/consultants")
-async def consultant_directory():
+async def consultant_directory(page: int = 1, page_size: int = 8, q: str = ""):
     """
-    GET /api/accounts/consultants — every consultant and how full they are.
+    GET /api/accounts/consultants?page=1&page_size=8&q=ki — consultants and how full they are.
 
     Public (guests see it on "Your needs"): first names and client counts only,
-    never emails. Feeds the picker's fill bars.
+    never emails. One page at a time, so the side panel scales to any number
+    of consultants; those with room come first.
+
+    Args:
+        page: int, 1-based page.
+        page_size: int, 1 to 50 (default 8).
+        q: str, filter by first name.
 
     Returns:
         dict: {"consultants": [{"id", "name", "capacity", "clients", "percent",
-        "full", "is_default"}, ...]}.
+        "full", "is_default"}, ...], "page", "page_size", "total", "pages"}.
 
     Example:
-        GET /api/accounts/consultants
+        GET /api/accounts/consultants?page=1
         -> 200 {"consultants": [{"id": "...", "name": "Brandon", "capacity": 3, "clients": 1,
-                                 "percent": 33, "full": false, "is_default": true}]}
+                                 "percent": 33, "full": false, "is_default": true}],
+                "page": 1, "page_size": 8, "total": 1, "pages": 1}
     """
-    return {"consultants": await consultants.directory()}
+    return await consultants.directory_page(page, page_size, q[:60])
+
+
+@router.delete("/me")
+async def delete_me(body: DeleteAccountIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    DELETE /api/accounts/me — delete my account and everything in it. Cannot be undone.
+
+    The person types their own email to confirm. A business OWNER also deletes
+    their team's colleague accounts (they share the owner's plan and data); a
+    colleague deletes only their own account. Everything else goes with it
+    (account_store.delete_account): stored data, subscriptions (canceled in
+    Stripe first, so billing stops), usage, consents, load history, connectors,
+    consultations. A consultant's clients go back to waiting for a consultant.
+
+    Args:
+        body: DeleteAccountIn, {"confirm_email": "<my email>"}.
+        token: dict, the decoded login token (only your OWN account — never a
+            client's, even for a consultant acting for one).
+
+    Returns:
+        dict: {"deleted": n accounts}.
+
+    Raises:
+        HTTPException: 400 when the email doesn't match; 401 when the account is gone.
+
+    Example:
+        DELETE /api/accounts/me   {"confirm_email": "ana@example.com"}
+        -> 200 {"deleted": 1}
+    """
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
+    if body.confirm_email.strip().lower() != acc["email"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Type your own email address to confirm.")
+    if acc.get("team_role") != "member":
+        await billing.cancel_everything(acc)              # stop Stripe billing before the rows go
+        await warehouse_store.delete(acc)                 # the in-memory store too (the database cascades)
+    ids = await account_store.delete_account(str(acc["id"]))
+    return {"deleted": len(ids)}
 
 
 @router.post("/consultant")

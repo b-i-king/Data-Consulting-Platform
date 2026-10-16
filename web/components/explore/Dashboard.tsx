@@ -23,6 +23,19 @@ import BarChart from "@/components/charts/BarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
 import TimeBar from "./TimeBar";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import Tour, { type TourStep } from "@/components/ui/Tour";
+
+// The first-time guide for the dashboard (components/ui/Tour.tsx).
+const DASHBOARD_TOUR: TourStep[] = [
+  { title: "Your dashboard builds itself",
+    body: "It reads the date column and the numbers in your table: totals over time, compared with the period before." },
+  { target: "dash-filters", title: "Filters",
+    body: "Narrow everything down to one customer type, store, place or product — every chart updates." },
+  { target: "dash-kpis", title: "Key metrics",
+    body: "One card per main measure, with the change from the last period (green up, red down) and its line chart." },
+  { title: "Time range, at the bottom",
+    body: "The bar fixed at the bottom of the screen picks the range (week, month, year…) and what to compare with (week over week, year over year)." },
+];
 
 const fmt = (v: number | null | undefined) =>
   v == null ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0 });
@@ -186,10 +199,11 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
 
   return (
     <div className="space-y-5">
+      <Tour id="dashboard" steps={DASHBOARD_TOUR} />
       {/* Filters: WHO the numbers are about (customer type, demographics, place),
           in one container, in rows of up to 3 kept as even as possible. */}
       {data.filter_columns.length > 0 && (
-        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]">
+        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]" data-tour="dash-filters">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Filters</h3>
             {Object.keys(activeFilters).length > 0 && (
@@ -321,7 +335,7 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
 
       {/* One card + line chart per KPI (the most common transaction types). */}
       {data.kpis.length > 0 && (
-        <div>
+        <div data-tour="dash-kpis">
           <h3 className="mb-2 font-semibold">
             {data.kpi_column_label ? `Top ${data.kpi_column_label.toLowerCase()}s` : "Key metrics"}
             {data.kpi_column_label && <span className="font-normal text-ink-muted"> · {data.value_label.toLowerCase()}</span>}

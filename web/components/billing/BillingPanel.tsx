@@ -79,6 +79,20 @@ export default function BillingPanel(props: {
     }
   }
 
+  // An admin's own workspace: every tool is free, so there's nothing to buy.
+  // (Working on a client, an admin sees and manages the CLIENT's billing.)
+  if (plan.admin && !plan.acting) {
+    return (
+      <Card>
+        <h2 className="font-semibold">Admin: every tool is included, free</h2>
+        <p className="mt-1 text-sm text-ink-muted">
+          As an admin you have all seven services — AI included — with free downloads, in your own workspace and in any
+          client&apos;s. Consultants and clients pay for their own packages.
+        </p>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {!stripe && (

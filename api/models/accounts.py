@@ -544,6 +544,12 @@ class ConsultantSettingsIn(BaseModel):
         return v
 
 
+class DeleteAccountIn(BaseModel):
+    """ "Delete my account": the person types their own email to confirm."""
+
+    confirm_email: str = Field(min_length=3, max_length=320)
+
+
 class ChooseConsultantIn(BaseModel):
     """A client picks (or changes) their consultant, and how they help."""
 

@@ -818,6 +818,92 @@ async def set_consultant_cal(consultant_id: str, **fields) -> dict | None:
     return dict(row) if row else None
 
 
+async def list_all_clients() -> list[dict]:
+    """
+    Every client plan holder (admins see them all in "Working on").
+
+    Leaves out consultants/admins and business colleagues (they share their
+    owner's plan). Sorted like list_clients.
+
+    Returns:
+        list[dict]: accounts rows.
+
+    Example:
+        >>> [c["email"] for c in await list_all_clients()]
+        ['ana@example.com', 'kai@example.com']
+    """
+    if database.pool is None:
+        rows = [a for a in _accounts.values() if not a.get("is_consultant") and not a.get("is_admin")
+                and a.get("team_role") != "member"]
+        return sorted(rows, key=lambda a: (a.get("company_name") or a["first_name"]).lower())
+    rows = await database.pool.fetch(
+        """SELECT * FROM dim.accounts
+           WHERE NOT is_consultant AND NOT is_admin AND coalesce(team_role, '') <> 'member'
+           ORDER BY lower(coalesce(company_name, first_name))""")
+    return [dict(r) for r in rows]
+
+
+async def delete_account(account_id: str) -> list[str]:
+    """
+    Delete an account and EVERYTHING that belongs to it ("Delete my account").
+
+    A business team OWNER takes the whole team with them (every colleague's
+    account too, since they share the owner's plan and data). The database
+    removes the rest by ON DELETE CASCADE: the consultant row, subscriptions,
+    usage, consents, load history, connectors and every stored row in
+    fact.account_data. Consultations are removed too (they'd otherwise keep the
+    person's email). Clients of a deleted consultant are kept and go back to
+    "waiting for a consultant" (consultant_id is set to NULL).
+
+    Args:
+        account_id: str, the account to delete.
+
+    Returns:
+        list[str]: the account ids deleted (the owner first).
+
+    Example:
+        >>> await delete_account(owner_id)
+        ['<owner id>', '<colleague id>']
+    """
+    acc = await get_account(account_id)
+    if acc is None:
+        return []
+    ids = [account_id]
+    if acc.get("team_role") == "owner" and acc.get("team_id"):
+        ids += [str(m["id"]) for m in await list_team_members(str(acc["team_id"])) if str(m["id"]) != account_id]
+    emails = [a["email"] for a in [await get_account(i) for i in ids] if a]
+    if database.pool is None:
+        cids = {c["id"] for c in _consultants.values() if c["account_id"] in ids}
+        for a in _accounts.values():
+            if a.get("consultant_id") in cids:
+                a["consultant_id"] = None
+        for cid in cids:
+            _consultants.pop(cid, None)
+        for i in ids:
+            _accounts.pop(i, None)
+        for t in [t for t, row in _teams.items() if row["owner_account_id"] in ids]:
+            _teams.pop(t)
+        for k in [k for k, s in _subscriptions.items() if s["account_id"] in ids]:
+            _subscriptions.pop(k)
+        for k in [k for k, c in _consultations.items() if c.get("account_id") in ids or c.get("attendee_email") in emails]:
+            _consultations.pop(k)
+        _usage[:] = [u for u in _usage if u["account_id"] not in ids]
+        _consents[:] = [c for c in _consents if c["account_id"] not in ids]
+        _load_runs[:] = [r for r in _load_runs if r["account_id"] not in ids]
+        for k in [k for k in _connections if k[0] in ids]:
+            _connections.pop(k)
+        return ids
+    uids = [uuid.UUID(i) for i in ids]
+    async with database.pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM dim.consultations WHERE account_id = ANY($1) OR attendee_email = ANY($2)",
+                               uids, emails)
+            # Colleagues first (their team row points at the owner), then the owner.
+            await conn.execute("DELETE FROM dim.accounts WHERE id = ANY($1) AND id <> $2", uids, uids[0])
+            await conn.execute("DELETE FROM dim.accounts WHERE id = $1", uids[0])
+    return ids
+
+
 # ── Roles: admins and consultant requests ──────────────────────────────────────
 
 async def set_admin(account_id: str) -> None:

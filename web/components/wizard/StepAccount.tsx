@@ -23,13 +23,24 @@
 //     what lets the consultant open the same data from their workspace.
 //     WITHOUT this step nothing is stored (files are in this tab only), so the
 //     consultant would have to ask for the files again.
-// The same "Save to your account" box appears for anyone whose plan includes
-// Data Engineering (e.g. a package with it, once started).
+//
+// THE STORE POP-UP: as soon as the account's plan includes Data Engineering
+// (a package with it, once started — "after they paid"), a pop-up opens on its
+// own: "You're storing your data — here's a preview of everything that will be
+// stored", with the load preview for each table (and the option to stack or
+// join tables first). Accept = stored; close = nothing stored (a "Review and
+// store" button stays on the page). Where the data came from decides how hard
+// we push:
+//   * files and business apps (QuickBooks, ...): the pop-up opens on its own —
+//     storing is what Data Engineering is for;
+//   * cloud storage (Snowflake, BigQuery, ...): the data is already structured
+//     and lives somewhere safe, so we RECOMMEND analyzing it in place; storing
+//     is offered as an option (no automatic pop-up).
 
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { chooseConsultant, downloadCleaned, getMyServices, startCheckout } from "@/lib/api";
 import AuthForm from "@/components/auth/AuthForm";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
@@ -45,6 +56,8 @@ import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 const ENGINEERING = "data_engineering";
 
 export default function StepAccount(props: {
+  /** Where the data lives (step 2): "flat_files", "cloud_storage" or "business_apps". */
+  location: string | null;
   defaultType: AccountType;
   industry: Industry;
   serviceIds: string[]; // projects chosen on "Your needs"; saved as interests
@@ -88,6 +101,7 @@ export default function StepAccount(props: {
 // ── Next steps (signed in) ──────────────────────────────────────────────────
 
 function NextSteps(props: {
+  location: string | null;
   session: Session;
   onSignOut: () => void;
   input: CleaningInput;
@@ -148,9 +162,45 @@ function NextSteps(props: {
     }
   }
 
+  // The store pop-up: opens on its own once Data Engineering is on (unless the
+  // data is in cloud storage), until it's closed or the data is stored.
+  const cloud = props.location === "cloud_storage";
+  const [dismissed, setDismissed] = useState(false);
+  const [openedByHand, setOpenedByHand] = useState(false);
+  const [storedOk, setStoredOk] = useState(false);
+  const showStore = canStore && !storedOk && (openedByHand || (!cloud && !dismissed));
+  const forConsultant = props.path === "consultant" ? consultantName : null;
+
   const download = <DownloadBox {...props} included={!!plan?.downloads_included} />;
-  const store = canStore && <StoreBox token={token} analysis={props.analysis} input={props.input} name={name}
-    canDelete={!!plan?.can_add} consultantName={props.path === "consultant" ? consultantName : null} />;
+  const store = canStore && (
+    <Card className="mb-4 border-brand/40">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-sm">
+          {storedOk ? (
+            <strong>Your data is stored. ✓ {forConsultant ? `${forConsultant} can open it now.` : "It opens in your workspace."}</strong>
+          ) : cloud ? (
+            <>
+              <strong>Your data is in cloud storage — we recommend analyzing it where it is.</strong>
+              <span className="block text-xs text-ink-muted">
+                It&apos;s already structured, so every service (analysis, dashboards, ML) can work on it directly. You can
+                still store a copy here if you&apos;d like.
+              </span>
+            </>
+          ) : (
+            <>
+              <strong>Store your cleaned data{forConsultant ? ` so ${forConsultant} can open it` : ""}.</strong>
+              <span className="block text-xs text-ink-muted">Check the preview first — nothing is stored until you accept.</span>
+            </>
+          )}
+        </div>
+        {!storedOk && (
+          <Button variant={cloud ? "secondary" : "primary"} onClick={() => setOpenedByHand(true)}>
+            {cloud ? "Store a copy anyway" : "Review and store"}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
 
   return (
     <>
@@ -209,27 +259,27 @@ function NextSteps(props: {
       )}
       {note && <p className="mb-4 text-sm" role="status">{note}</p>}
 
-      {/* The chosen path's main action comes first. */}
-      {props.path === "consultant" ? (
-        <>
-          {store || (
-            <Card className="mb-4 text-sm text-ink-muted">
-              Sharing your data opens once your consultant is assigned. Meanwhile you can download it below.
-            </Card>
-          )}
-          <h2 className="mb-2 mt-8 font-semibold">Want a copy too?</h2>
-          {download}
-        </>
-      ) : (
-        <>
-          {download}
-          {store && (
-            <>
-              <h2 className="mb-2 mt-8 font-semibold">Save it to your account</h2>
-              {store}
-            </>
-          )}
-        </>
+      {/* Storing comes first (when the plan includes it), then the download. */}
+      {store ||
+        (props.path === "consultant" && (
+          <Card className="mb-4 text-sm text-ink-muted">
+            Sharing your data with your consultant needs Data Engineering in your package (the tools are paid here; your
+            consultant&apos;s time on Cal.com). Meanwhile you can download it below.
+          </Card>
+        ))}
+      <h2 className="mb-2 mt-6 font-semibold">{store ? "Want a copy too?" : "Download"}</h2>
+      {download}
+
+      {showStore && (
+        <StoreDialog
+          onClose={() => {
+            setDismissed(true);
+            setOpenedByHand(false);
+          }}
+        >
+          <StoreBox token={token} analysis={props.analysis} input={props.input} name={name} canDelete={!!plan?.can_add}
+            consultantName={forConsultant} onLoaded={() => setStoredOk(true)} />
+        </StoreDialog>
       )}
 
       <p className="mt-6 text-sm text-ink-muted">
@@ -246,6 +296,28 @@ function NextSteps(props: {
   );
 }
 
+/** The store pop-up: a large, scrollable dialog over the page. */
+function StoreDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Store your data">
+      <div className="mx-auto max-w-4xl rounded-2xl border border-line bg-canvas p-5 shadow-[var(--shadow-card)]">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold">You&apos;re storing your data — here&apos;s a preview</h2>
+            <p className="text-sm text-ink-muted">
+              Everything below is exactly what will be stored. Accept to store it; close to store nothing.
+            </p>
+          </div>
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** "Share your data": the Data Engineering load for each table (preview, consent, accept). */
 function StoreBox(props: {
   token: string;
@@ -254,6 +326,7 @@ function StoreBox(props: {
   name: string;
   canDelete: boolean;
   consultantName: string | null;
+  onLoaded?: () => void;
 }) {
   const [active, setActive] = useState(0);
   const group = props.analysis.groups[active];
@@ -290,6 +363,10 @@ function StoreBox(props: {
         clientName={props.name}
         canDelete={props.canDelete}
         onStoredChanged={() => {}}
+        tables={props.analysis.groups.map((g) => ({ group_id: g.group_id, label: g.label, columns: g.preview.columns }))}
+        relationships={props.analysis.categorization.relationships}
+        onLoaded={props.onLoaded}
+        compact
       />
     </div>
   );
