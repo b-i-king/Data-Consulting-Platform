@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from api.core.config import get_settings
 from api.models.accounts import QuoteIn
-from api.services import consultants, intake, locations, pricing
+from api.services import consultants, consultations, intake, locations, pricing
 from api.services.file_reader import EXCLUDED_FORMATS, SUPPORTED_EXTENSIONS, formats_for_ui
 
 router = APIRouter()
@@ -60,7 +60,9 @@ async def intake_options():
             "price_per_runtime_minute_usd": settings.price_per_runtime_minute_usd,
             "billing_increment_seconds": settings.billing_increment_seconds,
         },
-        "booking_url": settings.booking_url,
+        # The free consultation link for guests: the default consultant's own
+        # (saved in their Settings), else BOOKING_URL.
+        "booking_url": (await consultations.links_for(None))[0],
         # Plans, each with a monthly and a yearly price (cancel anytime).
         "subscriptions": pricing.subscription_catalog(),
         # Consulting after the free 30-minute first consultation.
@@ -142,6 +144,9 @@ async def quote(body: QuoteIn):
         -> 200 {...quote lines and totals...}
     """
     try:
-        return pricing.build_quote(body.service_ids, body.runtime_seconds)
+        quote = pricing.build_quote(body.service_ids, body.runtime_seconds)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if quote.get("booking_url"):
+        quote["booking_url"] = (await consultations.links_for(None))[0]   # same link as the intake options
+    return quote

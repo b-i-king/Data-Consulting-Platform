@@ -67,6 +67,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   analyzeFiles,
   downloadCleaned,
+  getConsultantSettings,
   getIntakeOptions,
   getMe,
   getMyClients,
@@ -167,6 +168,7 @@ export default function Workspace() {
   const [options, setOptions] = useState<IntakeOptions | null>(null);
   const [clients, setClients] = useState<ConsultantClient[]>([]);
   const [myLoad, setMyLoad] = useState<ConsultantLoad | null>(null); // how full I am (consultants)
+  const [setupNeeded, setSetupNeeded] = useState(false); // a new consultant without booking links yet
   const [actingId, setActingId] = useState<string | null>(null);
   const [addingClient, setAddingClient] = useState(false);
   const [returnNote, setReturnNote] = useState<string | null>(null); // after paying at Stripe
@@ -182,13 +184,18 @@ export default function Workspace() {
     setActingAs(null); // a fresh visit starts in your own workspace
     if (!s) return;
     // Consultants: my clients and how full I am.
-    const loadClients = (token: string) =>
+    const loadClients = (token: string) => {
       getMyClients(token)
         .then((r) => {
           setClients(r.clients);
           setMyLoad(r.load);
         })
         .catch(() => {});
+      // New consultant? Nudge them to add their Cal.com links and webhook.
+      getConsultantSettings(token)
+        .then((c) => setSetupNeeded(c.setup_needed))
+        .catch(() => {});
+    };
     // Re-read the account: an approval (or a new consultant) shows up at once.
     getMe(s.token)
       .then((account) => {
@@ -565,6 +572,17 @@ export default function Workspace() {
             </button>
           </div>
         </div>
+        {isConsultant && setupNeeded && current !== SETTINGS && (
+          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              <strong>Finish setting up:</strong> add your Cal.com booking links and webhook, so your clients book you
+              (and pay you) directly.
+            </span>
+            <Button variant="secondary" onClick={() => setSection(SETTINGS)}>
+              Open Settings
+            </Button>
+          </div>
+        )}
         {isConsultant && plan?.acting && (
           <p role="status" className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
             <span className="mr-2 rounded-full bg-consultant px-2 py-0.5 text-xs font-semibold text-on-consultant">Consultant</span>
@@ -609,7 +627,9 @@ export default function Workspace() {
 
         {current === SETTINGS && (
           <SettingsPanel
+            key="settings"
             token={session.token}
+            onSetupNeeded={setSetupNeeded}
             account={session.account}
             onAccount={(account) => {
               const fresh = { ...session, account };

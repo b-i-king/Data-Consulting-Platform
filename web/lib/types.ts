@@ -125,6 +125,26 @@ export interface ConsultantLoad {
   is_default: boolean;
 }
 
+/** The choice at the bottom of the sign-up form. */
+export type SignupAs = "client" | "consultant" | "admin";
+
+/**
+ * GET/PUT /api/consultant/settings — a consultant's own Settings page:
+ * capacity, their Cal.com booking links, and their Cal.com webhook.
+ */
+export interface ConsultantSettings {
+  load: ConsultantLoad;
+  max_capacity: number;
+  /** Their free 30-minute Cal.com link (their clients see it). */
+  free_booking_url: string | null;
+  /** Their paid session link (paid on their own Cal.com). */
+  paid_booking_url: string | null;
+  /** path: add the API address in front for Cal.com's "Subscriber URL"; secret: null until made. */
+  webhook: { path: string; secret: string | null };
+  /** True until the free booking link is saved (the "finish setting up" nudge). */
+  setup_needed: boolean;
+}
+
 /** How a consultant helps: one analysis of everything sent, or ongoing monthly help. */
 export type ConsultantPlan = "one_time" | "monthly";
 
@@ -762,8 +782,8 @@ export interface SignupInput {
   /** The consultant picked by name (empty = the server picks one with room). */
   consultant_id?: string | null;
   consultant_plan?: ConsultantPlan;
-  /** "I'd like to work as a consultant" — waits for an admin's approval. */
-  consultant_request?: boolean;
+  /** Who is signing up: a client, a REQUEST to be a consultant, or an admin (ADMIN_EMAILS only). */
+  signup_as?: SignupAs;
   /** The Terms of Service + Privacy Policy box; required for your own sign-up. */
   accept_terms?: boolean;
   /** Required for your own sign-up (8+ characters); left out when a consultant adds a client. */

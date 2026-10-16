@@ -22,9 +22,14 @@
 // name (fill bars show how full each is) and one-time or monthly help
 // (components/consultants/ConsultantPicker.tsx). A plan picked on "Your needs"
 // is paid for after signup, on "Next steps" (Stripe Checkout).
-// CONSULTANTS use the same form with no access code: "I'd like to work as a
-// consultant" sends a request, and an admin approves or denies it
-// (Admin panel in the workspace). Nobody can make themselves a consultant.
+// CONSULTANTS use the same form with no access code:
+//   * SIGN IN: a clean "Account | Consultant" switch at the top. "Consultant"
+//     only works for an approved consultant (the server says why otherwise).
+//   * SIGN UP: "Signing up as" at the bottom — Client · Request to be a
+//     consultant (an admin approves or denies it, in the workspace's Admin
+//     panel) · I'm an admin (only for an ADMIN_EMAILS address). Nobody can
+//     make themselves a consultant. Consultants and admins don't see the
+//     "I'd like a consultant" box.
 //
 // FOOLPROOF INPUT (rules in lib/validation.ts, enforced again on the server):
 //   * names: letters (accents fine), spaces, - ' ’ . ; the first letter is
@@ -41,7 +46,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { getConsultants, signin, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
-import type { AccountType, ConsultantLoad, ConsultantPlan, Industry, Location, TeamMemberInput } from "@/lib/types";
+import type { AccountType, ConsultantLoad, ConsultantPlan, Industry, Location, SignupAs, TeamMemberInput } from "@/lib/types";
 import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { capitalizeFirst, companyNameError, emailError, personNameError, repeatedEmails } from "@/lib/validation";
 import { Button, Card, ChoiceCard, ErrorBox, StepHeader } from "@/components/wizard/ui";
@@ -53,6 +58,41 @@ const inputCls = (bad: boolean) =>
   `w-full rounded-xl border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 ${
     bad ? "border-bad focus:border-bad focus:ring-bad/20" : "border-line focus:border-brand focus:ring-brand/20"
   }`;
+
+/** A clean pill switch: one choice out of a few (Account | Consultant, ...). */
+function Segmented<T extends string>(props: {
+  label: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: { id: T; label: string }[];
+  accent?: "brand" | "consultant";
+}) {
+  const on = props.accent === "consultant" ? "bg-consultant text-on-consultant" : "bg-brand text-on-brand";
+  return (
+    <div role="radiogroup" aria-label={props.label} className="inline-flex flex-wrap gap-1 rounded-full border border-line bg-surface-2 p-1">
+      {props.options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={props.value === o.id}
+          onClick={() => props.onChange(o.id)}
+          className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+            props.value === o.id ? on : "text-ink-muted hover:text-ink"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const SIGNUP_AS: { id: SignupAs; label: string; note: string }[] = [
+  { id: "client", label: "Client", note: "Clean, explore and store your own data — or have a consultant do it." },
+  { id: "consultant", label: "Request to be a consultant", note: "We review every request. Once approved, your workspace switches to consultant mode." },
+  { id: "admin", label: "I'm an admin", note: "Only for the platform's admin email addresses." },
+];
 
 /** A labeled field that shows its error once the person has left it. */
 function Field(props: { label: string; error: string | null; show: boolean; children: ReactNode; hint?: string }) {
@@ -112,7 +152,9 @@ export default function AuthForm({
   const [plan, setPlan] = useState<ConsultantPlan>(initialPlan);
   const [consultants, setConsultants] = useState<ConsultantLoad[]>(givenConsultants ?? []);
   const [acceptTerms, setAcceptTerms] = useState(false);
-  const [askToConsult, setAskToConsult] = useState(false); // "I'd like to work as a consultant"
+  const [signupAs, setSignupAs] = useState<SignupAs>("client"); // the choice at the bottom of sign-up
+  const [signinAs, setSigninAs] = useState<"account" | "consultant">("account"); // the switch at the top of sign-in
+  const isClient = signupAs === "client";
   // The consultant list for the picker, when the page didn't pass one (/signin).
   useEffect(() => {
     if (givenConsultants || !wants) return;
@@ -170,7 +212,7 @@ export default function AuthForm({
     try {
       const res =
         mode === "signin"
-          ? await signin(email.trim(), password)
+          ? await signin(email.trim(), password, signinAs === "consultant")
           : await signup({
               account_type: type,
               first_name: first.trim(),
@@ -179,8 +221,8 @@ export default function AuthForm({
               password,
               ...(location ? { location_id: location.id } : {}),
               ...(serviceIds.length ? { service_ids: serviceIds } : {}),
-              ...(wants ? { wants_consultant: true, consultant_id: pick, consultant_plan: plan } : {}),
-              ...(askToConsult ? { consultant_request: true } : {}),
+              ...(wants && isClient ? { wants_consultant: true, consultant_id: pick, consultant_plan: plan } : {}),
+              signup_as: signupAs,
               accept_terms: acceptTerms,
               ...(type === "business"
                 ? {
@@ -212,6 +254,18 @@ export default function AuthForm({
       <StepHeader title={mode === "signup" ? title.signup : title.signin} subtitle={subtitle} />
       {/* noValidate: our own messages (above) replace the browser's generic ones. */}
       <form onSubmit={submit} noValidate className="max-w-xl space-y-4">
+        {mode === "signin" && (
+          <Segmented
+            label="Sign in as"
+            value={signinAs}
+            onChange={setSigninAs}
+            accent={signinAs === "consultant" ? "consultant" : "brand"}
+            options={[
+              { id: "account", label: "Account" },
+              { id: "consultant", label: "Consultant" },
+            ]}
+          />
+        )}
         {mode === "signup" && (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -338,7 +392,7 @@ export default function AuthForm({
           </>
         )}
 
-        {mode === "signup" && (
+        {mode === "signup" && isClient && (
           // "Done for you": a consultant does the work in this account.
           <div className="space-y-3 rounded-2xl border border-consultant/40 bg-consultant-soft p-4 text-sm">
             <label className="flex items-start gap-3">
@@ -370,20 +424,18 @@ export default function AuthForm({
         )}
 
         {mode === "signup" && (
-          <label className="flex items-start gap-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 accent-[var(--color-consultant)]"
-              checked={askToConsult}
-              onChange={(e) => setAskToConsult(e.target.checked)}
+          // Who is signing up: a clean choice instead of a checkbox.
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Signing up as</p>
+            <Segmented
+              label="Signing up as"
+              value={signupAs}
+              onChange={setSignupAs}
+              accent={isClient ? "brand" : "consultant"}
+              options={SIGNUP_AS.map((o) => ({ id: o.id, label: o.label }))}
             />
-            <span>
-              I&apos;d like to work as a consultant on this platform
-              <span className="block text-xs text-ink-muted">
-                We&apos;ll review your request. Once approved, your workspace switches to consultant mode.
-              </span>
-            </span>
-          </label>
+            <p className="text-xs text-ink-muted">{SIGNUP_AS.find((o) => o.id === signupAs)?.note}</p>
+          </div>
         )}
 
         {mode === "signup" && (

@@ -145,6 +145,32 @@ def test_admin_is_a_consultant_and_others_must_be_approved():
     assert client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"])).status_code == 409
 
 
+def test_signup_choice_and_signing_in_as_a_consultant():
+    """
+    The clean choice at sign-up: Client, Request to be a consultant, or I'm an
+    admin (refused for a non-admin email). At sign-in, "Consultant" works only
+    for approved consultants; "Account" works for everyone.
+    """
+    fake = _signup("eve@example.com", "Eve", signup_as="admin")
+    assert fake.status_code == 403 and "admin list" in fake.json()["detail"]
+    assert all(a["email"] != "eve@example.com" for a in account_store._accounts.values())   # nothing created
+    admin = _signup("brandon@example.com", "Brandon", signup_as="admin").json()["account"]
+    assert admin["is_admin"] and admin["role"] == "consultant"
+    kim = _signup("kim@example.com", "Kim", signup_as="consultant", wants_consultant=True).json()["account"]
+    assert kim["consultant_request"] == "pending" and not kim["wants_consultant"]   # consultants don't hire one
+
+    def sign_in(email, as_consultant):
+        return client.post("/api/accounts/signin", json={"email": email, "password": "Correct-horse-9",
+                                                         "as_consultant": as_consultant})
+    assert sign_in("brandon@example.com", True).status_code == 200
+    waiting = sign_in("kim@example.com", True)
+    assert waiting.status_code == 403 and "waiting for approval" in waiting.json()["detail"]
+    assert sign_in("kim@example.com", False).status_code == 200
+    _signup("sam@example.com", "Sam")
+    assert sign_in("sam@example.com", True).status_code == 403
+    assert sign_in("sam@example.com", True).json()["detail"].startswith("This account isn't a consultant")
+
+
 def test_clients_pick_a_consultant_by_name_within_capacity():
     """
     A client picks a consultant by name and one-time or monthly help; the fill bar

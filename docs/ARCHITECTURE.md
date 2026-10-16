@@ -205,6 +205,19 @@ full — and a full consultant can't be picked (`consultants.pick`, the capacity
 rule). Clients who pick nobody go to the default consultant if they have room,
 else to whoever has the most room, else wait.
 
+**Signing in and up.** Sign-in has an **Account | Consultant** switch at the
+top ("Consultant" is refused unless the account is an approved consultant).
+Sign-up ends with **Signing up as: Client · Request to be a consultant · I'm an
+admin** ("admin" is refused unless the email is in `ADMIN_EMAILS`).
+
+**Each consultant's Cal.com.** A consultant's free and paid booking links and
+their own webhook secret live on `dim.consultants`. Their clients see their
+links (`consultations.links_for`: own consultant → default consultant →
+`BOOKING_URL` / `PAID_BOOKING_URL`). Their Cal.com calls
+`/api/consultations/calcom-webhook/<consultant id>`, signed with their secret,
+and each booking is saved with their `consultant_id` — so paid sessions are paid
+to them on Cal.com and counted per consultant here.
+
 **Sharing data with the consultant.** Files are never kept after a visit, so on
 the guest flow's "Next steps" a consultant client is offered **Share your data
 with <consultant>**: the Data Engineering load (preview, storage consent, accept)

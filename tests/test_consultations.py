@@ -25,7 +25,7 @@ SECRET = "cal-secret"
 @pytest.fixture(autouse=True)
 def settings(monkeypatch):
     """
-    A consultant, the access code, both booking links and the webhook secret; fresh memory store.
+    An admin consultant, both default booking links and the shared webhook secret; fresh memory store.
 
     Args:
         monkeypatch: pytest fixture for setting environment variables for one test.
@@ -61,11 +61,11 @@ def _h(token, acting_as=None):
     return h
 
 
-def _hook(trigger, payload, secret=SECRET):
+def _hook(trigger, payload, secret=SECRET, path="/api/consultations/calcom-webhook"):
     """Send a Cal.com webhook signed like Cal.com does (HMAC-SHA256 of the raw body)."""
     body = json.dumps({"triggerEvent": trigger, "payload": payload}).encode()
     sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return client.post("/api/consultations/calcom-webhook", content=body,
+    return client.post(path, content=body,
                        headers={"X-Cal-Signature-256": sig, "Content-Type": "application/json"})
 
 
@@ -167,3 +167,67 @@ def test_cannot_mark_another_clients_consultation():
     bos = client.post("/api/consultations", headers=_h(coach, bo), json={"status": "booked"}).json()["history"][0]["id"]
     res = client.post("/api/consultations", headers=_h(coach, ana), json={"status": "completed", "consultation_id": bos})
     assert res.status_code == 404
+
+
+def test_each_consultant_has_their_own_links_and_webhook():
+    """
+    A consultant saves their own Cal.com links and makes a webhook secret in
+    Settings: their clients see THEIR links, and bookings through their webhook
+    (signed with their secret) are recorded as theirs.
+    """
+    coach = _signup("coach@example.com", "Coach")["access_token"]
+    settings = client.get("/api/consultant/settings", headers=_h(coach)).json()
+    assert settings["setup_needed"] and settings["webhook"]["secret"] is None
+    bad = client.put("/api/consultant/settings", headers=_h(coach), json={"free_booking_url": "http://cal.com/x"})
+    assert bad.status_code == 422                                      # https only
+    saved = client.put("/api/consultant/settings", headers=_h(coach), json={
+        "free_booking_url": "https://cal.com/coach-own/30min", "paid_booking_url": "https://cal.com/coach-own/session"}).json()
+    assert not saved["setup_needed"] and saved["free_booking_url"] == "https://cal.com/coach-own/30min"
+    secret = client.post("/api/consultant/settings/webhook-secret", headers=_h(coach)).json()["webhook"]
+    cid = next(iter(account_store._consultants))
+    assert len(secret["secret"]) >= 40 and secret["path"] == f"/api/consultations/calcom-webhook/{cid}"
+
+    ana = _signup("ana@example.com", wants_consultant=True)
+    info = client.get("/api/consultations", headers=_h(ana["access_token"])).json()
+    assert info["booking_url"].startswith("https://cal.com/coach-own/30min?")       # the consultant's own link
+    assert info["paid_booking_url"].startswith("https://cal.com/coach-own/session?")
+
+    payload = {"uid": "own-1", "startTime": "2026-10-20T15:00:00Z", "attendees": [{"email": "ana@example.com"}]}
+    assert _hook("BOOKING_CREATED", payload, secret=SECRET, path=secret["path"]).status_code == 401   # shared secret: no
+    res = _hook("BOOKING_CREATED", payload, secret=secret["secret"], path=secret["path"])
+    assert res.status_code == 200 and res.json()["action"] == "booked"
+    row = account_store._consultations[res.json()["consultation_id"]]
+    assert row["consultant_id"] == cid and row["account_id"] == ana["account"]["id"]
+    assert _hook("BOOKING_CREATED", payload, path="/api/consultations/calcom-webhook/not-a-consultant").status_code == 404
+
+
+def test_consultant_webhook_is_off_until_a_secret_is_made():
+    """A consultant who hasn't made a secret yet: their webhook answers 503 (nothing is recorded)."""
+    _signup("coach@example.com", "Coach")
+    cid = next(iter(account_store._consultants))
+    res = _hook("BOOKING_CREATED", {"uid": "x1"}, path=f"/api/consultations/calcom-webhook/{cid}")
+    assert res.status_code == 503 and account_store._consultations == {}
+
+
+def test_one_webhook_tells_free_from_paid_by_event_type():
+    """
+    One webhook covers both event types: a booking made straight on Cal.com (no
+    metadata from the app's link) is free or paid by the booked event's slug,
+    matched against the consultant's own links. Guests see the default
+    consultant's free link — no BOOKING_URL needed.
+    """
+    coach = _signup("coach@example.com", "Coach")["access_token"]
+    client.put("/api/consultant/settings", headers=_h(coach), json={
+        "free_booking_url": "https://cal.com/thebolgroup/data-consultation",
+        "paid_booking_url": "https://cal.com/thebolgroup/paid-data-consultation"})
+    hook = client.post("/api/consultant/settings/webhook-secret", headers=_h(coach)).json()["webhook"]
+    assert client.get("/api/intake/options").json()["booking_url"] == "https://cal.com/thebolgroup/data-consultation"
+
+    def book(uid, slug):
+        payload = {"uid": uid, "type": slug, "attendees": [{"email": "walk-in@example.com"}]}
+        res = _hook("BOOKING_CREATED", payload, secret=hook["secret"], path=hook["path"])
+        return account_store._consultations[res.json()["consultation_id"]]["kind"]
+
+    assert book("w1", "paid-data-consultation") == "paid"
+    assert book("w2", "data-consultation") == "free"
+    assert book("w3", "something-else") == "free"     # unknown: free until the free call is used

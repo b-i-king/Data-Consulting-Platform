@@ -174,9 +174,10 @@ async def signup(body: SignupIn):
     """
     POST /api/accounts/signup — create an individual or business account and sign it in.
 
-    The Terms box must be ticked. An ADMIN_EMAILS address becomes an admin and
-    consultant at once; anyone else is a client (and, if they asked, waits for
-    an admin to approve them as a consultant). "I'd like a consultant" assigns
+    The Terms box must be ticked. `signup_as` is the choice at the bottom of
+    the form: "client"; "consultant" (a request — waits for an admin's
+    approval); or "admin" (refused unless the email is in ADMIN_EMAILS). An
+    ADMIN_EMAILS address becomes an admin and consultant at once either way. "I'd like a consultant" assigns
     the consultant they picked, or one with room (consultants.pick).
 
     Args:
@@ -187,6 +188,7 @@ async def signup(body: SignupIn):
 
     Raises:
         HTTPException: 400 without accept_terms or for unknown service ids;
+            403 for signup_as "admin" with an email that isn't an admin;
             409 when an email already has an account or the picked consultant
             is full; 404 for an unknown consultant.
             (Malformed fields are rejected with 422 before this runs.)
@@ -201,9 +203,16 @@ async def signup(body: SignupIn):
     if not body.accept_terms:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             detail="Please accept the Terms of Service and Privacy Policy to create an account.")
+    admin = consultants.is_admin_email(body.email)
+    if body.signup_as == "admin" and not admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="That email isn't on the admin list. Choose Client, or Request to be a consultant.")
+    if body.signup_as != "client":
+        # Consultants and admins don't hire a consultant for themselves.
+        body = body.model_copy(update={"wants_consultant": False, "consultant_id": None, "consultant_plan": None,
+                                       "consultant_request": body.signup_as == "consultant" or body.consultant_request})
     password = auth.check_password_rules(body.password)  # 422 if missing or too short
     await _check_new_signup(body)                          # 400/409 BEFORE the password is registered
-    admin = consultants.is_admin_email(body.email)
     if body.wants_consultant and not admin:
         await consultants.pick(body.consultant_id)        # 404/409 (full) BEFORE the password is registered
     creds = await auth.register_password(body.email, password)
@@ -367,7 +376,8 @@ async def signin(body: SigninIn):
         that Supabase must confirm by email, needs_confirmation and no token).
 
     Raises:
-        HTTPException: 401 "Wrong email or password."; 403 while Supabase waits for the
+        HTTPException: 401 "Wrong email or password."; 403 for as_consultant
+            when the account isn't an approved consultant; 403 while Supabase waits for the
             email to be confirmed; 422 for a too-short first password.
 
     Example:
@@ -392,6 +402,12 @@ async def signin(body: SigninIn):
             return await _confirm_email_response(acc)
     await account_store.touch_last_login(str(acc["id"]))
     acc = await consultants.sync_roles(acc)
+    if body.as_consultant and not await account_store.get_consultant_by_account(str(acc["id"])):
+        waiting = acc.get("consultant_request") == "pending"
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=(
+            "Your consultant request is still waiting for approval. Sign in as Account for now."
+            if waiting else
+            "This account isn't a consultant. Sign in as Account, or ask to be a consultant in Settings."))
     return await _auth_response(acc)
 
 

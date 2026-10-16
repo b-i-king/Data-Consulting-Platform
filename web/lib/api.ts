@@ -14,6 +14,7 @@ import type {
   ConsultantClient,
   ConsultantLoad,
   ConsultantPlan,
+  ConsultantSettings,
   ConnectionsInfo,
   DataConnection,
   RefreshFrequency,
@@ -134,9 +135,13 @@ export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
 
 export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
 
-/** Sign in with email + password (consultants too — no access code). */
-export const signin = (email: string, password: string) =>
-  postJson<AuthResponse>("/api/accounts/signin", { email, password });
+/**
+ * Sign in with email + password (consultants too — no access code).
+ * asConsultant: the "Consultant" choice at the top of the form; refused when
+ * the account isn't an approved consultant.
+ */
+export const signin = (email: string, password: string, asConsultant = false) =>
+  postJson<AuthResponse>("/api/accounts/signin", { email, password, as_consultant: asConsultant });
 
 /** Who am I? The account as the server sees it now (e.g. just approved as a consultant). */
 export async function getMe(token: string): Promise<Account> {
@@ -234,19 +239,32 @@ export async function getMyClients(token: string): Promise<{ consultant: { id: s
   return res.json();
 }
 
-/** Consultants: my capacity (how many clients I take at once) and how full I am. */
-export async function getConsultantSettings(token: string): Promise<{ load: ConsultantLoad; max_capacity: number }> {
+/** Consultants: my Settings — capacity and load, Cal.com links, Cal.com webhook. */
+export async function getConsultantSettings(token: string): Promise<ConsultantSettings> {
   const res = await apiFetch(`${API_URL}/api/consultant/settings`, { headers: { Authorization: `Bearer ${token}` } });
   await raiseForStatus(res);
   return res.json();
 }
 
-/** Consultants: change my capacity (1 to max_capacity). */
-export async function setConsultantCapacity(token: string, capacity: number): Promise<{ load: ConsultantLoad; max_capacity: number }> {
+/** Consultants: change my capacity and/or booking links (send only what changes; "" clears a link). */
+export async function saveConsultantSettings(
+  token: string,
+  change: { capacity?: number; free_booking_url?: string; paid_booking_url?: string },
+): Promise<ConsultantSettings> {
   const res = await apiFetch(`${API_URL}/api/consultant/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ capacity }),
+    body: JSON.stringify(change),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Consultants: make (or replace) my Cal.com webhook secret. */
+export async function newWebhookSecret(token: string): Promise<ConsultantSettings> {
+  const res = await apiFetch(`${API_URL}/api/consultant/settings/webhook-secret`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
   });
   await raiseForStatus(res);
   return res.json();

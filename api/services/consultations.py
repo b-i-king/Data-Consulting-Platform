@@ -10,10 +10,16 @@ people to the paid ($80/hour) link.
 
 THE ANSWER: two ways in, one rule
 ---------------------------------
-1. AUTOMATIC (Cal.com webhook). Cal.com calls POST /api/consultations/calcom-webhook
-   whenever a booking is created, rescheduled, canceled, or a meeting ends.
-   Each call is signed with CALCOM_WEBHOOK_SECRET so nobody can fake one.
-   The app keeps one row per booking in the `consultations` table.
+1. AUTOMATIC (Cal.com webhook). Cal.com calls the app whenever a booking is
+   created, rescheduled, canceled, or a meeting ends:
+     * EACH CONSULTANT's own webhook: POST /api/consultations/calcom-webhook/<consultant id>,
+       signed with THEIR secret (dim.consultants.calcom_webhook_secret, made by
+       the app in their Settings). The booking is recorded as theirs
+       (consultations.consultant_id), so their sessions can be counted and paid.
+     * The shared webhook: POST /api/consultations/calcom-webhook, signed with
+       CALCOM_WEBHOOK_SECRET (for the BOOKING_URL / PAID_BOOKING_URL links).
+   Nobody can fake a call without the secret. One row per booking in the
+   `consultations` table.
 2. MANUAL (you, the consultant). In the workspace, working on a client, you
    press "Confirm it happened" (or "No-show" / "Canceled"). You can also add a
    consultation by hand if it was booked before the webhook was set up.
@@ -23,9 +29,28 @@ free consultation "completed". A webhook alone never uses it up — Cal.com
 can say a meeting ENDED (the calendar slot passed), but only you know it
 really happened. That keeps the final say with you.
 
-After that, every booking link the client sees is PAID_BOOKING_URL (a second
-Cal.com event type you create for $80/hour sessions; Cal.com can take the
-payment itself through its Stripe app, or clients prepay hours here).
+After that, every booking link the client sees is the PAID link (a second
+Cal.com event type for $80/hour sessions; Cal.com takes the payment itself
+through its Stripe app, so each consultant is paid on their own Cal.com).
+
+WHOSE LINKS? (links_for)
+------------------------
+1. the client's own consultant's links (Settings -> "Your booking links"),
+2. else the default consultant's links,
+3. else BOOKING_URL / PAID_BOOKING_URL from the settings.
+A missing paid link falls back to the free one, so there's always a link.
+
+ONE WEBHOOK FOR BOTH EVENT TYPES
+--------------------------------
+A consultant needs ONE webhook (Cal.com -> Settings -> Developer -> Webhooks),
+not one per event type: an account-level webhook fires for every event type.
+(If they add it per event type instead, use the same URL and secret on both.)
+Free or paid is decided per booking, in this order:
+  1. metadata[kind] — added by the app to every link it shows,
+  2. the booked event type's slug (payload "type") matched against the last
+     part of the consultant's free / paid link ("data-consultation" vs
+     "paid-data-consultation") — for bookings made straight on Cal.com,
+  3. otherwise: paid once the free call is used up, else free.
 
 LINKING A BOOKING TO AN ACCOUNT
 -------------------------------
@@ -41,12 +66,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store
+from api.services import account_store, consultants
 from api.services.entitlements import plan_holder
 
 # What each Cal.com webhook trigger means for our row.
@@ -135,6 +160,32 @@ def free_used(rows: list[dict]) -> bool:
     return any(r["kind"] == "free" and r["status"] == "completed" for r in rows)
 
 
+async def links_for(holder: dict | None) -> tuple[str, str, bool]:
+    """
+    The free and paid booking links a client should see (see WHOSE LINKS? above).
+
+    Args:
+        holder: dict | None, the plan holder's accounts row (None for a guest).
+
+    Returns:
+        tuple[str, str, bool]: (free link, paid link, True when a separate paid
+        link is set up). Plain links: booking_link() adds the client's details.
+
+    Example:
+        >>> await links_for(kims_client)
+        ('https://cal.com/kim/30min', 'https://cal.com/kim/session', True)
+    """
+    s = get_settings()
+    consultant = None
+    if holder and holder.get("consultant_id"):
+        consultant = await account_store.get_consultant(str(holder["consultant_id"]))
+    for c in (consultant, await consultants.default_consultant()):
+        if c and c.get("free_booking_url"):
+            paid = c.get("paid_booking_url")
+            return c["free_booking_url"], paid or c["free_booking_url"], bool(paid)
+    return s.booking_url, s.paid_booking_url or s.booking_url, bool(s.paid_booking_url)
+
+
 async def summary(account: dict) -> dict:
     """
     Everything the workspace shows about consultations for one client.
@@ -155,52 +206,105 @@ async def summary(account: dict) -> dict:
     holder = await plan_holder(account)
     rows = await account_store.list_consultations(str(holder["id"]), holder["email"])
     used = free_used(rows)
-    free_link = booking_link(s.booking_url, holder, "free")
-    # Without a separate paid link, everyone keeps the one link you have.
-    paid_link = booking_link(s.paid_booking_url or s.booking_url, holder, "paid")
+    free, paid, paid_set = await links_for(holder)
+    free_link = booking_link(free, holder, "free")
+    # Without a separate paid link, everyone keeps the one link there is.
+    paid_link = booking_link(paid, holder, "paid")
+    consultant = await account_store.get_consultant(str(holder["consultant_id"])) if holder.get("consultant_id") else None
     return {
         "free_used": used,
         "booking_url": paid_link if used else free_link,
         "free_booking_url": free_link,
         "paid_booking_url": paid_link,
-        "paid_link_configured": bool(s.paid_booking_url),
-        "webhook_configured": bool(s.calcom_webhook_secret),
+        "paid_link_configured": paid_set,
+        "webhook_configured": bool(s.calcom_webhook_secret or (consultant and consultant.get("calcom_webhook_secret"))),
         "history": [_out(r) for r in rows],
     }
 
 
 # ── Cal.com webhook ──────────────────────────────────────────────────────────
 
-def verify_signature(raw_body: bytes, signature: str | None) -> None:
+def verify_signature(raw_body: bytes, signature: str | None, secret: str | None = None) -> None:
     """
     Check that a webhook really came from Cal.com.
 
-    Cal.com signs the raw request body with your webhook secret (HMAC-SHA256)
+    Cal.com signs the raw request body with the webhook's secret (HMAC-SHA256)
     and sends the hex result in the `X-Cal-Signature-256` header. We compute
     the same thing; a mismatch means someone else sent it.
 
     Args:
         raw_body: bytes, the request body exactly as received.
         signature: str | None, the X-Cal-Signature-256 header.
+        secret: str | None, a consultant's own webhook secret; None = the shared
+            CALCOM_WEBHOOK_SECRET.
 
     Returns:
         None: returns quietly when the signature matches.
 
     Raises:
-        HTTPException: 503 when CALCOM_WEBHOOK_SECRET isn't set; 401 for a
-            missing or wrong signature.
+        HTTPException: 503 when no secret is set up; 401 for a missing or
+            wrong signature.
 
     Example:
         >>> secret = b"s3cret"; body = b'{"triggerEvent":"PING"}'
-        >>> verify_signature(body, hmac.new(secret, body, hashlib.sha256).hexdigest())   # CALCOM_WEBHOOK_SECRET=s3cret
+        >>> verify_signature(body, hmac.new(secret, body, hashlib.sha256).hexdigest(), "s3cret")
     """
-    secret = get_settings().calcom_webhook_secret
+    secret = secret if secret is not None else get_settings().calcom_webhook_secret
     if not secret:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail="The Cal.com webhook isn't switched on (CALCOM_WEBHOOK_SECRET is not set).")
+                            detail="This Cal.com webhook isn't switched on (no webhook secret is set up).")
     expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     if not signature or not hmac.compare_digest(signature.strip().lower(), expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Bad webhook signature.")
+
+
+def _slug(url: str | None) -> str | None:
+    """
+    The event-type slug at the end of a booking link (lowercase), or None.
+
+    Example:
+        >>> _slug("https://cal.com/thebolgroup/paid-data-consultation?x=1")
+        'paid-data-consultation'
+    """
+    if not url:
+        return None
+    return urlparse(url).path.rstrip("/").rsplit("/", 1)[-1].lower() or None
+
+
+async def kind_from_event_type(payload: dict, consultant_id: str | None) -> str | None:
+    """
+    Free or paid, from WHICH event type was booked (rule 2 above).
+
+    Cal.com sends the event type's slug as payload "type" (older payloads:
+    payload["eventType"]["slug"]). It is compared with the last part of the
+    booking links: the consultant's own (their webhook), else the links every
+    client falls back to (links_for).
+
+    Args:
+        payload: dict, the webhook's "payload".
+        consultant_id: str | None, whose webhook it came through.
+
+    Returns:
+        str | None: "free", "paid", or None when it can't tell.
+
+    Example:
+        >>> await kind_from_event_type({"type": "paid-data-consultation"}, brandon_id)
+        'paid'
+    """
+    slug = payload.get("type") or (payload.get("eventType") or {}).get("slug")
+    if not isinstance(slug, str) or not slug:
+        return None
+    consultant = await account_store.get_consultant(consultant_id) if consultant_id else None
+    if consultant and consultant.get("free_booking_url"):
+        free, paid = consultant.get("free_booking_url"), consultant.get("paid_booking_url")
+    else:
+        free, paid, _ = await links_for(None)
+    slug = slug.lower()
+    if paid and slug == _slug(paid) and paid != free:
+        return "paid"
+    if slug == _slug(free):
+        return "free"
+    return None
 
 
 def _when(text) -> datetime | None:
@@ -236,7 +340,7 @@ async def _match_account(payload: dict, email: str | None) -> dict | None:
     return await plan_holder(account) if account else None
 
 
-async def handle_webhook(event: dict) -> dict:
+async def handle_webhook(event: dict, consultant_id: str | None = None) -> dict:
     """
     Apply one Cal.com webhook to the consultations table.
 
@@ -252,6 +356,8 @@ async def handle_webhook(event: dict) -> dict:
 
     Args:
         event: dict, the webhook JSON ({"triggerEvent": ..., "payload": {...}}).
+        consultant_id: str | None, whose webhook it came through (their own
+            Cal.com); saved on the consultation. None = the shared webhook.
 
     Returns:
         dict: {"ok": True, "action": what happened, "consultation_id": ... or None}.
@@ -297,8 +403,11 @@ async def handle_webhook(event: dict) -> dict:
 
     if row is None:
         # First time we hear of this booking. Free or paid? The link says so
-        # (metadata[kind]); otherwise: paid once the free call is used up.
+        # (metadata[kind]); else which event type was booked; else paid once
+        # the free call is used up.
         kind = (payload.get("metadata") or {}).get("kind")
+        if kind not in ("free", "paid"):
+            kind = await kind_from_event_type(payload, consultant_id)
         if kind not in ("free", "paid"):
             used = holder is not None and free_used(
                 await account_store.list_consultations(str(holder["id"]), holder["email"]))
@@ -306,13 +415,16 @@ async def handle_webhook(event: dict) -> dict:
         row = await account_store.save_consultation({
             "account_id": str(holder["id"]) if holder else None,
             "attendee_email": email, "attendee_name": first.get("name"),
-            "kind": kind, "status": new_status, "source": "calcom", "calcom_booking_uid": uid, **times,
+            "kind": kind, "status": new_status, "source": "calcom", "calcom_booking_uid": uid,
+            "consultant_id": consultant_id, **times,
         })
         return {"ok": True, "action": new_status, "consultation_id": str(row["id"])}
 
     change: dict = {"id": row["id"], "calcom_booking_uid": uid, **times}
     if holder and not row.get("account_id"):
         change["account_id"] = str(holder["id"])
+    if consultant_id and not row.get("consultant_id"):
+        change["consultant_id"] = consultant_id
     if row.get("confirmed_at") is None:      # never overrule the consultant's own confirmation
         if not (new_status == "ended" and row["status"] in ("canceled", "no_show")):
             change["status"] = new_status
