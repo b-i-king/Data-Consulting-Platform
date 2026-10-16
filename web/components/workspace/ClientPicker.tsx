@@ -9,13 +9,17 @@
 // with every service on — handy for testing.
 //
 // "Add a client" creates an account for someone who'd rather not sign up
-// themselves (POST /api/consultant/clients), assigned to this consultant.
+// themselves (POST /api/consultant/clients), assigned to this consultant —
+// refused when the consultant is at their capacity. The fill bar under the
+// list is how full I am (my capacity is in Settings). Each client shows how
+// they want help: one-time analysis or monthly.
 
 "use client";
 
 import { useState, type FormEvent } from "react";
 import { addClient } from "@/lib/api";
-import type { AccountType, ConsultantClient, Industry, IntakeOptions, Location } from "@/lib/types";
+import type { AccountType, ConsultantClient, ConsultantLoad, Industry, IntakeOptions, Location } from "@/lib/types";
+import { LoadBar, PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { capitalizeFirst, companyNameError, emailError, personNameError } from "@/lib/validation";
 import LocationPicker from "@/components/auth/LocationPicker";
 import IndustryPicker from "@/components/wizard/IndustryPicker";
@@ -29,6 +33,8 @@ export default function ClientPicker(props: {
   actingId: string | null;
   onChoose: (id: string | null) => void;
   onAddClient: () => void;
+  /** How full I am (null while loading). */
+  load: ConsultantLoad | null;
 }) {
   const current = props.clients.find((c) => c.id === props.actingId);
 
@@ -44,17 +50,24 @@ export default function ClientPicker(props: {
         options={props.clients.map((c) => ({
           value: c.id,
           label: c.label,
-          detail: c.company_name ? `${c.person} · ${c.email}` : c.email,
+          detail: [c.company_name ? `${c.person} · ${c.email}` : c.email, c.consultant_plan && PLAN_LABELS[c.consultant_plan].title]
+            .filter(Boolean)
+            .join(" · "),
           keywords: `${c.person} ${c.email} ${c.location ?? ""} ${c.industry_other ?? ""}`,
         }))}
       />
       <p className="mt-1.5 text-xs text-ink-muted">
         {current
-          ? `${current.person} · ${current.email}`
+          ? `${current.person} · ${current.email}${current.consultant_plan ? ` · ${PLAN_LABELS[current.consultant_plan].title}` : ""}`
           : props.clients.length
             ? "None chosen: this is your own workspace (every service, for testing)."
             : "No clients yet. Add one, or they'll appear here when they ask for a consultant."}
       </p>
+      {props.load && (
+        <div className="mt-2">
+          <LoadBar load={props.load} />
+        </div>
+      )}
       <button type="button" onClick={props.onAddClient} className="mt-2 text-xs font-semibold text-consultant hover:underline">
         + Add a client
       </button>

@@ -7,9 +7,13 @@
 // never put secrets in a NEXT_PUBLIC_ variable.
 
 import type {
+  Account,
+  AdminPanelData,
   BillingInterval,
   CheckoutResult,
   ConsultantClient,
+  ConsultantLoad,
+  ConsultantPlan,
   ConnectionsInfo,
   DataConnection,
   RefreshFrequency,
@@ -130,9 +134,52 @@ export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
 
 export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
 
-/** Sign in with email + password; consultants also send their access code. */
-export const signin = (email: string, password: string, accessCode?: string) =>
-  postJson<AuthResponse>("/api/accounts/signin", { email, password, ...(accessCode ? { access_code: accessCode } : {}) });
+/** Sign in with email + password (consultants too — no access code). */
+export const signin = (email: string, password: string) =>
+  postJson<AuthResponse>("/api/accounts/signin", { email, password });
+
+/** Who am I? The account as the server sees it now (e.g. just approved as a consultant). */
+export async function getMe(token: string): Promise<Account> {
+  const res = await apiFetch(`${API_URL}/api/accounts/me`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Every consultant and how full they are (public: the "pick your consultant" fill bars). */
+export const getConsultants = () => getJson<{ consultants: ConsultantLoad[] }>("/api/accounts/consultants");
+
+/** A signed-in client asks for a consultant (empty id = keep mine, or the server picks one with room). */
+export const chooseConsultant = (token: string, consultantId: string | null, plan: ConsultantPlan) =>
+  postJson<MyServices>("/api/accounts/consultant", { consultant_id: consultantId, consultant_plan: plan }, token);
+
+/** "I'd like to work as a consultant" — an admin approves or denies. */
+export async function requestConsultantRole(token: string): Promise<Account> {
+  const res = await apiFetch(`${API_URL}/api/accounts/consultant-request`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+// ── Admin (api/routers/admin.py) ──────────────────────────────────────────────
+
+/** Admins: who asked to be a consultant, and every consultant's load. */
+export async function getAdminPanel(token: string): Promise<AdminPanelData> {
+  const res = await apiFetch(`${API_URL}/api/admin/consultant-requests`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: approve or deny one request; returns the refreshed panel. */
+export async function decideConsultantRequest(token: string, accountId: string, decision: "approve" | "deny"): Promise<AdminPanelData> {
+  const res = await apiFetch(`${API_URL}/api/admin/consultant-requests/${encodeURIComponent(accountId)}/${decision}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
 
 export const getSkills = () => getJson<SkillInfo[]>("/api/skills");
 
@@ -180,9 +227,27 @@ export async function setRefresh(token: string, connector: string, frequency: Re
   return res.json();
 }
 
-/** Consultants: the clients assigned to me (the "Working on" picker). */
-export async function getMyClients(token: string): Promise<{ consultant: { id: string; name: string }; clients: ConsultantClient[] }> {
+/** Consultants: the clients assigned to me (the "Working on" picker), and how full I am. */
+export async function getMyClients(token: string): Promise<{ consultant: { id: string; name: string }; clients: ConsultantClient[]; load: ConsultantLoad }> {
   const res = await apiFetch(`${API_URL}/api/consultant/clients`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Consultants: my capacity (how many clients I take at once) and how full I am. */
+export async function getConsultantSettings(token: string): Promise<{ load: ConsultantLoad; max_capacity: number }> {
+  const res = await apiFetch(`${API_URL}/api/consultant/settings`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Consultants: change my capacity (1 to max_capacity). */
+export async function setConsultantCapacity(token: string, capacity: number): Promise<{ load: ConsultantLoad; max_capacity: number }> {
+  const res = await apiFetch(`${API_URL}/api/consultant/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ capacity }),
+  });
   await raiseForStatus(res);
   return res.json();
 }

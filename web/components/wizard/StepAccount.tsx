@@ -1,43 +1,60 @@
-// Step 5 — create an account (first time an account is required), then download.
+// Step 5 — "Next steps": create an account (the first time one is required),
+// then do what was chosen on "Your needs".
 //
 // Signup fields (form in components/auth/AuthForm.tsx):
-//   individual: first name, last name, email
+//   individual: first name, last name, email, password + confirm, terms box
 //   business:   + company name, + optional team members (name + email each)
-// The services chosen on "Your needs" are saved on the new account's plan,
-// so the signed-in workspace (/app) opens them.
+// The projects picked on "Your needs" are saved as interests; the consultant
+// picked there (and one-time / monthly) is sent with the sign-up.
 //
-// If a plan was picked on "Your needs", a card offers to start it here
-// (Stripe Checkout; in test mode it switches on at once). Download first:
-// paying at Stripe leaves this page, and files live only in this tab.
-//
-// Once signed in, each dataset group gets CSV and Excel download buttons,
-// with the estimated wait and charge. Clicking one first asks for
-// confirmation (DownloadConfirm.tsx: rows × fields, time, total to pay);
-// confirming re-sends the files kept in memory, plus the missing-value
-// choices from step 3; the server cleans them again and streams the result
-// back (nothing is stored on the server).
+// Once signed in, the page leads with the path chosen on "Your needs":
+//   * JUST DOWNLOAD — CSV and Excel buttons for each table, with the estimated
+//     wait and charge. Clicking one first asks for confirmation
+//     (DownloadConfirm.tsx); confirming re-sends the files kept in memory and
+//     the choices from step 3; the server cleans them again and streams the
+//     result back (nothing is stored).
+//   * DO IT MYSELF — "Start my package" (Stripe Checkout; in test mode it
+//     switches on at once). Download first if you want the file: paying at
+//     Stripe leaves this page, and files live only in this tab.
+//   * HELP FROM A CONSULTANT — who your consultant is, and "Share your data
+//     with <consultant>": the Data Engineering load (components/explore/
+//     WarehouseLoad.tsx) — a preview of how the data will be stored, the
+//     storage consent, then "Accept and load" into fact.account_data. That is
+//     what lets the consultant open the same data from their workspace.
+//     WITHOUT this step nothing is stored (files are in this tab only), so the
+//     consultant would have to ask for the files again.
+// The same "Save to your account" box appears for anyone whose plan includes
+// Data Engineering (e.g. a package with it, once started).
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { downloadCleaned, getMyServices, startCheckout } from "@/lib/api";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { chooseConsultant, downloadCleaned, getMyServices, startCheckout } from "@/lib/api";
 import AuthForm from "@/components/auth/AuthForm";
+import WarehouseLoad from "@/components/explore/WarehouseLoad";
+import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { fmtInt, fmtUsd } from "@/lib/format";
 import type { Session } from "@/lib/session";
-import type { AccountType, AnalyzeResponse, CleaningInput, Industry, Subscription, SubscriptionChoice } from "@/lib/types";
+import type { AccountType, AnalyzeResponse, CleaningInput, ConsultantLoad, ConsultantPlan, Industry, MyServices, Subscription, SubscriptionChoice } from "@/lib/types";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
 import { packageTotal } from "@/components/billing/PackageBuilder";
+import type { NextPath } from "./StepServices";
 import { Button, Card, ErrorBox, NavRow, StepHeader } from "./ui";
 
+const ENGINEERING = "data_engineering";
 
 export default function StepAccount(props: {
   defaultType: AccountType;
   industry: Industry;
-  serviceIds: string[]; // chosen on "Your needs"; saved on the new account's plan
-  subscription: SubscriptionChoice | null; // plan picked on "Your needs" (started on this step)
+  serviceIds: string[]; // projects chosen on "Your needs"; saved as interests
+  path: NextPath;
+  subscription: SubscriptionChoice | null; // package picked on "Your needs" (started on this step)
   plans: Subscription[];
-  wantsConsultant: boolean; // "do it for me" picked on "Your needs"
-  consultantName: string | null;
+  wantsConsultant: boolean; // "Help from a consultant" picked on "Your needs"
+  consultants: ConsultantLoad[];
+  consultantId: string | null;
+  consultantPlan: ConsultantPlan;
   session: Session | null;
   onSignedIn: (s: Session) => void;
   onSignOut: () => void;
@@ -48,17 +65,19 @@ export default function StepAccount(props: {
   return (
     <section>
       {props.session ? (
-        <DownloadPanel {...props} session={props.session} subscription={props.subscription} plans={props.plans} />
+        <NextSteps {...props} session={props.session} />
       ) : (
         <AuthForm
           defaultType={props.defaultType}
           industry={props.industry}
           serviceIds={props.serviceIds}
           wantsConsultant={props.wantsConsultant}
-          consultantName={props.consultantName}
+          consultants={props.consultants}
+          consultantId={props.consultantId}
+          consultantPlan={props.consultantPlan}
           onSignedIn={props.onSignedIn}
-          title={{ signup: "Create a free account to download", signin: "Welcome back" }}
-          subtitle="Your cleaned data is ready. We just need to know who to send it to."
+          title={{ signup: "Create a free account for your next steps", signin: "Welcome back" }}
+          subtitle="Your cleaned data is ready. We just need to know who it belongs to."
         />
       )}
       <NavRow onBack={props.onBack} />
@@ -66,58 +85,223 @@ export default function StepAccount(props: {
   );
 }
 
-// ── Download (signed in) ─────────────────────────────────────────────────────
+// ── Next steps (signed in) ──────────────────────────────────────────────────
 
-function DownloadPanel(props: {
+function NextSteps(props: {
   session: Session;
   onSignOut: () => void;
   input: CleaningInput;
   analysis: AnalyzeResponse;
+  path: NextPath;
   subscription: SubscriptionChoice | null;
   plans: Subscription[];
+  wantsConsultant: boolean;
+  consultants: ConsultantLoad[];
+  consultantId: string | null;
+  consultantPlan: ConsultantPlan;
 }) {
-  // Downloads are free when the account's plan includes Data Cleaning.
-  const [included, setIncluded] = useState(false);
-  const [planNote, setPlanNote] = useState<string | null>(null);
+  const { token } = props.session;
+  const [plan, setPlan] = useState<MyServices | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
-  const [planStarted, setPlanStarted] = useState(false);
   const chosen = props.subscription && props.subscription.plans.length ? props.subscription : null;
   const chosenNames = chosen ? chosen.plans.map((id) => props.plans.find((p) => p.id === id)?.name).join(" + ") : "";
+
+  const refresh = useCallback(async () => {
+    const m = await getMyServices(token);
+    setPlan(m);
+    return m;
+  }, [token]);
+
+  // Signed in BEFORE choosing a consultant on "Your needs" (an existing
+  // account): ask for one now, so they can share the data straight away.
   useEffect(() => {
-    getMyServices(props.session.token)
-      .then((m) => {
-        setIncluded(m.downloads_included);
-        setPlanStarted(m.subscriptions.length > 0);
+    getMyServices(token)
+      .then(async (m) => {
+        const needsOne = props.wantsConsultant && !m.account.consultant_name && m.can_add && m.account.role === "client";
+        setPlan(needsOne ? await chooseConsultant(token, props.consultantId, props.consultantPlan) : m);
       })
-      .catch(() => {});
-  }, [props.session.token]);
+      .catch((e) => setNote(e instanceof Error ? e.message : "We couldn't load your plan."));
+  }, [token, props.wantsConsultant, props.consultantId, props.consultantPlan]);
+
+  const planStarted = (plan?.subscriptions.length ?? 0) > 0;
+  const canStore = !!plan?.active.includes(ENGINEERING);
+  const consultantName = plan?.account.consultant_name ?? null;
+  const name = plan ? (plan.account.company_name ?? `${plan.account.first_name} ${plan.account.last_name}`) : "";
 
   async function startPlan() {
-    if (!props.subscription) return;
+    if (!chosen) return;
     setPlanBusy(true);
-    setPlanNote(null);
+    setNote(null);
     try {
-      const res = await startCheckout(props.session.token, props.subscription.plans, props.subscription.interval);
+      const res = await startCheckout(token, chosen.plans, chosen.interval);
       if (res.url) {
         window.location.assign(res.url); // Stripe's secure page; it returns to the workspace
         return;
       }
-      const m = await getMyServices(props.session.token);
-      setIncluded(m.downloads_included);
-      setPlanStarted(true);
-      setPlanNote("Your package is on (test mode — nothing was charged).");
+      await refresh();
+      setNote("Your package is on (test mode — nothing was charged).");
     } catch (e) {
-      setPlanNote(e instanceof Error ? e.message : "We couldn't start the plan.");
+      setNote(e instanceof Error ? e.message : "We couldn't start the package.");
     } finally {
       setPlanBusy(false);
     }
   }
+
+  const download = <DownloadBox {...props} included={!!plan?.downloads_included} />;
+  const store = canStore && <StoreBox token={token} analysis={props.analysis} input={props.input} name={name}
+    canDelete={!!plan?.can_add} consultantName={props.path === "consultant" ? consultantName : null} />;
+
+  return (
+    <>
+      <StepHeader
+        title={`Next steps, ${props.session.account.first_name}`}
+        subtitle={
+          props.path === "consultant"
+            ? "Share your cleaned data with your consultant, so they can start."
+            : props.path === "package"
+              ? "Start your package, and download your cleaned data if you'd like a copy."
+              : "Download your cleaned data below. Processing is billed by the minute."
+        }
+      />
+
+      {props.path === "consultant" && (
+        <Card className="mb-4 border-consultant/40 bg-consultant-soft text-sm">
+          {consultantName ? (
+            <p>
+              <strong>Your consultant: {consultantName}</strong> ·{" "}
+              {PLAN_LABELS[plan?.account.consultant_plan ?? props.consultantPlan].title}. They&apos;ll reach out for your free
+              30-minute consultation.{" "}
+              <a href={plan?.consulting.booking_url} target="_blank" rel="noreferrer" className="text-brand underline">
+                Or book it now
+              </a>
+              .
+            </p>
+          ) : plan?.account.role === "consultant" ? (
+            <p>You&apos;re a consultant — consultants don&apos;t hire one for themselves.</p>
+          ) : (
+            <p>
+              <strong>You&apos;re first in line.</strong> Every consultant is fully booked right now; you&apos;ll be assigned as
+              soon as one has room.
+            </p>
+          )}
+        </Card>
+      )}
+
+      {props.path === "package" && chosen && !planStarted && (
+        <Card className="mb-4 border-brand/40">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm">
+              <strong>
+                Start your package — {chosenNames} ({chosen.interval === "month" ? "monthly" : "yearly"}):{" "}
+                {fmtUsd(packageTotal(props.plans, chosen.plans, chosen.interval))}/{chosen.interval === "month" ? "month" : "year"}
+              </strong>
+              <span className="block text-xs text-ink-muted">
+                Cancel anytime. Download your files first if you want them — paying opens Stripe&apos;s secure page, and
+                your files stay only in this tab.
+              </span>
+            </div>
+            <Button onClick={startPlan} disabled={planBusy}>
+              {planBusy ? "One moment…" : "Start my package"}
+            </Button>
+          </div>
+        </Card>
+      )}
+      {note && <p className="mb-4 text-sm" role="status">{note}</p>}
+
+      {/* The chosen path's main action comes first. */}
+      {props.path === "consultant" ? (
+        <>
+          {store || (
+            <Card className="mb-4 text-sm text-ink-muted">
+              Sharing your data opens once your consultant is assigned. Meanwhile you can download it below.
+            </Card>
+          )}
+          <h2 className="mb-2 mt-8 font-semibold">Want a copy too?</h2>
+          {download}
+        </>
+      ) : (
+        <>
+          {download}
+          {store && (
+            <>
+              <h2 className="mb-2 mt-8 font-semibold">Save it to your account</h2>
+              {store}
+            </>
+          )}
+        </>
+      )}
+
+      <p className="mt-6 text-sm text-ink-muted">
+        Signed in as {props.session.account.email}.{" "}
+        <Link href="/app" className="text-brand hover:underline">
+          Open your workspace
+        </Link>{" "}
+        ·{" "}
+        <button type="button" className="text-brand hover:underline" onClick={props.onSignOut}>
+          Sign out
+        </button>
+      </p>
+    </>
+  );
+}
+
+/** "Share your data": the Data Engineering load for each table (preview, consent, accept). */
+function StoreBox(props: {
+  token: string;
+  analysis: AnalyzeResponse;
+  input: CleaningInput;
+  name: string;
+  canDelete: boolean;
+  consultantName: string | null;
+}) {
+  const [active, setActive] = useState(0);
+  const group = props.analysis.groups[active];
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-ink-muted">
+        {props.consultantName
+          ? `Store your cleaned data in your account so ${props.consultantName} can open it from their workspace — `
+          : "Store your cleaned data in your account so you can open it on every visit — "}
+        nothing is stored until you check the preview and accept. You can delete it anytime.
+      </p>
+      {props.analysis.groups.length > 1 && (
+        <div role="tablist" className="flex flex-wrap gap-2">
+          {props.analysis.groups.map((g, i) => (
+            <button
+              key={g.group_id}
+              role="tab"
+              aria-selected={i === active}
+              onClick={() => setActive(i)}
+              className={`rounded-full border px-3 py-1.5 text-sm ${
+                i === active ? "border-brand bg-brand-soft font-medium" : "border-line bg-surface hover:border-brand"
+              }`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <WarehouseLoad
+        key={`load-${group.group_id}`}
+        token={props.token}
+        input={props.input}
+        groupId={group.group_id}
+        clientName={props.name}
+        canDelete={props.canDelete}
+        onStoredChanged={() => {}}
+      />
+    </div>
+  );
+}
+
+/** CSV / Excel download for each table, each confirmed first (DownloadConfirm.tsx). */
+function DownloadBox(props: { session: Session; input: CleaningInput; analysis: AnalyzeResponse; included: boolean }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [charged, setCharged] = useState<string | null>(null);
   // The download waiting for "Confirm" (null = no confirmation box open).
   const [asking, setAsking] = useState<{ groupId: number; format: DownloadFormat } | null>(null);
-  const { account } = props.session;
   const askingGroup = asking && props.analysis.groups.find((g) => g.group_id === asking.groupId);
 
   async function download(groupId: number, format: DownloadFormat) {
@@ -144,30 +328,6 @@ function DownloadPanel(props: {
 
   return (
     <>
-      <StepHeader
-        title={`You're all set, ${account.first_name}.`}
-        subtitle="Download your cleaned data below. Processing is billed by the minute."
-      />
-      {chosen && props.subscription && !planStarted && (
-        <Card className="mb-4 border-brand/40">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm">
-              <strong>
-                Start your package — {chosenNames} ({chosen.interval === "month" ? "monthly" : "yearly"}):{" "}
-                {fmtUsd(packageTotal(props.plans, chosen.plans, chosen.interval))}/{chosen.interval === "month" ? "month" : "year"}
-              </strong>
-              <span className="block text-xs text-ink-muted">
-                Cancel anytime. Download your files first — paying opens Stripe&apos;s secure page, and your files stay
-                only in this tab.
-              </span>
-            </div>
-            <Button onClick={startPlan} disabled={planBusy}>
-              {planBusy ? "One moment…" : "Start my package"}
-            </Button>
-          </div>
-        </Card>
-      )}
-      {planNote && <p className="mb-4 text-sm text-good" role="status">{planNote}</p>}
       <div className="space-y-3">
         {props.analysis.groups.map((g) => (
           <Card key={g.group_id} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -191,9 +351,8 @@ function DownloadPanel(props: {
       </div>
 
       <p className="mt-4 text-sm text-ink-muted">
-        Estimated processing charge: {fmtUsd(props.analysis.runtime.amount_usd)} (
-        {props.analysis.runtime.billable_minutes} billable minute
-        {props.analysis.runtime.billable_minutes === 1 ? "" : "s"}).
+        Estimated processing charge: {fmtUsd(props.analysis.runtime.amount_usd)} ({props.analysis.runtime.billable_minutes}{" "}
+        billable minute{props.analysis.runtime.billable_minutes === 1 ? "" : "s"}).
         {charged && ` Last download charged: $${charged}.`}
       </p>
 
@@ -204,18 +363,11 @@ function DownloadPanel(props: {
           tableLabel={askingGroup.label}
           format={asking.format}
           estimate={askingGroup.download_estimate}
-          included={included}
+          included={props.included}
           onConfirm={() => download(asking.groupId, asking.format)}
           onCancel={() => setAsking(null)}
         />
       )}
-
-      <p className="mt-6 text-sm text-ink-muted">
-        Signed in as {account.email}.{" "}
-        <button type="button" className="text-brand hover:underline" onClick={props.onSignOut}>
-          Sign out
-        </button>
-      </p>
     </>
   );
 }

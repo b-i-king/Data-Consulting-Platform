@@ -98,7 +98,7 @@ def test_zero_means_no_limit(monkeypatch):
 
 def test_download_endpoint_repeat_is_free_and_limit_returns_429():
     """Check through the API: a repeat download costs $0.00, and going over the limit returns 429."""
-    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "account_type": "individual", "first_name": "Pat",
+    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "first_name": "Pat",
                                                     "last_name": "Lee", "email": "fair@example.com"})
     h = {"Authorization": f"Bearer {res.json()['access_token']}"}
 

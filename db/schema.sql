@@ -85,6 +85,25 @@ CREATE TABLE IF NOT EXISTS dim.accounts (
     -- do it themselves); true -> the assigned consultant (NULL until assigned).
     wants_consultant      BOOLEAN NOT NULL DEFAULT false,
     consultant_id         UUID,                      -- -> dim.consultants (foreign key below)
+    -- How the consultant helps (chosen on "Your needs"): 'one_time' = one
+    -- analysis of everything they sent; 'monthly' = an ongoing monthly
+    -- engagement. NULL when they do it themselves.
+    consultant_plan       TEXT CHECK (consultant_plan IN ('one_time', 'monthly')),
+    -- Roles. is_admin: an ADMIN_EMAILS address (set by the API at sign-in);
+    -- admins approve consultants. is_consultant: an approved consultant (the
+    -- API also creates their dim.consultants row). Nobody becomes a consultant
+    -- on their own: they ASK (consultant_request = 'pending') and an admin
+    -- approves ('approved') or denies ('denied') — api/services/consultants.py.
+    is_admin                BOOLEAN NOT NULL DEFAULT false,
+    is_consultant           BOOLEAN NOT NULL DEFAULT false,
+    consultant_request      TEXT CHECK (consultant_request IN ('pending', 'approved', 'denied')),
+    consultant_requested_at TIMESTAMPTZ,
+    consultant_decided_at   TIMESTAMPTZ,
+    consultant_decided_by   UUID,                    -- the admin's account id
+    -- Terms of Service + Privacy Policy, ticked at sign-up (NULL for an account
+    -- made FOR someone, until they sign up themselves).
+    terms_accepted_at     TIMESTAMPTZ,
+    terms_version         TEXT,                      -- e.g. '2026-10-15' (web/app/terms)
     -- Projects they'd like a consultant's help with ("Projects with a
     -- consultant" on Your needs). INTEREST ONLY: unlocks nothing; tools unlock
     -- through dim.subscriptions. Service ids from api/services/pricing.py.
@@ -99,18 +118,41 @@ CREATE INDEX IF NOT EXISTS idx_accounts_consultant ON dim.accounts (consultant_i
 CREATE INDEX IF NOT EXISTS idx_accounts_naics      ON dim.accounts (naics_sector, naics_subsector);
 
 -- ── dim.consultants: the people who do the work for clients ─────────────────
--- A consultant signs in with a normal account; the email must be listed in
--- CONSULTANT_EMAILS and they enter CONSULTANT_ACCESS_CODE once. The API
--- creates this row on that first sign-in (you never insert it by hand).
+-- A consultant signs in with a normal account. The API creates this row when
+-- an admin APPROVES their request (or, for an admin, at sign-in) — you never
+-- insert it by hand.
+-- capacity: how many clients they take at once (they set it in the
+-- workspace, 1 to 10; default 3). Clients pick a consultant by name and see
+-- how full they are; a full consultant can't be picked.
 CREATE TABLE IF NOT EXISTS dim.consultants (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id    UUID NOT NULL UNIQUE REFERENCES dim.accounts (id) ON DELETE CASCADE,
     display_name  TEXT NOT NULL,                     -- shown to clients: "Brandon"
     email         TEXT NOT NULL UNIQUE,              -- lowercase
-    is_default    BOOLEAN NOT NULL DEFAULT false,    -- new "do it for me" clients go here
+    is_default    BOOLEAN NOT NULL DEFAULT false,    -- "do it for me" clients who pick nobody go here
     active        BOOLEAN NOT NULL DEFAULT true,
+    capacity      INTEGER NOT NULL DEFAULT 3 CHECK (capacity BETWEEN 1 AND 10),   -- MAX_CAPACITY in consultants.py
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Upgrading a database made before these columns existed (CREATE TABLE IF NOT
+-- EXISTS leaves an existing table as it is, so new columns are added here).
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_plan TEXT
+    CHECK (consultant_plan IN ('one_time', 'monthly'));
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS is_consultant BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_request TEXT
+    CHECK (consultant_request IN ('pending', 'approved', 'denied'));
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_requested_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_decided_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS consultant_decided_by UUID;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS terms_version TEXT;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 3
+    CHECK (capacity BETWEEN 1 AND 10);
+-- The admin's to-do list: who is waiting for a decision.
+CREATE INDEX IF NOT EXISTS idx_accounts_consultant_request ON dim.accounts (consultant_request)
+    WHERE consultant_request = 'pending';
 
 -- ── dim.teams: one per business ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS dim.teams (

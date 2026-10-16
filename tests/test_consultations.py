@@ -33,8 +33,7 @@ def settings(monkeypatch):
     Returns:
         Iterator[None]: yields once while the test runs.
     """
-    monkeypatch.setenv("CONSULTANT_EMAILS", "coach@example.com")
-    monkeypatch.setenv("CONSULTANT_ACCESS_CODE", "code-123")
+    monkeypatch.setenv("ADMIN_EMAILS", "coach@example.com")
     monkeypatch.setenv("BOOKING_URL", "https://cal.com/coach/free-30")
     monkeypatch.setenv("PAID_BOOKING_URL", "https://cal.com/coach/paid-60")
     monkeypatch.setenv("CALCOM_WEBHOOK_SECRET", SECRET)
@@ -49,7 +48,7 @@ def settings(monkeypatch):
 def _signup(email, first="Ana", **extra):
     """Sign up an individual (asserting 201) and return the JSON reply."""
     res = client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": first,
-                                                    "last_name": "Lee", "email": email, "password": PW, **extra})
+                                                    "last_name": "Lee", "email": email, "password": PW, "accept_terms": True, **extra})
     assert res.status_code == 201, res.text
     return res.json()
 
@@ -72,7 +71,7 @@ def _hook(trigger, payload, secret=SECRET):
 
 def test_booking_link_carries_the_client_and_switches_to_paid():
     """New clients get the free link (prefilled); once a consultant confirms the free call, the paid link."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     ana = _signup("ana@example.com", wants_consultant=True)
     aid = ana["account"]["id"]
     info = client.get("/api/consultations", headers=_h(ana["access_token"])).json()
@@ -109,7 +108,7 @@ def test_webhook_off_without_secret(monkeypatch):
 
 def test_webhook_lifecycle_and_the_rule():
     """Booked -> rescheduled -> ended keeps one row; "ended" does NOT use up the free call; confirming does."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     ana = _signup("ana@example.com", wants_consultant=True)
     aid = ana["account"]["id"]
     meta = {"account_id": aid, "kind": "free"}
@@ -140,7 +139,7 @@ def test_webhook_lifecycle_and_the_rule():
 
 def test_cancel_and_no_show_keep_the_free_call():
     """A canceled booking or a no-show leaves the free consultation unused."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     ana = _signup("ana@example.com", wants_consultant=True)
     aid = ana["account"]["id"]
     _hook("BOOKING_CREATED", {"uid": "bk9", "attendees": [{"email": "ana@example.com"}]})   # matched by email
@@ -162,7 +161,7 @@ def test_guest_booking_is_matched_when_the_account_appears():
 
 def test_cannot_mark_another_clients_consultation():
     """A consultation id from another client is 404 for this client."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     ana = _signup("ana@example.com", wants_consultant=True)["account"]["id"]
     bo = _signup("bo@example.com", "Bo", wants_consultant=True)["account"]["id"]
     bos = client.post("/api/consultations", headers=_h(coach, bo), json={"status": "booked"}).json()["history"][0]["id"]

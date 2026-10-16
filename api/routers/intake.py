@@ -68,6 +68,9 @@ async def intake_options():
         # The default consultant's first name, for "I'd like Brandon to do this
         # for me" at signup (None until a consultant has signed in once).
         "consultant": {"name": c["display_name"]} if (c := await consultants.default_consultant()) else None,
+        # Every consultant and how full they are, for the "pick your consultant"
+        # fill bars (first names and counts only — api/services/consultants.py).
+        "consultants": await consultants.directory(),
         # Business funnel: goods/services -> NAICS sector -> subsector.
         "industries": intake.naics_tree(),
         # Business size bands (LinkedIn company size codes A–I).

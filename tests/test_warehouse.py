@@ -46,8 +46,7 @@ def fresh(monkeypatch):
     Returns:
         Iterator[None]: yields once while the test runs.
     """
-    monkeypatch.setenv("CONSULTANT_EMAILS", "coach@example.com")
-    monkeypatch.setenv("CONSULTANT_ACCESS_CODE", "code-123")
+    monkeypatch.setenv("ADMIN_EMAILS", "coach@example.com")
     monkeypatch.setenv("DATABASE_URL", "")
     get_settings.cache_clear()
     for store in (account_store._accounts, account_store._teams, account_store._consultants, account_store._consents,
@@ -60,7 +59,7 @@ def fresh(monkeypatch):
 def _signup(email, first="Ana", **extra):
     """Sign up an individual (asserting 201) and return the JSON reply."""
     res = client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": first,
-                                                    "last_name": "Lee", "email": email, "password": PW, **extra})
+                                                    "last_name": "Lee", "email": email, "password": PW, "accept_terms": True, **extra})
     assert res.status_code == 201, res.text
     return res.json()
 
@@ -157,7 +156,7 @@ def test_every_event_type_is_a_type_and_subtype():
 
 def test_preview_then_accept_then_reload_is_safe():
     """Full flow: preview stores nothing; load needs consent + the same fingerprint; reloading adds nothing."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     client_id = _signup("ana@example.com", wants_consultant=True)["account"]["id"]
     h = _h(coach, client_id)
 
@@ -192,7 +191,7 @@ def test_preview_then_accept_then_reload_is_safe():
 
 def test_a_changed_value_is_updated_not_duplicated():
     """Loading the file again with one amount changed updates that one row and adds nothing."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     h = _h(coach, _signup("ana@example.com", wants_consultant=True)["account"]["id"])
 
     def load(body):
@@ -215,7 +214,7 @@ def test_needs_data_engineering():
 
 def _load_for_client():
     """Consultant loads the sales file for a done-for-you client; returns (consultant headers, client token)."""
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     ana = _signup("ana@example.com", wants_consultant=True)
     h = _h(coach, ana["account"]["id"])
     fp = client.post("/api/warehouse/preview", headers=h, files=_files()).json()["fingerprint"]
@@ -257,7 +256,7 @@ def test_team_member_cannot_delete():
     """Only the team owner (plan holder) may delete a business's stored data."""
     res = client.post("/api/accounts/signup", json={
         "account_type": "business", "first_name": "Ann", "last_name": "Ko", "email": "ann@example.com",
-        "company_name": "Ko Bakery", "password": PW,
+        "company_name": "Ko Bakery", "password": PW, "accept_terms": True,
         "team_members": [{"first_name": "Bo", "last_name": "Ko", "email": "bo@example.com"}]})
     assert res.status_code == 201
     bo = client.post("/api/accounts/signin", json={"email": "bo@example.com", "password": PW}).json()["access_token"]
@@ -274,7 +273,7 @@ def test_ai_can_be_added_only_after_data_is_stored():
     assert before.status_code == 400 and "load your data first" in before.json()["detail"]
     assert client.get("/api/accounts/services", headers=_h(client_token)).json()["ai_ready"] is False
 
-    coach = _signup("coach@example.com", "Coach", access_code="code-123")["access_token"]
+    coach = _signup("coach@example.com", "Coach")["access_token"]
     h = _h(coach, client.get("/api/accounts/me", headers=_h(client_token)).json()["id"])
     fp = client.post("/api/warehouse/preview", headers=h, files=_files()).json()["fingerprint"]
     client.post("/api/warehouse/load", headers=h, files=_files(), data={"fingerprint": fp, "consent": "true"})

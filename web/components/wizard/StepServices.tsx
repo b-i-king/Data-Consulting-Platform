@@ -1,16 +1,18 @@
-// Step 4 — "What does your company need help with?"
-// Pick one or more services. Data cleaning is always included (it's the
-// automatic first step). The price estimate refreshes whenever the selection
-// changes; services that need a person show the booking link.
-// "Continue to download" first asks the person to confirm the selection and
-// the estimated total they can expect to pay.
+// Step 4 — "Your needs": what would you like to do next?
 //
-// Two ways to work, above the services:
-//   * BUILD YOUR OWN PACKAGE — pick tools (each has a fixed monthly / yearly
-//     price; the total is the sum) or the All tools bundle; cancel anytime
-//     (components/billing/PackageBuilder.tsx). It starts after signup, on the
-//     download step (Stripe Checkout).
-//   * DONE FOR YOU — a consultant (lavender card) signs in and does the work.
+// THREE PATHS (one card each; the choice decides what "Next steps" offers):
+//   1. JUST DOWNLOAD     — the cleaned data, nothing else. Data Cleaning is
+//                          charged by the minute when you download.
+//   2. DO IT MYSELF      — build a monthly / yearly package of tools (or All
+//                          tools), cancel anytime (components/billing/PackageBuilder.tsx).
+//                          It starts after signup, on "Next steps" (Stripe Checkout;
+//                          switched on at once in test mode).
+//   3. HELP FROM A CONSULTANT (lavender) — a ONE-TIME analysis of everything you
+//                          sent, or MONTHLY help. Pick a consultant by name: the fill
+//                          bars show how full each one is (components/consultants/
+//                          ConsultantPicker.tsx). Optional: the projects you'd like help
+//                          with. Starts with a free 30-minute consultation.
+// "Continue" first asks the person to confirm the choice and what to expect to pay.
 
 "use client";
 
@@ -18,10 +20,20 @@ import { useEffect, useState } from "react";
 import { getQuote } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
 import { fmtUsd } from "@/lib/format";
-import type { BillingInterval, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
+import type { BillingInterval, ConsultantLoad, ConsultantPlan, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
 import PackageBuilder, { packageTotal } from "@/components/billing/PackageBuilder";
+import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { QuoteSummary } from "./ServiceConfirm";
 import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader, TotalRow } from "./ui";
+
+/** The three ways forward from "Your needs". */
+export type NextPath = "download" | "package" | "consultant";
+
+const PATHS: { id: NextPath; emoji: string; title: string; note: string }[] = [
+  { id: "download", emoji: "⬇️", title: "Just download", note: "Get your cleaned data as CSV or Excel. Pay only for the processing minutes." },
+  { id: "package", emoji: "🧰", title: "Do it myself", note: "A monthly or yearly package of tools — dashboards, analysis, storage. Cancel anytime." },
+  { id: "consultant", emoji: "🤝", title: "Help from a consultant", note: "A one-time analysis, or monthly help. Pick who, by name. Starts with a free call." },
+];
 
 export default function StepServices(props: {
   services: Service[];
@@ -32,10 +44,14 @@ export default function StepServices(props: {
   subscriptions: Subscription[];
   subscription: SubscriptionChoice | null;
   onSubscription: (s: SubscriptionChoice | null) => void;
-  consultantName: string | null;
   consultingRate: number;
-  wantsConsultant: boolean;
-  onWantsConsultant: (v: boolean) => void;
+  path: NextPath | null;
+  onPath: (p: NextPath) => void;
+  consultants: ConsultantLoad[];
+  consultantId: string | null;
+  onConsultantId: (id: string | null) => void;
+  consultantPlan: ConsultantPlan;
+  onConsultantPlan: (p: ConsultantPlan) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -49,6 +65,7 @@ export default function StepServices(props: {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const consultantName = props.consultants.find((c) => c.id === props.consultantId)?.name ?? null;
 
   // Re-price whenever the selection changes.
   useEffect(() => {
@@ -65,150 +82,132 @@ export default function StepServices(props: {
     if (id === "data_cleaning") return; // always included
     props.onChange(props.selected.includes(id) ? props.selected.filter((s) => s !== id) : [...props.selected, id]);
   };
+  // "Do it myself" needs at least one tool picked before going on.
+  const ready = props.path !== null && (props.path !== "package" || picked.length > 0);
 
   return (
     <section>
-      <StepHeader
-        title="What would you like help with next?"
-        subtitle="Choose as many as you like — or none. Your cleaned data is ready to download either way."
-      />
+      <StepHeader title="What would you like to do next?" subtitle="Your cleaned data is ready. Choose one — you can change your mind later." />
 
-      <div className="mb-8">
-        <PackageBuilder
-          plans={props.subscriptions}
-          interval={interval}
-          onInterval={pickInterval}
-          value={picked}
-          onChange={(plans) => props.onSubscription(plans.length ? { plans, interval } : null)}
-          // A new account has no stored data yet, and AI works on stored data.
-          locked={{ ai: "Add it after your data is stored (Data Engineering)" }}
-          consultantSlot={
-            // "Done for you": wide, in lavender, right under All tools.
-            <div
-              className={`flex flex-col gap-3 rounded-2xl border-2 p-5 shadow-[var(--shadow-card)] sm:flex-row sm:items-center sm:justify-between ${
-                props.wantsConsultant ? "border-consultant bg-consultant-soft" : "border-consultant/40 bg-surface"
-              }`}
-            >
-              <div>
-                <span className="text-lg font-semibold">Done for you</span>
-                <p className="mt-1 text-sm text-ink-muted">
-                  Rather not learn a new platform? {props.consultantName ?? "A consultant"} signs in to your account and
-                  does the cleaning, dashboards and analysis for you — every tool included. Start with a free 30-minute
-                  consultation; after that, consulting is {fmtUsd(props.consultingRate)}/hour.
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-pressed={props.wantsConsultant}
-                onClick={() => props.onWantsConsultant(!props.wantsConsultant)}
-                className={`shrink-0 rounded-full px-5 py-2 text-sm font-semibold ${
-                  props.wantsConsultant ? "border border-line bg-surface" : "bg-consultant text-on-consultant hover:opacity-90"
-                }`}
-              >
-                {props.wantsConsultant ? "I'll do it myself" : `Have ${props.consultantName ?? "a consultant"} do it`}
-              </button>
-            </div>
-          }
-        />
-      </div>
-
-      <h2 className="font-semibold">Projects with a consultant (optional)</h2>
-      <p className="mb-2 text-sm text-ink-muted">
-        One-time work done for you — tell us what you&apos;d like help with. Priced after your free 30-minute consultation.
-      </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {props.services.map((s) => {
-          const on = props.selected.includes(s.id);
-          const price =
-            s.pricing_model === "runtime"
-              ? "Pay per minute of processing"
-              : s.pricing_model === "consultation" || s.pricing_model === "hourly"
-                ? s.consultation.text
-                : s.pricing_model === "early_access"
-                  ? "Early access · no charge"
-                  : `From ${fmtUsd(s.starting_price_usd)}`;
-          const color = categoryColor(s.id);
+      <div role="radiogroup" aria-label="Next step" className="grid gap-3 sm:grid-cols-3">
+        {PATHS.map((p) => {
+          const on = props.path === p.id;
+          const lavender = p.id === "consultant";
           return (
             <button
-              key={s.id}
+              key={p.id}
               type="button"
-              aria-pressed={on}
-              onClick={() => toggle(s.id)}
-              // The left border carries the category color (like a budget category).
-              style={{ borderLeftColor: color }}
-              className={`relative rounded-2xl border border-l-4 p-4 text-left shadow-[var(--shadow-card)] transition-colors ${
-                on ? "border-brand bg-brand-soft" : "border-line bg-surface hover:border-brand"
-              } ${s.id === "data_cleaning" ? "cursor-default" : ""}`}
+              role="radio"
+              aria-checked={on}
+              onClick={() => props.onPath(p.id)}
+              className={`rounded-2xl border-2 p-4 text-left shadow-[var(--shadow-card)] transition-colors ${
+                on
+                  ? lavender
+                    ? "border-consultant bg-consultant-soft"
+                    : "border-brand bg-brand-soft"
+                  : lavender
+                    ? "border-consultant/40 bg-surface hover:border-consultant"
+                    : "border-line bg-surface hover:border-brand"
+              }`}
             >
-              <div className="flex items-start justify-between gap-2">
-                <span className="flex flex-wrap items-center gap-2 font-semibold">
-                  {s.name}
-                  {!s.available && (
-                    <span
-                      className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)` }}
-                    >
-                      Early access
-                    </span>
-                  )}
-                </span>
-                <input type="checkbox" readOnly checked={on} tabIndex={-1} className="mt-1 accent-[var(--color-brand)]" />
-              </div>
-              <p className="mt-1 text-sm text-ink-muted">{s.description}</p>
-              {s.capabilities.length > 0 && (
-                <ul aria-label="What's included" className="mt-3 flex flex-wrap gap-1.5">
-                  {s.capabilities.map((c) => (
-                    <li
-                      key={c}
-                      className="rounded-full px-2 py-0.5 text-[11px]"
-                      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)` }}
-                    >
-                      {c}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-3 font-mono text-xs font-medium">
-                {price}
-                {s.id === "data_cleaning" && " · included"}
-              </p>
-              {/* Every service can start with a consultant: the free 30 minutes, then hourly. */}
-              {s.pricing_model !== "consultation" && s.pricing_model !== "hourly" && s.consultation.text && (
-                <p className="mt-0.5 text-xs text-ink-muted">{s.consultation.text}</p>
-              )}
+              <span aria-hidden className="text-2xl">
+                {p.emoji}
+              </span>
+              <span className="mt-1 block font-semibold">{p.title}</span>
+              <span className="mt-1 block text-sm text-ink-muted">{p.note}</span>
             </button>
           );
         })}
       </div>
 
-      {quote && (
-        <Card className="mt-6">
-          <h2 className="mb-3 font-semibold">Estimate</h2>
-          <ul className="divide-y divide-line text-sm">
-            {quote.lines.map((l) => (
-              <li key={l.service_id} className="flex justify-between gap-4 py-2">
-                <span>
-                  {l.name}
-                  <span className="block text-xs text-ink-muted">{l.note}</span>
-                </span>
-                <span className="font-mono tabular-nums">
-                  {l.pricing_model === "consultation" || l.pricing_model === "early_access" ? "—" : fmtUsd(l.amount_usd)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 flex justify-between border-t border-line pt-3 font-semibold">
-            <span>Estimated starting total</span>
-            <span className="font-mono tabular-nums">{fmtUsd(quote.estimated_total_usd)}</span>
-          </div>
+      {props.path === "download" && (
+        <Card className="mt-6 text-sm">
+          <p>
+            <strong>Next:</strong> create a free account and download. Estimated processing charge:{" "}
+            <span className="font-mono">{quote ? fmtUsd(quote.estimated_total_usd) : "…"}</span> — you&apos;ll confirm
+            it before anything is charged.
+          </p>
         </Card>
       )}
 
-      {quote?.requires_consultant && (
-        <div className="mt-4">
-          <ConsultantCta bookingUrl={quote.booking_url ?? props.bookingUrl}>
-            <strong>Some of these start with a conversation.</strong> Book a time and we&apos;ll scope it together.
-          </ConsultantCta>
+      {props.path === "package" && (
+        <div className="mt-6">
+          <PackageBuilder
+            plans={props.subscriptions}
+            interval={interval}
+            onInterval={pickInterval}
+            value={picked}
+            onChange={(plans) => props.onSubscription(plans.length ? { plans, interval } : null)}
+            // A new account has no stored data yet, and AI works on stored data.
+            locked={{ ai: "Add it after your data is stored (Data Engineering)" }}
+          />
+        </div>
+      )}
+
+      {props.path === "consultant" && (
+        <div className="mt-6 space-y-6">
+          <Card className="border-consultant/40">
+            <h2 className="mb-1 font-semibold">Your consultant</h2>
+            <p className="mb-4 text-sm text-ink-muted">
+              No new platform to learn: your consultant signs in to your account and does the cleaning, dashboards and
+              analysis for you — every tool included. It starts with a free 30-minute consultation; after that,
+              consulting is {fmtUsd(props.consultingRate)}/hour.
+            </p>
+            <ConsultantPicker
+              consultants={props.consultants}
+              value={props.consultantId}
+              onChange={props.onConsultantId}
+              plan={props.consultantPlan}
+              onPlan={props.onConsultantPlan}
+            />
+          </Card>
+
+          <div>
+            <h2 className="font-semibold">What would you like help with? (optional)</h2>
+            <p className="mb-2 text-sm text-ink-muted">Tell your consultant where to start. Priced after your free consultation.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {props.services.map((s) => {
+                const on = props.selected.includes(s.id);
+                const color = categoryColor(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggle(s.id)}
+                    // The left border carries the category color (like a budget category).
+                    style={{ borderLeftColor: color }}
+                    className={`relative rounded-2xl border border-l-4 p-4 text-left shadow-[var(--shadow-card)] transition-colors ${
+                      on ? "border-brand bg-brand-soft" : "border-line bg-surface hover:border-brand"
+                    } ${s.id === "data_cleaning" ? "cursor-default" : ""}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="flex flex-wrap items-center gap-2 font-semibold">
+                        {s.name}
+                        {!s.available && (
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                            style={{ color, backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)` }}
+                          >
+                            Early access
+                          </span>
+                        )}
+                      </span>
+                      <input type="checkbox" readOnly checked={on} tabIndex={-1} className="mt-1 accent-[var(--color-brand)]" />
+                    </div>
+                    <p className="mt-1 text-sm text-ink-muted">{s.description}</p>
+                    {s.id === "data_cleaning" && <p className="mt-2 font-mono text-xs font-medium">Included</p>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {quote?.requires_consultant && (
+            <ConsultantCta bookingUrl={quote.booking_url ?? props.bookingUrl}>
+              <strong>Want to talk first?</strong> Book your free 30-minute consultation now, or after you sign up.
+            </ConsultantCta>
+          )}
         </div>
       )}
 
@@ -216,41 +215,39 @@ export default function StepServices(props: {
 
       <NavRow onBack={props.onBack}>
         {/* If pricing failed to load, don't trap the person here: go on without the box. */}
-        <Button onClick={() => (quote ? setConfirming(true) : props.onNext())} disabled={!quote && !error}>
-          Continue to download
+        <Button onClick={() => (quote ? setConfirming(true) : props.onNext())} disabled={!ready || (!quote && !error)}>
+          Continue to next steps
         </Button>
       </NavRow>
 
       {confirming && quote && (
         <ConfirmDialog
-          title="Confirm your selection"
-          confirmLabel={`Confirm · ${fmtUsd(quote.estimated_total_usd)}`}
+          title="Confirm your choice"
+          confirmLabel="Confirm"
           onConfirm={() => {
             setConfirming(false);
             props.onNext();
           }}
           onCancel={() => setConfirming(false)}
         >
-          <p>Here&apos;s what you&apos;ve chosen and what you can expect to pay:</p>
-          {props.subscription && pickedNames.length > 0 && (
+          {props.path === "download" && <p>You&apos;ll create a free account, then download your cleaned data.</p>}
+          {props.path === "package" && props.subscription && pickedNames.length > 0 && (
             <TotalRow
               strong
               label={`Your package: ${pickedNames.join(" + ")} (${props.subscription.interval === "month" ? "monthly" : "yearly"}, cancel anytime — you'll pay after creating your account)`}
               value={`${fmtUsd(packageTotal(props.subscriptions, picked, props.subscription.interval))}/${props.subscription.interval === "month" ? "mo" : "yr"}`}
             />
           )}
-          {props.wantsConsultant && (
+          {props.path === "consultant" && (
             <p className="rounded-xl bg-consultant-soft p-3">
-              <strong>Done for you:</strong> {props.consultantName ?? "a consultant"} will reach out for your free
-              30-minute consultation; after that, consulting is {fmtUsd(props.consultingRate)}/hour.
+              <strong>{PLAN_LABELS[props.consultantPlan].title}</strong> with {consultantName ?? "whoever has room"}. Your
+              consultant will reach out for your free 30-minute consultation; after that, consulting is{" "}
+              {fmtUsd(props.consultingRate)}/hour. On the next page you can share your cleaned data with them.
             </p>
           )}
           <QuoteSummary quote={quote} />
           <p className="text-xs text-ink-muted">
-            Data Cleaning is charged when you download (you&apos;ll confirm that amount too). Package prices are starting
-            prices — we confirm the final price before any work begins.
-            {quote.requires_consultant && " Consulting starts with a free 30-minute call (Data Strategy & Discovery is paid from the first hour)."} Nothing is
-            charged on this step.
+            Data Cleaning is charged when you download (you&apos;ll confirm that amount too). Nothing is charged on this step.
           </p>
         </ConfirmDialog>
       )}

@@ -46,7 +46,7 @@ def test_validate_industry():
 def test_business_signup_stores_industry_and_team_inherits_it():
     """Check a business signup saves its industry and the team members get the same industry."""
     res = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Ria", "last_name": "Ng",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Ria", "last_name": "Ng",
         "email": "ria@example.com", "company_name": "Ng Grocers",
         "industry_supersector": "service_providing", "naics_sector": "44-45", "naics_subsector": "445",
         "team_members": [{"first_name": "Al", "last_name": "Ito", "email": "al@example.com"}],
@@ -61,7 +61,7 @@ def test_business_signup_stores_industry_and_team_inherits_it():
 def test_individual_cannot_set_industry():
     """Check an individual signup with an industry is rejected (422)."""
     res = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "individual", "first_name": "A", "last_name": "B",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "first_name": "A", "last_name": "B",
         "email": "solo-ind@example.com", "industry_supersector": "goods_producing",
     })
     assert res.status_code == 422
@@ -79,7 +79,7 @@ def test_company_size_uses_linkedin_codes_and_team_inherits_it():
     assert [s["id"] for s in sizes] == list("ABCDEFGHI")
     assert sizes[2]["employees"] == "11-50"
     res = client.post("/api/accounts/signup", json={
-        "password": "Correct-horse-9", "account_type": "business", "first_name": "Kim", "last_name": "Lo",
+        "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "first_name": "Kim", "last_name": "Lo",
         "email": "kim-size@example.com", "company_name": "Lo Bakery", "company_size": "C",
         "team_members": [{"first_name": "Jo", "last_name": "Ma", "email": "jo-size@example.com"}],
     })
@@ -94,7 +94,7 @@ def test_company_size_rejected_when_unknown_or_individual():
     """Check an unknown size code, or a size on an individual signup, is rejected (422)."""
     base = {"first_name": "A", "last_name": "B"}
     bad_code = client.post("/api/accounts/signup", json={
-        **base, "password": "Correct-horse-9", "account_type": "business", "email": "size-z@example.com", "company_size": "Z"})
+        **base, "password": "Correct-horse-9", "accept_terms": True, "account_type": "business", "email": "size-z@example.com", "company_size": "Z"})
     individual = client.post("/api/accounts/signup", json={
-        **base, "password": "Correct-horse-9", "account_type": "individual", "email": "size-ind@example.com", "company_size": "B"})
+        **base, "password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "email": "size-ind@example.com", "company_size": "B"})
     assert bad_code.status_code == 422 and individual.status_code == 422

@@ -50,6 +50,9 @@ _load_runs: list[dict] = []              # load_runs rows
 _connections: dict[tuple[str, str], dict] = {}   # (account_id, connector) -> data_connections row
 
 
+DEFAULT_CAPACITY = 3   # clients a new consultant takes at once (dim.consultants.capacity)
+
+
 class AccountExistsError(ValueError):
     """Raised when someone signs up with an email that is already registered."""
 
@@ -134,6 +137,10 @@ async def create_account(
     consultant_id: str | None = None,
     auth_user_id: str | None = None,
     password_hash: str | None = None,
+    consultant_plan: str | None = None,
+    terms_version: str | None = None,
+    consultant_request: bool = False,
+    is_admin: bool = False,
 ) -> dict:
     """
     Insert a new account. For a BUSINESS signup (no team_id given), a team
@@ -167,6 +174,13 @@ async def create_account(
         auth_user_id: str | None, the Supabase Auth user id (Supabase mode).
         password_hash: str | None, the scrypt hash (local mode). Both stay None
             for accounts made FOR someone; see api/services/auth.py.
+        consultant_plan: str | None, "one_time" or "monthly" consultant help
+            (kept only when `wants_consultant` is True).
+        terms_version: str | None, the Terms version ticked at sign-up; also
+            stamps terms_accepted_at. None for accounts made FOR someone.
+        consultant_request: bool, True = "I'd like to work as a consultant"
+            (consultant_request 'pending', waiting for an admin).
+        is_admin: bool, True for an ADMIN_EMAILS address (also a consultant).
 
     Returns:
         dict: the new account (same fields as the accounts table).
@@ -218,6 +232,16 @@ async def create_account(
         # Password (api/services/auth.py): Supabase user id OR local hash.
         "auth_user_id": auth_user_id,
         "password_hash": password_hash,
+        "consultant_plan": consultant_plan if wants_consultant else None,
+        # Roles: admins come from ADMIN_EMAILS; consultants only by approval.
+        "is_admin": bool(is_admin),
+        "is_consultant": bool(is_admin),
+        "consultant_request": "pending" if consultant_request and not is_admin else None,
+        "consultant_requested_at": _now() if consultant_request and not is_admin else None,
+        "consultant_decided_at": None,
+        "consultant_decided_by": None,
+        "terms_accepted_at": _now() if terms_version else None,
+        "terms_version": terms_version,
     }
 
     if database.pool is None:
@@ -237,9 +261,12 @@ async def create_account(
                                          company_size, location_geoname_id, location_city,
                                          location_region, location_country_code, location_label,
                                          industry_other, wants_consultant, consultant_id,
-                                         auth_user_id, password_hash)
+                                         auth_user_id, password_hash, consultant_plan,
+                                         is_admin, is_consultant, consultant_request,
+                                         consultant_requested_at, terms_accepted_at, terms_version)
                    VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13,
-                           $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)""",
+                           $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+                           $24, $25, $26, $27, $28, $29, $30)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
                 company_name, team_role, status, account["last_login_at"],
                 industry_supersector, naics_sector, naics_subsector,
@@ -248,6 +275,9 @@ async def create_account(
                 industry_other, account["wants_consultant"],
                 uuid.UUID(account["consultant_id"]) if account["consultant_id"] else None,
                 uuid.UUID(auth_user_id) if auth_user_id else None, password_hash,
+                account["consultant_plan"], account["is_admin"], account["is_consultant"],
+                account["consultant_request"], account["consultant_requested_at"],
+                account["terms_accepted_at"], terms_version,
             )
             if team:
                 await conn.execute(
@@ -561,7 +591,7 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
 
     Args:
         account: dict, the consultant's accounts row (needs "id", "first_name", "email").
-        is_default: bool, True for the default consultant (first CONSULTANT_EMAILS address).
+        is_default: bool, True for the default consultant (first ADMIN_EMAILS address).
 
     Returns:
         dict: the consultants row.
@@ -579,7 +609,7 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
         cid = str(uuid.uuid4())
         _consultants[cid] = {"id": cid, "account_id": str(account["id"]), "display_name": name,
                              "email": account["email"], "is_default": is_default, "active": True,
-                             "created_at": _now()}
+                             "capacity": DEFAULT_CAPACITY, "created_at": _now()}
         return _consultants[cid]
     row = await database.pool.fetchrow(
         """INSERT INTO dim.consultants (account_id, display_name, email, is_default)
@@ -618,31 +648,241 @@ async def list_clients(consultant_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def assign_waiting_clients(consultant_id: str) -> int:
+async def assign_waiting_clients(consultant_id: str, limit: int) -> int:
     """
     Give clients who asked for a consultant (but have none yet) to this consultant.
 
+    Oldest sign-ups first, and never more than `limit` (the consultant's free
+    places), so a consultant is never pushed over their capacity.
+
     Args:
         consultant_id: str, the consultants row id to assign them to.
+        limit: int, the most clients to assign (0 or less assigns nobody).
 
     Returns:
         int: how many accounts were assigned (on the database path, read from the
             "UPDATE <n>" status PostgreSQL returns).
 
     Example:
-        >>> await assign_waiting_clients(cid)
+        >>> await assign_waiting_clients(cid, limit=2)
         2
     """
+    if limit <= 0:
+        return 0
     if database.pool is None:
-        waiting = [a for a in _accounts.values() if a.get("wants_consultant") and not a.get("consultant_id")]
+        waiting = sorted((a for a in _accounts.values() if a.get("wants_consultant") and not a.get("consultant_id")
+                          and a.get("team_role") != "member"), key=lambda a: a["created_at"])[:limit]
         for a in waiting:
             a["consultant_id"] = consultant_id
         return len(waiting)
     result = await database.pool.execute(
-        "UPDATE dim.accounts SET consultant_id = $1 WHERE wants_consultant AND consultant_id IS NULL",
-        uuid.UUID(consultant_id),
+        """UPDATE dim.accounts SET consultant_id = $1
+           WHERE id IN (SELECT id FROM dim.accounts
+                        WHERE wants_consultant AND consultant_id IS NULL
+                          AND coalesce(team_role, '') <> 'member'
+                        ORDER BY created_at LIMIT $2)""",
+        uuid.UUID(consultant_id), limit,
     )
     return int(result.split()[-1]) if result else 0
+
+
+async def list_consultants(active_only: bool = True) -> list[dict]:
+    """
+    Every consultant (active ones by default), each with how many clients they have.
+
+    Args:
+        active_only: bool, leave out consultants switched off (active = false).
+
+    Returns:
+        list[dict]: consultants rows plus "client_count", sorted by display name.
+
+    Example:
+        >>> [(c["display_name"], c["client_count"], c["capacity"]) for c in await list_consultants()]
+        [('Brandon', 1, 3), ('Kim', 3, 3)]
+    """
+    if database.pool is None:
+        rows = [dict(c) for c in _consultants.values() if c.get("active", True) or not active_only]
+        for c in rows:
+            c["client_count"] = sum(1 for a in _accounts.values() if a.get("consultant_id") == c["id"])
+        return sorted(rows, key=lambda c: c["display_name"].lower())
+    rows = await database.pool.fetch(
+        f"""SELECT c.*, (SELECT count(*) FROM dim.accounts a WHERE a.consultant_id = c.id)::int AS client_count
+            FROM dim.consultants c {"WHERE c.active" if active_only else ""}
+            ORDER BY lower(c.display_name)""")
+    return [dict(r) for r in rows]
+
+
+async def count_clients(consultant_id: str) -> int:
+    """
+    How many clients (plan holders) are assigned to this consultant.
+
+    Args:
+        consultant_id: str, the consultants row id.
+
+    Returns:
+        int: the number of accounts whose consultant_id is this consultant.
+
+    Example:
+        >>> await count_clients(cid)
+        2
+    """
+    if database.pool is None:
+        return sum(1 for a in _accounts.values() if a.get("consultant_id") == consultant_id)
+    return await database.pool.fetchval("SELECT count(*) FROM dim.accounts WHERE consultant_id = $1",
+                                        uuid.UUID(consultant_id))
+
+
+async def set_consultant_capacity(consultant_id: str, capacity: int) -> dict | None:
+    """
+    Save how many clients a consultant takes at once.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        capacity: int, 1 to MAX_CAPACITY (checked by api/services/consultants.py
+            and by the table's CHECK).
+
+    Returns:
+        dict | None: the updated consultants row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_consultant_capacity(cid, 5))["capacity"]
+        5
+    """
+    if database.pool is None:
+        row = _consultants.get(consultant_id)
+        if row:
+            row["capacity"] = capacity
+        return row
+    row = await database.pool.fetchrow("UPDATE dim.consultants SET capacity = $2 WHERE id = $1 RETURNING *",
+                                       uuid.UUID(consultant_id), capacity)
+    return dict(row) if row else None
+
+
+async def set_consultant_for(account_id: str, consultant_id: str | None, plan: str | None = None) -> None:
+    """
+    Assign an account's consultant, and how they help.
+
+    Args:
+        account_id: str, the client's account (the plan holder).
+        consultant_id: str | None, the consultants row id; None = waiting for one.
+        plan: str | None, "one_time" or "monthly".
+
+    Returns:
+        None. Sets accounts.wants_consultant, consultant_id and consultant_plan.
+
+    Example:
+        >>> await set_consultant_for(client_id, cid, "monthly")
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(wants_consultant=True, consultant_id=consultant_id, consultant_plan=plan)
+        return
+    await database.pool.execute(
+        """UPDATE dim.accounts SET wants_consultant = true, consultant_id = $2, consultant_plan = $3
+           WHERE id = $1""",
+        uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, plan,
+    )
+
+
+# ── Roles: admins and consultant requests ──────────────────────────────────────
+
+async def set_admin(account_id: str) -> None:
+    """
+    Mark an account as an admin (and so a consultant). Called at sign-in for ADMIN_EMAILS.
+
+    Args:
+        account_id: str, the admin's account id.
+
+    Returns:
+        None. Sets is_admin and is_consultant to true.
+
+    Example:
+        >>> await set_admin(my_account_id)
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(is_admin=True, is_consultant=True)
+        return
+    await database.pool.execute("UPDATE dim.accounts SET is_admin = true, is_consultant = true WHERE id = $1",
+                                uuid.UUID(account_id))
+
+
+async def request_consultant(account_id: str) -> None:
+    """
+    Record "I'd like to work as a consultant" (waiting for an admin).
+
+    Args:
+        account_id: str, the person asking.
+
+    Returns:
+        None. Sets consultant_request 'pending' and the request time.
+
+    Example:
+        >>> await request_consultant(account_id)
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(consultant_request="pending", consultant_requested_at=_now(),
+                                         consultant_decided_at=None, consultant_decided_by=None)
+        return
+    await database.pool.execute(
+        """UPDATE dim.accounts SET consultant_request = 'pending', consultant_requested_at = now(),
+                  consultant_decided_at = NULL, consultant_decided_by = NULL
+           WHERE id = $1""", uuid.UUID(account_id))
+
+
+async def decide_consultant_request(account_id: str, approved: bool, admin_id: str) -> None:
+    """
+    Save an admin's decision on a consultant request.
+
+    Approving sets is_consultant (the caller also creates the consultants row);
+    denying leaves the person a normal client.
+
+    Args:
+        account_id: str, the person who asked.
+        approved: bool, True = approve, False = deny.
+        admin_id: str, the admin's account id (consultant_decided_by).
+
+    Returns:
+        None.
+
+    Example:
+        >>> await decide_consultant_request(kim_id, True, my_account_id)
+    """
+    decision = "approved" if approved else "denied"
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(consultant_request=decision, consultant_decided_at=_now(),
+                                         consultant_decided_by=admin_id, is_consultant=approved)
+        return
+    await database.pool.execute(
+        """UPDATE dim.accounts SET consultant_request = $2, consultant_decided_at = now(),
+                  consultant_decided_by = $3, is_consultant = $4
+           WHERE id = $1""",
+        uuid.UUID(account_id), decision, uuid.UUID(admin_id), approved)
+
+
+async def list_consultant_requests() -> list[dict]:
+    """
+    Everyone who asked to be a consultant: pending first (oldest first), then decided.
+
+    Returns:
+        list[dict]: accounts rows with a consultant_request.
+
+    Example:
+        >>> [(a["email"], a["consultant_request"]) for a in await list_consultant_requests()]
+        [('kim@example.com', 'pending'), ('lee@example.com', 'approved')]
+    """
+    order = {"pending": 0, "approved": 1, "denied": 2}
+    if database.pool is None:
+        rows = [a for a in _accounts.values() if a.get("consultant_request")]
+        return sorted(rows, key=lambda a: (order[a["consultant_request"]],
+                                           a.get("consultant_requested_at") or a["created_at"]))
+    rows = await database.pool.fetch(
+        """SELECT * FROM dim.accounts WHERE consultant_request IS NOT NULL
+           ORDER BY CASE consultant_request WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+                    consultant_requested_at""")
+    return [dict(r) for r in rows]
 
 
 # ── Payments: subscriptions (see api/services/billing.py) ───────────────────

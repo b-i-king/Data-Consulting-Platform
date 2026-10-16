@@ -51,7 +51,7 @@ def _signup(email="owner@example.com"):
         >>> client.get("/api/connections", headers=h).status_code
         200
     """
-    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "account_type": "individual", "first_name": "Pat",
+    res = client.post("/api/accounts/signup", json={"password": "Correct-horse-9", "accept_terms": True, "account_type": "individual", "first_name": "Pat",
                                                     "last_name": "Lee", "email": email})
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
