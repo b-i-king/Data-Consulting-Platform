@@ -10,7 +10,7 @@
 
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 export interface SearchOption {
   value: string;
@@ -19,6 +19,8 @@ export interface SearchOption {
   detail?: string;
   /** Extra words to match on, not shown. */
   keywords?: string;
+  /** Its own layout in the list (instead of label + detail); the label is still what the box shows. */
+  render?: ReactNode;
 }
 
 export default function SearchSelect(props: {
@@ -129,8 +131,12 @@ export default function SearchSelect(props: {
                 o.value === props.value ? "font-semibold" : ""
               }`}
             >
-              <div className="text-ink">{o.label}</div>
-              {o.detail && <div className="text-xs font-normal text-ink-muted">{o.detail}</div>}
+              {o.render ?? (
+                <>
+                  <div className="text-ink">{o.label}</div>
+                  {o.detail && <div className="text-xs font-normal text-ink-muted">{o.detail}</div>}
+                </>
+              )}
             </li>
           ))}
         </ul>
