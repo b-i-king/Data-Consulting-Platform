@@ -26,3 +26,7 @@ export const fmtDate = (iso: string) => {
 export const SITE_NAME = process.env.NEXT_PUBLIC_SITE_NAME ?? "Data Consulting Platform";
 
 export const FALLBACK_BOOKING_URL = process.env.NEXT_PUBLIC_BOOKING_URL ?? "https://calendly.com/your-link";
+
+/** The integrations' names, by connector id (one place, so a new tool is named everywhere). */
+export const TOOL_NAMES: Record<string, string> = { supabase: "Supabase", quickbooks: "QuickBooks", xero: "Xero", wave: "Wave" };
+export const toolName = (connector: string | null | undefined) => (connector && TOOL_NAMES[connector]) || connector || "your app";

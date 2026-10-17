@@ -15,6 +15,7 @@ import type {
   CloudTableFile,
   AiAnswer,
   AiUsage,
+  CompareResult,
   EntityMatch,
   LiveDataset,
   QuickLook,
@@ -452,6 +453,23 @@ export async function askAi(token: string, input: CleaningInput, question: strin
   return res.json();
 }
 
+/**
+ * "Compare over time" (beta): two open tables added up by week or month and
+ * lined up on the same periods. Nothing is stored.
+ */
+export async function compareOverTime(input: CleaningInput, spec: {
+  period: "week" | "month";
+  left: { group_id: number; date: string; value: string | null; agg: string };
+  right: { group_id: number; date: string; value: string | null; agg: string };
+}): Promise<CompareResult> {
+  const res = await apiFetch(`${API_URL}/api/compare/over-time`, {
+    method: "POST",
+    body: filesForm(input.files, { spec: JSON.stringify(spec), ...choiceFields(input) }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
 /** This month's Beacon allowance (tier, used, limit, reset date). */
 export async function getAiUsage(token: string, simulate?: string): Promise<AiUsage> {
   const q = simulate ? `?simulate=${encodeURIComponent(simulate)}` : "";
@@ -682,6 +700,10 @@ export async function getEntityReview(token: string): Promise<{ matches: EntityM
 /** Answer one: same = merge them (no stored rows change), different = keep them apart. */
 export const decideEntity = (token: string, linkId: number, same: boolean) =>
   postJson<{ matches: EntityMatch[] }>("/api/entities/review", { link_id: linkId, same }, token);
+
+/** Admins only: connect your OWN Wave business with a personal full access token (no Wave Pro needed). */
+export const connectWaveToken = (token: string, accessToken: string) =>
+  postJson<{ connectors: DataConnection[] }>("/api/connections/wave/token", { token: accessToken }, token);
 
 /** After "Sign in with Supabase": the client's projects and the one being read. */
 export async function getSupabaseProjects(token: string): Promise<{ projects: SupabaseProject[]; selected: string | null }> {

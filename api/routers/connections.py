@@ -19,6 +19,7 @@ prices in api/services/pricing.py (REFRESH_OPTIONS).
     GET    /api/connections/{connector}/datasets     record types that can be opened (empty ones flagged)
     GET    /api/connections/{connector}/dataset      one record type as CSV (live, never stored)
     POST   /api/connections/{connector}/sync         the STORED sync now (Data Engineering + consent)
+    POST   /api/connections/wave/token               ADMINS: connect your own Wave with a personal token
     DELETE /api/connections/{connector}       disconnect (the saved login is deleted; sign-in access revoked)
 
 All accept X-Acting-As, so a consultant can set this up for a client they
@@ -36,7 +37,7 @@ from fastapi.responses import RedirectResponse, Response
 
 from api.core.config import get_settings
 from api.core.security import get_acting_context
-from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn
+from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn, WaveTokenIn
 from api.services import account_store, business_tools, cloud_sources, connections, entitlements, oauth, sync
 from api.services.pricing import refresh_catalog
 
@@ -78,7 +79,7 @@ async def list_connections(ctx: Annotated[dict, Depends(get_acting_context)]):
         "coming_soon": connections.COMING_SOON,
         # The tools' free plans: how many companies may connect (Xero 5, QuickBooks 15).
         "slots": {cid: {"used": await account_store.count_connected(cid), "max": _max_connections(cid)}
-                  for cid in ("xero", "quickbooks")},
+                  for cid in ("xero", "quickbooks", "wave")},
         "can_connect": connections.can_connect(await entitlements.active_services(account)),
         "addon_total_usd": connections.addon_total(saved),
     }
@@ -307,7 +308,8 @@ async def choose_supabase_project(body: SupabaseProjectIn, ctx: Annotated[dict, 
 def _max_connections(provider: str) -> int:
     """How many companies may connect a tool (Xero Starter: 5; QuickBooks: 15 keeps the free month safe)."""
     s = get_settings()
-    return {"xero": s.xero_max_connections, "quickbooks": s.quickbooks_max_connections}.get(provider, 10 ** 6)
+    return {"xero": s.xero_max_connections, "quickbooks": s.quickbooks_max_connections,
+            "wave": s.wave_max_connections}.get(provider, 10 ** 6)
 
 
 async def _slot_free(provider: str, account_id: str) -> bool:
@@ -352,7 +354,7 @@ async def oauth_callback(state: str = "", code: str = "", error: str = "", realm
         if error or not code:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Access wasn't allowed, so nothing was connected.")
         tokens = await oauth.exchange_code(provider, code, st["verifier"])
-        if provider in ("xero", "quickbooks") and not await _slot_free(provider, st["account_id"]):
+        if provider in ("xero", "quickbooks", "wave") and not await _slot_free(provider, st["account_id"]):
             # Full: undo the connection at the tool too (for Xero it would use a slot there).
             if provider == "xero":
                 await business_tools.xero_remove_all(tokens["access_token"])
@@ -387,7 +389,7 @@ async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_cont
     if connector not in oauth.PROVIDERS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     holder = await _holder_only(ctx)
-    if connector in ("xero", "quickbooks") and not await _slot_free(connector, holder):
+    if connector in ("xero", "quickbooks", "wave") and not await _slot_free(connector, holder):
         raise _full(connector)
     consultant = str(ctx["consultant"]["id"]) if ctx["acting"] else None
     return {"url": oauth.authorize_url(connector, holder, consultant, return_to)}
@@ -399,7 +401,7 @@ async def _live(ctx: dict, connector: str) -> tuple[dict, dict, business_tools.C
     meter). Any team member may read. The meter keeps the company under the
     tool's daily, monthly and per-minute limits; save it with _save_meter.
     """
-    if connector not in ("quickbooks", "xero"):
+    if connector not in ("quickbooks", "xero", "wave"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     holder = await entitlements.plan_holder_id(ctx["account"])
     row, creds = await oauth.load(holder, connector)
@@ -470,6 +472,43 @@ async def live_dataset(connector: str, id: str, ctx: Annotated[dict, Depends(get
     finally:
         await _save_meter(row, meter)
     return _csv_response(r, f"{r['name']}.csv")
+
+
+@router.post("/wave/token")
+async def connect_wave_with_token(body: WaveTokenIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/connections/wave/token — ADMINS ONLY: connect your OWN Wave business
+    with a "full access token" (developer.waveapps.com -> your application).
+
+    Why: since May 26, 2025 Wave allows the normal "Connect Wave" sign-in
+    (OAuth) only for businesses on Wave Pro or Advisors. Personal full access
+    tokens still work on Wave's free plan, but Wave allows them only for
+    development and personal use — so clients never see this; it's for testing
+    the platform with your own business. The token is checked, then saved
+    ENCRYPTED like any login; it doesn't expire on its own (delete it in Wave
+    to stop it), and every call still goes through Wave's limits (CallMeter).
+
+    Returns:
+        dict: {"connectors": [...]} with Wave connected.
+
+    Raises:
+        HTTPException: 403 when not an admin; 409 when Wave's connections are full,
+            or the token finds no business; 409 / 502 when Wave refuses the token.
+    """
+    if not ctx.get("admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Personal Wave tokens are for admins testing with their own business. Use Connect Wave.")
+    holder = await _holder_only(ctx)
+    if not await _slot_free("wave", holder):
+        raise _full("wave")
+    token = body.token.strip()
+    biz = await business_tools.wave_business(token)
+    # A personal token has no refresh token and no set expiry: mark it as "never refresh".
+    tokens = {"access_token": token, "refresh_token": None, "expires_at": 4_102_444_800}   # the year 2100
+    await oauth.save(holder, "wave", biz["name"], {"tokens": tokens,
+                                                   "extra": {"business_id": biz["business_id"], "personal_token": True}},
+                     str(ctx["consultant"]["id"]) if ctx["acting"] else None)
+    return {"connectors": connections.connector_list(await account_store.list_connections(holder))}
 
 
 @router.post("/{connector}/sync")

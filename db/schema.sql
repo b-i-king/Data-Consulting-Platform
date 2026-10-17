@@ -428,7 +428,7 @@ CREATE INDEX IF NOT EXISTS idx_question_log_account ON dim.question_log (account
 -- The unified-metrics skill writes ready-to-run rows for a client's new columns.
 -- Paths use dots for nesting and leave out list positions: 'Line.Amount' is
 -- the Amount of every item in a QuickBooks Line list.
--- KEEP IN SYNC with QUICKBOOKS_FIELD_MAP / FILE_UPLOAD_FIELD_MAP / XERO_FIELD_MAP in
+-- KEEP IN SYNC with QUICKBOOKS_FIELD_MAP / FILE_UPLOAD_FIELD_MAP / XERO_FIELD_MAP / WAVE_FIELD_MAP in
 -- api/services/unified.py (tests/test_unified.py compares them).
 CREATE TABLE IF NOT EXISTS fact.field_map (
     field_map_id    SERIAL PRIMARY KEY,
@@ -581,7 +581,28 @@ INSERT INTO fact.field_map (system, source_field, field_name, value_type, metric
     ('xero', 'LineItems.ItemCode', 'item_source_id', 'text', NULL, NULL, NULL, NULL),
     ('xero', 'LineItems.Item.Name', 'item_name', 'text', NULL, NULL, NULL, NULL),
     ('xero', 'LineItems.AccountCode', 'account_code', 'text', NULL, NULL, NULL, NULL),
-    ('xero', 'LineItems.TaxType', 'tax_code', 'text', NULL, NULL, NULL, NULL)
+    ('xero', 'LineItems.TaxType', 'tax_code', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'id', 'source_record_id', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'invoiceNumber', 'reference_number', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'invoiceDate', 'transaction_date', 'date', NULL, NULL, NULL, 'Also copied to event_date'),
+    ('wave', 'dueDate', 'due_date', 'date', NULL, NULL, NULL, NULL),
+    ('wave', 'status', 'status', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'modifiedAt', 'source_updated_at', 'timestamp', NULL, NULL, NULL, NULL),
+    ('wave', 'currency.code', 'currency', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'total.value', 'total_amount', 'number', 'amount', 'total', 'usd', NULL),
+    ('wave', 'amountDue.value', 'balance_due', 'number', 'balance', 'due', 'usd', NULL),
+    ('wave', 'amountPaid.value', 'amount_paid', 'number', 'amount', 'paid', 'usd', NULL),
+    ('wave', 'taxTotal.value', 'tax_amount', 'number', 'tax', NULL, 'usd', NULL),
+    ('wave', 'customer.id', 'customer_source_id', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'customer.name', 'customer_name', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'customer.email', 'customer_email', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'items.description', 'line_description', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'items.quantity', 'quantity', 'number', 'quantity', NULL, 'count', NULL),
+    ('wave', 'items.unitPrice', 'unit_price', 'number', 'price', 'unit', 'usd', NULL),
+    ('wave', 'items.subtotal.value', 'line_amount', 'number', 'amount', 'line', 'usd', 'Item amount before tax (like Line.Amount)'),
+    ('wave', 'items.total.value', 'line_total', 'number', 'amount', 'line_with_tax', 'usd', NULL),
+    ('wave', 'items.product.id', 'item_source_id', 'text', NULL, NULL, NULL, NULL),
+    ('wave', 'items.product.name', 'item_name', 'text', NULL, NULL, NULL, NULL)
 ON CONFLICT (system, source_field) DO UPDATE
     SET field_name = EXCLUDED.field_name,         value_type = EXCLUDED.value_type,
         metric_type = EXCLUDED.metric_type,       metric_subtype = EXCLUDED.metric_subtype,

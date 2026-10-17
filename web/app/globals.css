@@ -45,6 +45,13 @@
   --color-cat-ai: #a07c1e;
 
   /* Consultant mode (lavender): the header badge, "Working on" picker and banner. */
+  /* Integrations: each tool's own primary color, for its name and badge in
+     Settings -> Integrations (IntegrationsPanel.tsx). Darker in the light
+     theme so the text stays readable on white; colors only — no logos. */
+  --color-tool-quickbooks: #1e7b14;  /* QuickBooks green (#2ca01c), darkened */
+  --color-tool-xero: #0b7fa8;        /* Xero blue (#13b5ea), darkened */
+  --color-tool-supabase: #1f9a63;    /* Supabase green (#3ecf8e), darkened */
+  --color-tool-wave: #1f4fd1;        /* Wave blue */
   --color-consultant: #6f4fd8;
   --color-consultant-soft: #efeafd;
   --color-on-consultant: #ffffff;
@@ -94,6 +101,10 @@
     --color-cat-ml: #ff922b;
     --color-cat-engineering: #69db7c;
     --color-cat-ai: #c8ac44;
+    --color-tool-quickbooks: #4cc33a;
+    --color-tool-xero: #36c3f0;
+    --color-tool-supabase: #3ecf8e;
+    --color-tool-wave: #7aa2ff;
     --color-consultant: #b197fc;
     --color-consultant-soft: #2a2340;
     --color-on-consultant: #0e1117;
@@ -128,7 +139,11 @@
       --color-cat-ml: #ff922b;
       --color-cat-engineering: #69db7c;
       --color-cat-ai: #c8ac44;
-      --color-consultant: #b197fc;
+      --color-tool-quickbooks: #4cc33a;
+    --color-tool-xero: #36c3f0;
+    --color-tool-supabase: #3ecf8e;
+    --color-tool-wave: #7aa2ff;
+    --color-consultant: #b197fc;
       --color-consultant-soft: #2a2340;
       --color-on-consultant: #0e1117;
       --color-chart-current: #a68a2c;

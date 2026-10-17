@@ -55,6 +55,11 @@ CONNECTORS: dict[str, dict] = {
              "sign_in": True, "live": True,
              "about": "Income, expenses, what customers owe you, top customers — live from Xero, nothing stored. "
                       "Storing it on your schedule (for history and trends) comes with Data Engineering."},
+    "wave": {"name": "Wave", "kind": "business_tool", "available": False, "stores_data": True,
+             "sign_in": True, "live": True,
+             "about": "Sales, what customers owe you, top customers — live from Wave invoices, nothing stored "
+                      "(Wave's API doesn't share expenses). Needs Wave Pro. Storing it on your schedule comes with "
+                      "Data Engineering."},
     "supabase": {"name": "Supabase / PostgreSQL database", "kind": "cloud_storage", "available": True, "stores_data": False,
                  "sign_in": False, "live": False,
                  "about": "Your own Supabase database — or any PostgreSQL, such as Amazon RDS / Aurora PostgreSQL, "
@@ -86,7 +91,6 @@ COMING_SOON: list[dict] = [
     {"name": "Stripe", "kind": "business_tool", "when": "soon"},
     {"name": "Gusto", "kind": "business_tool", "when": "later"},
     {"name": "FreshBooks", "kind": "business_tool", "when": "later"},
-    {"name": "Wave", "kind": "business_tool", "when": "later"},
     {"name": "Clover", "kind": "business_tool", "when": "later"},
     {"name": "Toast", "kind": "business_tool", "when": "later"},
     {"name": "HubSpot", "kind": "business_tool", "when": "later"},

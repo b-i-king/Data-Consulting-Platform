@@ -84,11 +84,23 @@ export function jsonLd(rate = 80) {
         inLanguage: "en-US",
         publisher: { "@id": `${SITE_URL}/#business` },
       },
+      // The logo Google can show for the business (512 x 512 PNG, app/logo.png/route.tsx).
+      {
+        "@type": "ImageObject",
+        "@id": `${SITE_URL}/#logo`,
+        url: `${SITE_URL}/logo.png`,
+        contentUrl: `${SITE_URL}/logo.png`,
+        width: 512,
+        height: 512,
+        caption: COMPANY,
+      },
       {
         "@type": "ProfessionalService",
         "@id": `${SITE_URL}/#business`,
         name: COMPANY,
         url: SITE_URL,
+        logo: { "@id": `${SITE_URL}/#logo` },
+        image: `${SITE_URL}/logo.png`,
         email: "thebolgroup.llc@gmail.com",
         description: DESCRIPTION,
         areaServed: { "@type": "Country", name: "United States" },

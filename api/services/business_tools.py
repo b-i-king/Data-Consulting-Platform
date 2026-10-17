@@ -1,5 +1,5 @@
 """
-Business tools, read LIVE: QuickBooks Online and Xero — never stored.
+Business tools, read LIVE: QuickBooks Online, Xero and Wave — never stored.
 
 WHY THIS EXISTS
 ---------------
@@ -30,8 +30,11 @@ WHERE THE NUMBERS COME FROM
 THE TOOLS' LIMITS (free plans — going over gets the app blocked)
 ----------------------------------------------------------------
   * Connections: the router refuses a connection past XERO_MAX_CONNECTIONS
-    (5) / QUICKBOOKS_MAX_CONNECTIONS (15); extra Xero organizations shared in
-    one sign-in are disconnected at once.
+    (5) / QUICKBOOKS_MAX_CONNECTIONS (15) / WAVE_MAX_CONNECTIONS (9); extra
+    Xero organizations shared in one sign-in are disconnected at once.
+  * Wave: ~60 requests a minute per connection, 5,000 a day for the whole app:
+    each business gets WAVE_DAILY_CALL_LIMIT (500) a day, paced under 50 a
+    minute; 9 businesses x 500 stays under 90% of the 5,000.
   * Calls: every call to a client's company goes through a CallMeter (below):
     a daily budget per company, QuickBooks' monthly budget for the whole app,
     and a per-minute pace.
@@ -78,6 +81,11 @@ DATASETS: dict[str, list[dict]] = {
         {"id": "Payment", "name": "Customer payments"},
         {"id": "Purchase", "name": "Expenses (checks, card and cash purchases)"},
         {"id": "Bill", "name": "Bills from vendors"},
+    ],
+    "wave": [
+        {"id": "invoices", "name": "Invoices (one row per item)"},
+        {"id": "customers", "name": "Customers"},
+        {"id": "products", "name": "Products and services"},
     ],
     "xero": [
         {"id": "sales_invoices", "name": "Sales invoices", "path": "Invoices", "key": "Invoices",
@@ -156,6 +164,7 @@ async def _get_json(url: str, token: str, params: dict | None = None, headers: d
 LIMITS: dict[str, dict] = {
     "xero": {"name": "Xero", "day_share": 0.9, "minute": 55},
     "quickbooks": {"name": "QuickBooks", "day_share": 1.0, "minute": 450},
+    "wave": {"name": "Wave", "day_share": 1.0, "minute": 50},       # Wave: ~60 a minute per connection
 }
 MONTH_SHARE = 0.9              # use at most 90% of an app-wide monthly allowance
 MINUTE_MAX_WAIT_S = 10         # wait at most this long for the minute window, else refuse
@@ -171,7 +180,8 @@ def daily_budget(provider: str) -> int | None:
         (900, 1000)
     """
     s = get_settings()
-    limit = {"xero": s.xero_daily_call_limit, "quickbooks": s.quickbooks_daily_call_limit}.get(provider)
+    limit = {"xero": s.xero_daily_call_limit, "quickbooks": s.quickbooks_daily_call_limit,
+             "wave": s.wave_daily_call_limit}.get(provider)
     if provider not in LIMITS or not limit:
         return None
     return max(1, int(limit * LIMITS[provider]["day_share"]))
@@ -268,7 +278,8 @@ async def meter_for(connector: str, row: dict, creds: dict) -> CallMeter:
     """
     from api.services import account_store
 
-    company = creds["extra"]["tenant_id"] if connector == "xero" else creds["extra"]["realm_id"]
+    company = {"xero": "tenant_id", "wave": "business_id"}.get(connector, "realm_id")
+    company = creds["extra"][company]
     month = datetime.now(timezone.utc).date().replace(day=1)
     return CallMeter(connector, company, row.get("api_calls_day"), row.get("api_calls_count") or 0,
                      await account_store.get_api_usage(connector, month))
@@ -619,6 +630,164 @@ def xero_frame(items: list[dict]) -> pd.DataFrame:
 
 
 # ############################################################################
+# Wave
+# ############################################################################
+# Wave's API is GraphQL: one address, and every request is a POSTed query.
+# Lists come in numbered pages (page, pageSize) with pageInfo { totalPages }.
+# What it shares: businesses, invoices (with their items), customers and
+# products — NOT expenses, bills or reports — so Wave's quick look is sales,
+# what customers owe, and top customers. Connecting needs the business to be
+# on Wave Pro or Advisors (Wave's rule since May 2025).
+
+WAVE_GQL = "https://gql.waveapps.com/graphql/public"
+WAVE_PAGE = 50                   # records per page (kept modest: Wave counts every request)
+
+_WAVE_INVOICE_FIELDS = """id invoiceNumber invoiceDate dueDate status modifiedAt
+  currency { code } total { value } amountDue { value } amountPaid { value } taxTotal { value }
+  customer { id name email }
+  items { description quantity unitPrice subtotal { value } total { value } product { id name } }"""
+_WAVE_LISTS = {   # dataset id -> (GraphQL list, its fields)
+    "invoices": ("invoices", _WAVE_INVOICE_FIELDS),
+    "customers": ("customers", "id name email firstName lastName currency { code } createdAt modifiedAt isArchived"),
+    "products": ("products", "id name description unitPrice isSold isBought isArchived createdAt modifiedAt"),
+}
+
+
+async def _wave(token: str, query: str, variables: dict | None = None, meter: CallMeter | None = None) -> dict:
+    """POST one GraphQL query to Wave (metered); the `data` part, or a friendly error."""
+    if meter:
+        await meter.before()
+    async with oauth.http_client() as http:
+        res = await http.post(WAVE_GQL, json={"query": query, "variables": variables or {}},
+                              headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    if meter:
+        meter.after(res.headers)
+    if res.status_code == 401:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="The Wave connection was removed or expired. Please connect again.")
+    if res.status_code == 429:
+        raise meter.too_many(res.headers) if meter else HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, detail="Wave asked us to slow down. Please try again in a minute.")
+    if res.status_code >= 400:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Wave answered with an error ({res.status_code}).")
+    body = res.json()
+    if body.get("errors"):
+        message = str(body["errors"][0].get("message", "an error"))[:200]
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Wave couldn't answer: {message}")
+    return body.get("data") or {}
+
+
+async def wave_business(token: str) -> dict:
+    """
+    The Wave business to read (right after sign-in): the first that isn't a
+    "personal" one, else the first.
+
+    Returns:
+        dict: {"business_id", "name"}.
+    """
+    data = await _wave(token, "query { businesses(page: 1, pageSize: 20) { edges { node { id name isPersonal } } } }")
+    nodes = [e["node"] for e in (data.get("businesses") or {}).get("edges") or []]
+    if not nodes:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="No Wave business was found on that login.")
+    pick = next((n for n in nodes if not n.get("isPersonal")), nodes[0])
+    return {"business_id": pick["id"], "name": pick.get("name") or "Wave business"}
+
+
+async def wave_pages(token: str, business_id: str, dataset: str, filters: dict | None = None,
+                     max_rows: int = LIVE_MAX_ROWS, meter: CallMeter | None = None) -> tuple[list[dict], bool]:
+    """
+    Every record of one Wave list (invoices / customers / products), page by
+    page, up to max_rows. `filters` become GraphQL arguments — only the ones
+    given are put in the query (e.g. {"invoiceDateStart": "2026-01-01"}).
+
+    Returns:
+        tuple[list[dict], bool]: (records, True when there were more than max_rows).
+    """
+    field, fields = _WAVE_LISTS[dataset]
+    filters = {k: v for k, v in (filters or {}).items() if v is not None}
+    types = {"invoiceDateStart": "Date", "invoiceDateEnd": "Date", "modifiedAtAfter": "DateTime"}
+    decl = "".join(f", ${k}: {types[k]}" for k in filters)
+    args = "".join(f", {k}: ${k}" for k in filters)
+    query = (f"query($businessId: ID!, $page: Int!, $pageSize: Int!{decl}) {{ business(id: $businessId) {{ "
+             f"{field}(page: $page, pageSize: $pageSize{args}) {{ pageInfo {{ currentPage totalPages }} "
+             f"edges {{ node {{ {fields} }} }} }} }} }}")
+    items: list[dict] = []
+    page = 1
+    while len(items) <= max_rows:
+        data = await _wave(token, query, {"businessId": business_id, "page": page, "pageSize": WAVE_PAGE, **filters}, meter)
+        block = ((data.get("business") or {}).get(field)) or {}
+        got = [e["node"] for e in block.get("edges") or []]
+        items += got
+        total_pages = (block.get("pageInfo") or {}).get("totalPages") or 0
+        if not got or page >= total_pages:
+            break
+        page += 1
+    return items[:max_rows], len(items) > max_rows
+
+
+def _value(money) -> float:
+    """Wave's money objects ({"value": "12.50"}) as a number."""
+    return _num((money or {}).get("value") if isinstance(money, dict) else money)
+
+
+def wave_summarize(invoices: list[dict]) -> dict:
+    """
+    The quick look from Wave invoices (pure: no API calls).
+
+    income = invoice totals before tax, by invoice date (drafts left out);
+    owed_to_you = what is still due on those invoices; expenses and you_owe
+    are None — Wave's API doesn't share them.
+    """
+    monthly: dict[str, float] = defaultdict(float)
+    customers: Counter = Counter()
+    currencies: Counter = Counter()
+    owed = 0.0
+    for inv in invoices:
+        if str(inv.get("status", "")).upper() == "DRAFT" or not inv.get("invoiceDate"):
+            continue
+        amount = _value(inv.get("total")) - _value(inv.get("taxTotal"))
+        monthly[str(inv["invoiceDate"])[:7]] += amount
+        customers[(inv.get("customer") or {}).get("name") or "(no name)"] += amount
+        currencies[((inv.get("currency") or {}).get("code")) or "USD"] += 1
+        owed += _value(inv.get("amountDue"))
+    months = [{"month": m, "income": round(v, 2), "expenses": None, "net": None} for m, v in sorted(monthly.items())]
+    return {
+        "totals": {"income": round(sum(monthly.values()), 2), "expenses": None, "net_income": None,
+                   "owed_to_you": round(owed, 2), "you_owe": None},
+        "monthly": months,
+        "top_customers": [{"name": n, "amount": round(a, 2)} for n, a in customers.most_common(TOP_CUSTOMERS)],
+        "currency": currencies.most_common(1)[0][0] if currencies else "USD",
+    }
+
+
+async def wave_quick_look(token: str, business_id: str, start: date, end: date, meter: CallMeter | None = None) -> dict:
+    """The quick look from Wave invoices dated in the period (usually 1-2 calls, nothing stored)."""
+    invoices, _ = await wave_pages(token, business_id, "invoices",
+                                   {"invoiceDateStart": start.isoformat(), "invoiceDateEnd": end.isoformat()},
+                                   meter=meter)
+    return {**wave_summarize(invoices),
+            "basis": "Added up from your Wave invoices dated in this period (before tax). Wave's API doesn't share "
+                     "expenses or bills, so those aren't shown — upload an export of them to analyze costs.",
+            "estimate": True}
+
+
+def wave_invoice_frame(invoices: list[dict]) -> pd.DataFrame:
+    """Wave invoices as a table: one row per invoice ITEM, with the invoice's details on each row."""
+    rows = []
+    for inv in invoices:
+        head = {"invoice_id": inv.get("id"), "invoice_number": inv.get("invoiceNumber"),
+                "invoice_date": inv.get("invoiceDate"), "due_date": inv.get("dueDate"), "status": inv.get("status"),
+                "customer": (inv.get("customer") or {}).get("name"), "customer_email": (inv.get("customer") or {}).get("email"),
+                "currency": (inv.get("currency") or {}).get("code"), "invoice_total": _value(inv.get("total")),
+                "amount_due": _value(inv.get("amountDue")), "amount_paid": _value(inv.get("amountPaid"))}
+        items = inv.get("items") or [{}]
+        for n, item in enumerate(items, start=1):
+            rows.append({**head, "line": n, "product": ((item.get("product") or {}).get("name")),
+                         "description": item.get("description"), "quantity": _num(item.get("quantity")),
+                         "unit_price": _num(item.get("unitPrice")), "line_amount": _value(item.get("subtotal"))})
+    return pd.DataFrame(rows)
+
+
+# ############################################################################
 # One front door for the router
 # ############################################################################
 
@@ -669,6 +838,8 @@ async def quick_look(provider: str, company: str, token: str, extra: dict,
         body = await qb_quick_look(token, extra["realm_id"], start, end, meter)
     elif provider == "xero":
         body = await xero_quick_look(token, extra["tenant_id"], start, end, meter)
+    elif provider == "wave":
+        body = await wave_quick_look(token, extra["business_id"], start, end, meter)
     else:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No quick look for that integration.")
     return {"source": oauth.PROVIDERS[provider]["name"], "company": company, "start": start.isoformat(),
@@ -689,6 +860,12 @@ async def list_datasets(provider: str, token: str, extra: dict, meter: CallMeter
         if provider == "quickbooks":
             count = (await qb_query(token, extra["realm_id"], f"SELECT COUNT(*) FROM {d['id']}", meter)).get("totalCount", 0)
             has = int(count or 0) > 0
+        elif provider == "wave":
+            field, _ = _WAVE_LISTS[d["id"]]
+            data = await _wave(token, f"query($businessId: ID!) {{ business(id: $businessId) {{ {field}(page: 1, "
+                                      f"pageSize: 1) {{ edges {{ node {{ id }} }} }} }} }}",
+                               {"businessId": extra["business_id"]}, meter)
+            has = bool((((data.get("business") or {}).get(field)) or {}).get("edges"))
         else:
             params = {"where": d["where"]} if d["where"] else {}
             body = await _get_json(f"{XERO_API}/{d['path']}", token, {**params, "page": 1, "pageSize": 1},
@@ -714,6 +891,9 @@ async def read_dataset_csv(provider: str, token: str, extra: dict, dataset_id: s
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That record type isn't available.")
     if provider == "quickbooks":
         df, more = await qb_dataset_frame(token, extra["realm_id"], dataset_id, meter=meter)
+    elif provider == "wave":
+        items, more = await wave_pages(token, extra["business_id"], dataset_id, meter=meter)
+        df = wave_invoice_frame(items) if dataset_id == "invoices" else pd.json_normalize(items, sep=".")
     else:
         params = {"where": spec["where"]} if spec["where"] else {}
         if spec["summary"]:

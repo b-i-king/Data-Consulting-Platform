@@ -1,5 +1,5 @@
 """
-The STORED SYNC (Data Engineering): copy a connected QuickBooks / Xero into
+The STORED SYNC (Data Engineering): copy a connected QuickBooks / Xero / Wave into
 the client's managed storage, then keep it up to date on their schedule.
 
 WHY THIS EXISTS
@@ -53,7 +53,7 @@ from api.services.warehouse_loader import LoadPlan
 
 log = logging.getLogger(__name__)
 
-SOURCE_NAMES = {"quickbooks": "QuickBooks Online", "xero": "Xero"}   # = fact.account_data.source_name
+SOURCE_NAMES = {"quickbooks": "QuickBooks Online", "xero": "Xero", "wave": "Wave"}   # = fact.account_data.source_name
 QB_RECORD_TYPES = list(unified.QUICKBOOKS_ENTITIES)                    # Invoice, Bill, Payment, ...
 XERO_ENDPOINTS = list(unified.XERO_ENDPOINTS)                          # Invoices, BankTransactions, Payments
 XERO_SYNC_PAGE = 100            # Xero sends line items with up to 100 records per page
@@ -97,6 +97,28 @@ async def _qb_pages(token: str, realm: str, entity: str, since: str, meter):
         if len(page) < business_tools.QB_PAGE:
             return
         start += business_tools.QB_PAGE
+
+
+async def _wave_pages(token: str, business_id: str, since: str, meter):
+    """
+    Wave invoices changed since `since`: yields (page, newest change).
+
+    Wave's invoice list doesn't promise an order, so the cursor only moves
+    once the WHOLE list has been read (a run cut short re-reads from the old
+    cursor next time — unchanged invoices are skipped, nothing is duplicated).
+    If Wave refuses the "changed since" filter, every invoice is read instead.
+    """
+    filters = {} if since == START else {"modifiedAtAfter": since}
+    try:
+        items, _ = await business_tools.wave_pages(token, business_id, "invoices", filters,
+                                                   max_rows=10 ** 6, meter=meter)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_502_BAD_GATEWAY or not filters:
+            raise
+        items, _ = await business_tools.wave_pages(token, business_id, "invoices", {}, max_rows=10 ** 6, meter=meter)
+    if items:
+        stamps = [_utc_iso(i.get("modifiedAt")) for i in items]
+        yield items, max([s for s in stamps if s] or [since])
 
 
 async def _xero_pages(token: str, tenant: str, endpoint: str, since: str, meter):
@@ -175,14 +197,18 @@ async def run(holder: dict, connector: str, *, consultant_id: str | None = None,
     run_row = await account_store.save_load_run({"account_id": aid, "source": connector, "source_name": source_name,
                                                  "event_type": "sync", "status": "running", "started_by": started_by})
     try:
-        for kind in (QB_RECORD_TYPES if connector == "quickbooks" else XERO_ENDPOINTS):
+        kinds = {"quickbooks": QB_RECORD_TYPES, "xero": XERO_ENDPOINTS, "wave": ["Invoices"]}[connector]
+        for kind in kinds:
             since = state.get(kind, START)
             pages = (_qb_pages(token, extra["realm_id"], kind, since, meter) if connector == "quickbooks"
+                     else _wave_pages(token, extra["business_id"], since, meter) if connector == "wave"
                      else _xero_pages(token, extra["tenant_id"], kind, since, meter))
             try:
                 async for items, newest in pages:
                     if connector == "quickbooks":
                         rows = unified.quickbooks_response_to_unified({"QueryResponse": {kind: items}})
+                    elif connector == "wave":
+                        rows = unified.wave_invoices_to_unified(items)
                     else:
                         gone = [unified.xero_record_id(kind, i) for i in items if unified.xero_event(kind, i) is None
                                 and str(i.get("Status", "")).upper() in unified.XERO_GONE_STATUSES]

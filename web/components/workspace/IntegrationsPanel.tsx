@@ -26,6 +26,14 @@
 // Under each section, the tools on the roadmap ("Coming soon" / "Later",
 // api/services/connections.py COMING_SOON) so clients know theirs is planned.
 //
+// LESS ON ONE SCREEN: each section (Cloud storage, Business tools) folds away
+// behind an arrow, with a one-line summary ("1 connected · 2 ready · 9 coming
+// soon"); each tool's card folds too. A section or card starts OPEN only when
+// something in it is connected (or the person just came back from its
+// sign-in). A folded card doesn't call its tool at all (no table listing).
+// Each tool has a plain lettered badge ("QB") — not the company's logo, which
+// is a trademark used only under that company's brand rules.
+//
 // Server side: api/routers/connections.py, api/services/oauth.py,
 // api/services/business_tools.py, api/services/cloud_sources.py.
 
@@ -35,6 +43,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   chooseSupabaseProject,
   connectSupabase,
+  connectWaveToken,
   disconnectIntegration,
   getCloudTables,
   getConnections,
@@ -75,9 +84,13 @@ export default function IntegrationsPanel(props: {
   onOpenLive: (connector: string, dataset: LiveDataset) => void;
   /** After coming back from a provider's sign-in: what happened. */
   notice?: { ok: boolean; text: string } | null;
+  /** Admins can connect their own Wave with a personal token (Wave's free plan). */
+  isAdmin?: boolean;
 }) {
   const [info, setInfo] = useState<ConnectionsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Sections the person opened or closed (others follow startsOpen below).
+  const [opened, setOpened] = useState<Partial<Record<DataConnection["kind"], boolean>>>({});
 
   useEffect(() => {
     getConnections(props.token)
@@ -88,6 +101,9 @@ export default function IntegrationsPanel(props: {
   if (!info) return error ? <ErrorBox message={error} /> : <p className="text-sm text-ink-muted">Loading…</p>;
   const sections: DataConnection["kind"][] = ["cloud_storage", "business_tool"];
   const changed = (connectors: DataConnection[]) => setInfo({ ...info, connectors });
+  // Open by default: a section with something connected (the person's own tools first).
+  const startsOpen = (kind: DataConnection["kind"]) => info.connectors.some((c) => c.kind === kind && c.status === "connected");
+  const isOpen = (kind: DataConnection["kind"]) => opened[kind] ?? startsOpen(kind);
 
   return (
     <div className="max-w-3xl space-y-8">
@@ -98,9 +114,28 @@ export default function IntegrationsPanel(props: {
           {props.notice.text}
         </p>
       )}
-      {sections.map((kind) => (
+      {sections.map((kind) => {
+        const tools = info.connectors.filter((c) => c.kind === kind);
+        const connected = tools.filter((c) => c.status === "connected").length;
+        const ready = tools.filter((c) => c.available && c.status !== "connected").length;
+        const planned = (info.coming_soon ?? []).filter((p) => p.kind === kind).length;
+        const open = isOpen(kind);
+        return (
         <section key={kind} className="space-y-3">
-          <h2 className="text-lg font-semibold">{info.kinds[kind] ?? kind}</h2>
+          <button type="button" aria-expanded={open} onClick={() => setOpened((o) => ({ ...o, [kind]: !open }))}
+            className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-left shadow-[var(--shadow-card)] hover:border-brand">
+            <Chevron open={open} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-lg font-semibold">{info.kinds[kind] ?? kind}</span>
+              <span className="block text-xs text-ink-muted">
+                {[connected && `${connected} connected`, ready && `${ready} ready to connect`, planned && `${planned} coming soon`]
+                  .filter(Boolean).join(" · ") || "Nothing here yet"}
+                {" · "}{tools.map((t) => t.name).join(", ")}
+              </span>
+            </span>
+          </button>
+          {open && (
+          <div className="space-y-3 pl-1">
           <p className="text-sm text-ink-muted">
             {kind === "cloud_storage"
               ? "Your data already lives (and is managed) here. We read it where it is — nothing is copied — and you analyze it, build dashboards, and run ML and AI on it."
@@ -111,16 +146,21 @@ export default function IntegrationsPanel(props: {
             .map((c) =>
               c.connector === "supabase" ? (
                 <SupabaseCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
-                  onChanged={changed} onOpenTable={props.onOpenTable} />
+                  onChanged={changed} onOpenTable={props.onOpenTable} collapsible
+                  defaultOpen={c.status === "connected"} />
               ) : (
                 <BusinessToolCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
-                  onChanged={changed} onOpenLive={props.onOpenLive} canStore={info.can_connect}
-                  full={!!info.slots?.[c.connector] && info.slots[c.connector].used >= info.slots[c.connector].max} />
+                  onChanged={changed} onOpenLive={props.onOpenLive} canStore={info.can_connect} isAdmin={props.isAdmin}
+                  full={!!info.slots?.[c.connector] && info.slots[c.connector].used >= info.slots[c.connector].max}
+                  collapsible defaultOpen={c.status === "connected"} />
               ),
             )}
           <Planned items={(info.coming_soon ?? []).filter((p) => p.kind === kind)} />
+          </div>
+          )}
         </section>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -155,16 +195,53 @@ function Planned({ items }: { items: PlannedIntegration[] }) {
   );
 }
 
-function Header({ c }: { c: DataConnection }) {
-  const st = STATUS[c.status] ?? STATUS.not_set_up;
+/** The arrow beside a heading: points right when folded, down when open. */
+function Chevron({ open }: { open: boolean }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-semibold">
-        {c.name}
-        {!c.available && <span className="ml-2 text-xs font-normal text-ink-muted">coming soon</span>}
-      </h3>
+    <span aria-hidden className={`inline-block text-ink-muted transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+  );
+}
+
+// A plain lettered badge per tool (not the company's logo: logos are trademarks,
+// used only under each company's brand guidelines), in the tool's own primary
+// color (--color-tool-* in app/globals.css) — the name too.
+const BADGES: Record<string, string> = { supabase: "DB", quickbooks: "QB", xero: "XO", wave: "WV" };
+const toolColor = (connector: string) => (connector in BADGES ? `var(--color-tool-${connector})` : undefined);
+
+function Header({ c, collapsible, open, onToggle }: {
+  c: DataConnection;
+  collapsible?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const st = STATUS[c.status] ?? STATUS.not_set_up;
+  const inner = (
+    <>
+      <span className="flex min-w-0 items-center gap-2">
+        {collapsible && <Chevron open={!!open} />}
+        <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-surface-2 font-mono text-xs font-semibold text-ink-muted"
+          style={toolColor(c.connector) ? {
+            color: toolColor(c.connector),
+            // A soft tint of the tool's color behind its letters (the theme's surface shows through).
+            backgroundColor: `color-mix(in srgb, ${toolColor(c.connector)} 14%, transparent)`,
+          } : undefined}>
+          {BADGES[c.connector] ?? c.name.slice(0, 2).toUpperCase()}
+        </span>
+        <h3 className="font-semibold" style={toolColor(c.connector) ? { color: toolColor(c.connector) } : undefined}>
+          {c.name}
+          {!c.available && c.status !== "connected" && <span className="ml-2 text-xs font-normal text-ink-muted">coming soon</span>}
+        </h3>
+      </span>
       <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
-    </div>
+    </>
+  );
+  return collapsible ? (
+    <button type="button" aria-expanded={!!open} onClick={onToggle}
+      className="flex w-full flex-wrap items-center justify-between gap-2 text-left">
+      {inner}
+    </button>
+  ) : (
+    <div className="flex flex-wrap items-center justify-between gap-2">{inner}</div>
   );
 }
 
@@ -240,6 +317,50 @@ function StoredSync(props: {
   );
 }
 
+/**
+ * Admins only: connect your OWN Wave business with a personal "full access
+ * token". Wave's normal sign-in needs Wave Pro; personal tokens work on the
+ * free plan but Wave allows them only for personal use and testing — so
+ * clients never see this. POST /api/connections/wave/token.
+ */
+function WaveTokenForm(props: { token: string; onChanged: (connectors: DataConnection[]) => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      props.onChanged((await connectWaveToken(props.token, value.trim())).connectors);
+      setValue("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Wave didn't accept that token.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="space-y-2 rounded-xl border border-dashed border-line p-3 text-sm">
+      <p className="font-semibold">Admins: use your own Wave with a personal token</p>
+      <p className="text-xs text-ink-muted">
+        For testing with your own business on Wave&apos;s free plan (the Connect button needs Wave Pro). In
+        developer.waveapps.com → your application → create a full access token, and paste it here. It&apos;s saved
+        encrypted; delete it in Wave to stop it.
+      </p>
+      <input type="password" autoComplete="off" aria-label="Wave full access token" value={value}
+        onChange={(e) => setValue(e.target.value)} placeholder="Wave full access token"
+        className="w-full rounded-xl border border-line bg-surface px-3 py-2 font-mono text-xs" />
+      <Button type="submit" variant="secondary" disabled={busy || value.trim().length < 10}>
+        {busy ? "Checking…" : "Connect with this token"}
+      </Button>
+      <ErrorBox message={error} />
+    </form>
+  );
+}
+
 /** Send the browser to the provider's sign-in page ("Connect QuickBooks"); it comes back to returnTo. */
 function useConnect(token: string, connector: string, returnTo: "app" | "start" = "app") {
   const [busy, setBusy] = useState(false);
@@ -272,9 +393,15 @@ export function BusinessToolCard(props: {
   returnTo?: "app" | "start";
   /** The plan includes Data Engineering: the stored sync can be turned on. */
   canStore?: boolean;
+  /** An admin: Wave offers "use a personal token" (for your own business, Wave's free plan). */
+  isAdmin?: boolean;
+  /** Settings -> Integrations: the card folds behind its header (Get Started shows it open). */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
   const c = props.connector;
   const connected = c.status === "connected";
+  const [open, setOpen] = useState(!props.collapsible || !!props.defaultOpen);
   const connect = useConnect(props.token, c.connector, props.returnTo);
   const [showLook, setShowLook] = useState(false);
   const [datasets, setDatasets] = useState<LiveDataset[] | null>(null);
@@ -313,7 +440,9 @@ export function BusinessToolCard(props: {
 
   return (
     <Card className="space-y-3">
-      <Header c={c} />
+      <Header c={c} collapsible={props.collapsible} open={open} onToggle={() => setOpen(!open)} />
+      {open && (
+      <>
       <p className="text-sm text-ink-muted">{c.about}</p>
       {connected ? (
         <>
@@ -388,8 +517,13 @@ export function BusinessToolCard(props: {
       ) : (
         <p className="text-sm text-ink-muted">Ask your team&apos;s owner to connect it.</p>
       )}
+      {c.connector === "wave" && !connected && props.isAdmin && !props.connectOnly && (
+        <WaveTokenForm token={props.token} onChanged={props.onChanged} />
+      )}
       {c.stores_data && !props.connectOnly && <DataRefresh token={props.token} canChange={props.canChange} connector={c.connector} />}
       <ErrorBox message={error ?? connect.error} />
+      </>
+      )}
     </Card>
   );
 }
@@ -408,9 +542,13 @@ export function SupabaseCard(props: {
   openLabel?: string;
   /** Where "Sign in with Supabase" sends the person back. */
   returnTo?: "app" | "start";
+  /** Settings -> Integrations: the card folds behind its header (Get Started shows it open). */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
   const c = props.connector;
   const connected = c.status === "connected";
+  const [open, setOpen] = useState(!props.collapsible || !!props.defaultOpen);
   const connect = useConnect(props.token, "supabase", props.returnTo);
   const [dsn, setDsn] = useState("");
   const [tables, setTables] = useState<CloudTable[] | null>(null);
@@ -422,7 +560,7 @@ export function SupabaseCard(props: {
   // Read the tables when connected — and again after a project is picked
   // (display_name changes to "Supabase: <project>").
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !open) return;   // folded: no call to the database
     getCloudTables(props.token)
       .then(async (r) => {
         if (r.needs_project) {
@@ -434,7 +572,7 @@ export function SupabaseCard(props: {
         setSchemas(r.schemas);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "We couldn't read your database."));
-  }, [connected, c.display_name, props.token]);
+  }, [connected, open, c.display_name, props.token]);
 
   async function connectWithString(e: FormEvent) {
     e.preventDefault();
@@ -481,7 +619,9 @@ export function SupabaseCard(props: {
 
   return (
     <Card className="space-y-3">
-      <Header c={c} />
+      <Header c={c} collapsible={props.collapsible} open={open} onToggle={() => setOpen(!open)} />
+      {open && (
+      <>
       <p className="text-sm text-ink-muted">{c.about}</p>
       {connected ? (
         <>
@@ -585,6 +725,8 @@ export function SupabaseCard(props: {
         <p className="text-sm text-ink-muted">Ask your team&apos;s owner to connect it.</p>
       )}
       <ErrorBox message={error ?? connect.error} />
+      </>
+      )}
     </Card>
   );
 }

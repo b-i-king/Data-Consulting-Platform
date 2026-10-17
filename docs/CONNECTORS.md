@@ -71,7 +71,7 @@ for them yet):
 | Section | Coming soon | Later |
 |---|---|---|
 | Cloud storage | Snowflake, Google BigQuery, Amazon Redshift, MySQL (incl. Amazon RDS / Aurora MySQL), Microsoft SQL Server / Azure SQL | Databricks, Microsoft Fabric / Azure Synapse, Amazon S3 (files), Google Drive / Sheets |
-| Business tools | Square, Shopify, Stripe | Gusto, FreshBooks, Wave, Clover, Toast, HubSpot, Salesforce |
+| Business tools | Square, Shopify, Stripe | Gusto, FreshBooks, Clover, Toast, HubSpot, Salesforce |
 
 Already working through the PostgreSQL connector (no new code): Amazon RDS /
 Aurora PostgreSQL, Google Cloud SQL for PostgreSQL, Azure Database for
@@ -185,6 +185,7 @@ All of them use the **same redirect URI**:
 |---|---|---|---|
 | QuickBooks | developer.intuit.com → Dashboard → Create an app → QuickBooks Online and Payments → scope **Accounting** → Keys & credentials (Development) → add the redirect URI | `QUICKBOOKS_CLIENT_ID`, `QUICKBOOKS_CLIENT_SECRET` (`QUICKBOOKS_ENVIRONMENT` = `sandbox` by default) | Development keys only work with Intuit's free **sandbox company** — test there first. Production keys come after Intuit's app assessment; then set `QUICKBOOKS_ENVIRONMENT=production`. |
 | Xero | developer.xero.com → My Apps → New app → **Web app** → redirect URI → Configuration → generate a secret | `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` | Free **Starter** tier: up to **5 connected organizations** — enough for a friend's business to test. "Disconnect" removes the organization connection at Xero, freeing a slot. Scopes asked (read-only, granular — required for apps made after March 2, 2026): `accounting.invoices.read accounting.payments.read accounting.banktransactions.read accounting.contacts.read offline_access`. |
+| Wave | developer.waveapps.com → Manage Applications → Create an application → redirect URI | `WAVE_CLIENT_ID`, `WAVE_CLIENT_SECRET` (`WAVE_SCOPES` = the read-only permissions asked for) | The business must be on **Wave Pro or Advisors** to connect (Wave's rule since May 2025). Wave's API is GraphQL; it shares invoices, customers and products — **not** expenses, bills or reports. |
 | Supabase (optional) | supabase.com → your organization → OAuth Apps → Add → redirect URI → permissions **Projects: read** and **Database: read** | `SUPABASE_OAUTH_CLIENT_ID`, `SUPABASE_OAUTH_CLIENT_SECRET` | Optional: without it, clients paste a connection string (no keys at all). PKCE is used. |
 
 ### Xero's plan limits — safeguards
@@ -263,3 +264,39 @@ data, a database table or QuickBooks / Xero records open together in the tab
 — same-column tables stacked, others as tabs, with how they relate (a shared
 ID, or names matched). The stricter rule wins: any cloud or live source makes
 it all report-only, with storing off. Nothing new is stored.
+
+### Wave — what it reads, and its limits
+
+Wave (`api/services/business_tools.py`, Wave section) is connected like
+QuickBooks and Xero ("Connect Wave", read-only), with the client keys sent as
+form fields (Wave's way). Its API shares **invoices (with items), customers
+and products**, so:
+
+- **Quick look:** sales by month (invoice totals before tax, drafts left out),
+  what customers still owe on those invoices, and top customers. Expenses and
+  "you owe" show as "—": Wave's API doesn't share them (upload an export).
+- **Open records:** invoices (one row per item), customers, products.
+- **Stored sync:** invoices (invoice/sent) into `fact.account_data`, with
+  customers and products in `fact.entities` (`unified.flatten_wave_invoice`,
+  `WAVE_FIELD_MAP`, seeded in `fact.field_map` as system `wave`). Only invoices
+  changed since the last run are asked for (`modifiedAtAfter`; if Wave refuses
+  that filter, everything is read and unchanged rows are skipped).
+
+**Wave's free plan.** Since May 26, 2025 Wave allows the "Connect Wave"
+sign-in (OAuth) only for businesses on **Wave Pro or Advisors**. A business on
+the free plan can't connect that way. For TESTING with your own business,
+**admins** can paste a Wave **full access token** instead (developer.waveapps.com →
+your application → full access token; `POST /api/connections/wave/token`,
+"Admins: use your own Wave with a personal token" on the Wave card). Wave
+allows those tokens only for development and personal use, so clients never
+see the option. It's saved encrypted, doesn't need the Wave app keys, and
+still goes through the limits below. Without Pro or a token: export from Wave
+(Settings → Data Export, or a report's CSV) and upload the file.
+
+**Limits (not pulling data rapidly):** Wave allows about **60 requests a
+minute per connection** and **5,000 a day for the whole app**. The CallMeter
+paces each business under **50 a minute**, gives it **`WAVE_DAILY_CALL_LIMIT`
+(500) calls a day**, and the app allows **`WAVE_MAX_CONNECTIONS` (9)**
+businesses: 9 × 500 = 4,500, under 90% of the 5,000 even if every business
+used its full share. Pages are 50 records. A quick look is usually 1–2 calls;
+listing record types 3.

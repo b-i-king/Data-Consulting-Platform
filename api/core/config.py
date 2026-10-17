@@ -190,6 +190,18 @@ class Settings(BaseSettings):
     # Raise both if you move to a paid Xero plan (Core: 50 and 5,000).
     xero_max_connections: int = Field(default=5, alias="XERO_MAX_CONNECTIONS")
     xero_daily_call_limit: int = Field(default=1000, alias="XERO_DAILY_CALL_LIMIT")
+    # Wave (developer.waveapps.com -> Manage Applications): the business must be
+    # on Wave Pro or Advisors to connect. Wave allows about 60 requests a minute
+    # per connection and 5,000 a day for the whole app, so the app caps each
+    # business at WAVE_DAILY_CALL_LIMIT a day and allows WAVE_MAX_CONNECTIONS
+    # businesses: 9 x 500 = 4,500 — under 90% of the 5,000 even if all are busy.
+    wave_client_id: str = Field(default="", alias="WAVE_CLIENT_ID")
+    wave_client_secret: str = Field(default="", alias="WAVE_CLIENT_SECRET")
+    # The read-only permissions asked for (Wave's "resource:operation" scopes).
+    wave_scopes: str = Field(default="business:read customer:read invoice:read product:read user:read",
+                             alias="WAVE_SCOPES")
+    wave_max_connections: int = Field(default=9, alias="WAVE_MAX_CONNECTIONS")
+    wave_daily_call_limit: int = Field(default=500, alias="WAVE_DAILY_CALL_LIMIT")
     supabase_oauth_client_id: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_ID")
     supabase_oauth_client_secret: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_SECRET")
     # This API's public address, for the redirect URI. Render sets

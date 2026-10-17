@@ -299,6 +299,15 @@ peer groups of 5+ clients so no single business can be identified.
   (monthly revenue by store), refreshed after each load.
 - **Dedicated database for one big client:** same schema, separate instance.
 
+## Wave in the unified model
+
+`WAVE_FIELD_MAP` / `flatten_wave_invoice()` (`api/services/unified.py`, seeded
+in `fact.field_map` as system `wave`): each Wave invoice is invoice/sent; the
+invoice is line 0 (`total.value` → total_amount, `amountDue.value` →
+balance_due, `taxTotal.value` → tax_amount, `customer.*` → customer_*) and its
+`items` are lines 1, 2, 3 (`subtotal.value` → line_amount, `quantity`,
+`unitPrice`, `product.*` → item_*). Drafts aren't stored.
+
 ## Xero in the unified model
 
 `XERO_FIELD_MAP` / `flatten_xero()` in `api/services/unified.py` (seeded in
