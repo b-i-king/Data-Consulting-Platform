@@ -10,7 +10,14 @@
 //     Machine Learning...), each with how many clients want it;
 //   * One-time / Monthly — how they want help;
 //   * Sort — A to Z, or recently active (last sign-in first).
-// The client you're working on always stays in the list. Choosing one makes every signed-in request
+// The client you're working on always stays in the list.
+//
+// Each client in the list is three tidy lines:
+//     Sunrise Bakery                    [Monthly]      <- name (bold) + how they want help
+//     Ana Lee · ana@sunrisebakery.com                  <- who, small and muted
+//     ● Dashboards  ● ML  +1                           <- what they need help with (category colors)
+// and under the box, the chosen client's summary card shows every project in full.
+// Choosing one makes every signed-in request
 // carry X-Acting-As, so the workspace shows THAT client's plan, and downloads
 // are billed to them. "My own workspace" is the consultant's own account,
 // with every service on — handy for testing.
@@ -27,6 +34,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { addClient } from "@/lib/api";
 import type { AccountType, ConsultantClient, ConsultantLoad, ConsultantPlan, Industry, IntakeOptions, Location, Service } from "@/lib/types";
 import { LoadBar, PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
+import { categoryColor } from "@/lib/categories";
 import { capitalizeFirst, companyNameError, emailError, personNameError } from "@/lib/validation";
 import LocationPicker from "@/components/auth/LocationPicker";
 import IndustryPicker from "@/components/wizard/IndustryPicker";
@@ -35,6 +43,36 @@ import { Button, ErrorBox } from "@/components/wizard/ui";
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-consultant";
 const small = "w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-consultant";
+
+// Short names for the "help with" tags (the full names show on hover and in the summary card).
+const SHORT: Record<string, string> = {
+  data_cleaning: "Cleaning", data_visualization: "Dashboards", data_exploration_analysis: "Analysis",
+  data_engineering: "Engineering", data_science_ml: "ML", ai: "AI", data_strategy_discovery: "Strategy",
+};
+const PLAN_SHORT: Record<ConsultantPlan, string> = { one_time: "One-time", monthly: "Monthly" };
+
+/** A small pill: "Monthly" / "One-time". */
+function PlanPill({ plan }: { plan: ConsultantPlan | null }) {
+  if (!plan) return null;
+  return (
+    <span className="shrink-0 rounded-full bg-consultant-soft px-2 py-0.5 text-[10px] font-semibold text-consultant"
+      title={PLAN_LABELS[plan].title}>
+      {PLAN_SHORT[plan]}
+    </span>
+  );
+}
+
+/** A "help with" tag in its service's category color. */
+function HelpTag({ id, label }: { id: string; label: string }) {
+  const color = categoryColor(id);
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)` }}>
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
+  );
+}
 
 export default function ClientPicker(props: {
   clients: ConsultantClient[];
@@ -111,19 +149,31 @@ export default function ClientPicker(props: {
         value={props.actingId}
         onChange={props.onChoose}
         options={shown.map((c) => {
-          const help = (c.interested_services ?? []).map(serviceName);
+          const ids = c.interested_services ?? [];
+          const help = ids.map(serviceName);
+          const contact = c.company_name ? `${c.person} · ${c.email}` : c.email;
           return {
             value: c.id,
             label: c.label,
-            detail: [
-              c.company_name ? `${c.person} · ${c.email}` : c.email,
-              c.consultant_plan && PLAN_LABELS[c.consultant_plan].title,
-              help.length ? `Help with: ${help.join(", ")}` : null,
-            ]
-              .filter(Boolean)
-              .join(" · "),
-            // Typing also finds clients by location, industry, or what they need help with.
-            keywords: `${c.person} ${c.email} ${c.location ?? ""} ${c.industry_other ?? ""} ${help.join(" ")}`,
+            detail: contact,
+            // Typing also finds clients by location, industry, plan, or what they need help with.
+            keywords: `${c.person} ${c.email} ${c.location ?? ""} ${c.industry_other ?? ""} ${help.join(" ")} ${
+              c.consultant_plan ? PLAN_LABELS[c.consultant_plan].title : ""}`,
+            render: (
+              <div className="min-w-0 space-y-0.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-semibold text-ink">{c.label}</span>
+                  <PlanPill plan={c.consultant_plan} />
+                </div>
+                <div className="truncate text-xs font-normal text-ink-muted">{contact}</div>
+                {ids.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1" title={`Help with: ${help.join(", ")}`}>
+                    {ids.slice(0, 2).map((id) => <HelpTag key={id} id={id} label={SHORT[id] ?? serviceName(id)} />)}
+                    {ids.length > 2 && <span className="text-[10px] font-medium text-ink-muted">+{ids.length - 2}</span>}
+                  </div>
+                )}
+              </div>
+            ),
           };
         })}
       />
@@ -136,13 +186,30 @@ export default function ClientPicker(props: {
           </button>
         </p>
       )}
-      <p className="mt-1.5 text-xs text-ink-muted">
-        {current
-          ? `${current.person} · ${current.email}${current.consultant_plan ? ` · ${PLAN_LABELS[current.consultant_plan].title}` : ""}`
-          : props.clients.length
+      {current ? (
+        // The chosen client's summary card: who, how they want help, and EVERY project in full.
+        <div className="mt-2 space-y-1.5 rounded-xl border border-consultant/30 bg-surface px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs text-ink-muted">
+              {current.company_name ? `${current.person} · ` : ""}{current.email}
+            </span>
+            <PlanPill plan={current.consultant_plan} />
+          </div>
+          {(current.interested_services ?? []).length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {(current.interested_services ?? []).map((id) => <HelpTag key={id} id={id} label={serviceName(id)} />)}
+            </div>
+          ) : (
+            <p className="text-[11px] text-ink-muted">No projects picked yet.</p>
+          )}
+        </div>
+      ) : (
+        <p className="mt-1.5 text-xs text-ink-muted">
+          {props.clients.length
             ? "None chosen: this is your own workspace (every service, for testing)."
             : "No clients yet. Add one, or they'll appear here when they ask for a consultant."}
-      </p>
+        </p>
+      )}
       {props.load && (
         <div className="mt-2">
           <LoadBar load={props.load} />
