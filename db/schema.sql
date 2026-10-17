@@ -25,6 +25,7 @@
 --        │                                    Supabase/PostgreSQL database (read-only, encrypted login)
 --        │      ──< dim.dashboard_tabs        the client's own dashboard tabs (saved questions)
 --        │      ──< dim.question_log          questions asked of the data (to suggest dashboard tabs)
+--        │      ──< dim.ai_usage              AI questions per day (the monthly allowance)
 --        │      ──< fact.account_data         the stored data (one row per metric)
 --        │      ──< fact.entities             each customer / vendor / item / location, ONCE
 --        │                                    ──< fact.entity_sources  how each source refers to it
@@ -360,6 +361,18 @@ ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS api_calls_count INTEGE
 -- after it. {"Invoice": "2026-10-16T12:00:00+00:00", ...}
 ALTER TABLE dim.data_connections ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}';
 
+-- ── dim.ai_usage: questions asked of the AI assistant, per client per day ───
+-- The monthly allowance (free 20, premium 200 — AI_FREE_MONTHLY /
+-- AI_PREMIUM_MONTHLY) is the sum of this month's rows for the PLAN HOLDER (a
+-- consultant's questions count toward the client they work on). Counts only:
+-- the questions' text is in dim.question_log. api/services/ai_assistant.py.
+CREATE TABLE IF NOT EXISTS dim.ai_usage (
+    account_id      UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
+    usage_date      DATE NOT NULL,                 -- UTC
+    question_count  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, usage_date)
+);
+
 -- ── dim.api_usage: API calls the whole app made to a tool, per month ────────
 -- QuickBooks' free Builder tier allows 500,000 read calls a MONTH for the
 -- whole app (all clients together) and blocks everyone past it, so the app
@@ -690,7 +703,7 @@ DECLARE t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY['accounts', 'consultants', 'teams', 'subscriptions', 'consultations', 'usage_events',
                              'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
-                             'api_usage']
+                             'api_usage', 'ai_usage']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;

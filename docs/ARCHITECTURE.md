@@ -164,7 +164,15 @@ flow never writes to it. The design change, and its safeguards:
    the client's own column names) and opens it like an upload, so the client
    (with their own login) and their consultant see the same dashboards and
    analysis — no separate code path per service.
-8. **AI needs stored data.** The AI tool answers questions about stored data,
+8. **AI and client data.** Beacon, the AI assistant (`api/services/ai_assistant.py`),
+   answers from the open table with the calculation shown and never changes or
+   stores it. When a Gemini key is set, a Google Gemini model (on the PAID tier,
+   so prompts aren't used to train Google's models) turns the question
+   into a plan, seeing ONLY column names, types, number/date ranges and the
+   values of category columns (repeating values like store names) — never
+   rows, and never values that tell people apart (names, emails, IDs).
+   The AI *package* (premium) still needs stored data at checkout:
+   **AI needs stored data.** The AI tool answers questions about stored data,
    so it can't be added to a package until the account has rows in
    `fact.account_data` (`billing.ai_ready`).
 9. **Each customer stored once (design change, October 2026).** Customers,

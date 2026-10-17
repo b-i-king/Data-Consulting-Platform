@@ -290,7 +290,11 @@ Made a mistake? The card's **History** has **undo** on a confirmed free call.
    "Help with" (the projects clients asked for, with counts), "One-time / Monthly" and "A to Z /
    Recently active" above the search box; clicking the box lists everyone, typing narrows it
    (names, email, location, or what they need help with).
-8. **Duplicates:** upload an export of invoices QuickBooks already synced → the preview says
+8. **Beacon (AI allowance):** open a table, then the AI page: a free client sees "0 / 20" and a gold bar
+   (amber from 70%, red from 90%), suggestions and the table's columns; the 21st question is
+   refused until the 1st. An admin sees "no limit" and can switch to "Simulate: Free". A
+   consultant on a client sees "Counts toward <client>'s allowance".
+9. **Duplicates:** upload an export of invoices QuickBooks already synced → the preview says
    "N of these records are already stored from QuickBooks Online"; accept with "load only the new
    records" → only the new ones are stored.
 

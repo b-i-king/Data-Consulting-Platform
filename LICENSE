@@ -1,21 +1,158 @@
-MIT License
+# Proprietary License — All Rights Reserved
 
-Copyright (c) 2026 Brandon I. King
+Copyright (c) 2026 The BOL Group, LLC. All rights reserved.
+Author: Brandon I. King (https://github.com/b-i-king)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is the proprietary work of The BOL Group, LLC (the "Owner").
+It is offered as a commercial software-as-a-service product. Unlike open-source
+software, **no right to use, copy, modify, host, or sell it is given to you by
+this file, except the narrow viewing permission in Section 2.** Everything not
+expressly permitted here is reserved by the Owner.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+---
+
+## 1. What this license covers
+
+"Software" means everything in this repository and any copy of it, in whole or
+in part, in any form: source code, compiled code, database schemas and data
+models (including the unified data model and entity design), the data skills
+written for this project, prompts, pricing and billing logic, user-interface
+designs, text, images, documentation, and any work derived from any of them.
+
+It does **not** cover the third-party components listed in Section 9, which
+keep their own licenses.
+
+## 2. The only permission you have: viewing and personal evaluation
+
+If you can see this repository, you may:
+
+- read the source code and documentation; and
+- run an unmodified copy on your own computer, for no more than 30 days, only
+  to evaluate it for a possible commercial license from the Owner.
+
+That permission is personal, non-transferable, non-exclusive, revocable at any
+time, and ends automatically if you break any term of this license.
+
+## 3. What you may not do (without a signed written agreement)
+
+You may not, in whole or in part, directly or through anyone else:
+
+1. **Use it commercially** — including in or for any product, service, client
+   engagement, internal business process, or anything that earns money or
+   saves a business money.
+2. **Host it or offer it as a service** — no website, app, API, SaaS, or
+   hosted, managed, or white-label version, whether paid or free.
+3. **Copy, modify, or build on it** — no adaptations, translations, ports,
+   forks for use, or derivative works, including re-implementing its
+   distinctive designs, data models, workflows, or pricing from this code.
+4. **Distribute it** — no publishing, sharing, sublicensing, selling, renting,
+   or leasing, in original or changed form.
+5. **Compete with it** — no use of it to design, build, or improve a product
+   or service that competes with the Owner's.
+6. **Train AI on it** — no use as training, fine-tuning, evaluation, or
+   retrieval data for any machine-learning or AI system, and no scraping of the
+   repository or the hosted service for that purpose.
+7. **Remove notices** — no removing or changing copyright, license,
+   attribution, or proprietary notices.
+8. **Get around protections** — no bypassing usage limits, access controls,
+   payment, or security of the hosted service, and no reverse engineering of it
+   except where the law allows it despite this restriction.
+9. **Use the Owner's names** — no use of "The BOL Group", the product's names,
+   or logos to endorse or promote anything, except to give the attribution
+   required by Section 5.
+
+## 4. Commercial license
+
+Any use beyond Section 2 needs a **commercial license signed by the Owner**
+before it starts. Terms (fees, revenue share, scope, support) are agreed case
+by case. Using the Software commercially without one is infringement, and the
+Owner may charge the full commercial license fee for the period of use, in
+addition to any other remedy.
+
+To ask: open an issue at https://github.com/b-i-king/Data-Consulting-Platform
+or contact the Owner through GitHub.
+
+## 5. Credit is always required
+
+Any use the Owner permits — and any quotation or reference to this work that
+the law allows without permission (such as a review or commentary) — must
+credit the Owner clearly, in a place a reader will see:
+
+> "Based on work by Brandon I. King / The BOL Group, LLC — https://github.com/b-i-king"
+
+Giving credit does **not** give permission. Credit is required in addition to
+the license terms, not instead of them.
+
+## 6. Contributions and feedback
+
+If you send the Owner code, ideas, suggestions, or other feedback, you grant
+the Owner a perpetual, irrevocable, worldwide, royalty-free right to use,
+change, and commercialize it in any way, without owing you anything, and you
+confirm you have the right to grant it.
+
+## 7. Confidentiality
+
+If you received access to the Software privately (for example as a
+contractor, consultant, partner, or tester) rather than from a public page, the
+Software and everything you learn from it about the Owner's product are
+confidential: you must not disclose them, and you must protect them at least as
+carefully as your own confidential information.
+
+## 8. Client data is not part of this license
+
+Nothing here gives anyone any right to data that businesses and people store
+in or process through the hosted service. That data belongs to them and is
+governed by the service's Terms of Service and Privacy Policy.
+
+## 9. Third-party components
+
+Parts of this repository were written by others and stay under their own
+licenses, which this file does not change or restrict. Full texts are in the
+[`licenses/`](licenses) folder and next to the files concerned, including:
+
+- skills adapted from Daniel Rosehill's Claude-Data-Analyst-plugin — MIT
+  (e.g. `data_skills/sample-size/LICENSE-NOTICE.md`);
+- skills adapted from Anthropic's Claude Code data plugin — Apache-2.0;
+- city data from GeoNames — CC BY 4.0;
+- open-source packages installed from `requirements.txt` and
+  `web/package.json` — each under its own license.
+
+Only the Owner's own work is proprietary.
+
+## 10. Breaking these terms
+
+Any use outside this license is unauthorized and infringes the Owner's
+copyright. If you break any term:
+
+- your permission under Section 2 ends at once, and you must stop all use and
+  delete every copy you have;
+- the Owner may seek every remedy the law allows, including court orders to
+  stop the use, damages or profits, the full commercial license fee, statutory
+  damages where available, and legal costs and attorneys' fees where allowed;
+- the Owner may send takedown notices (for example under the U.S. DMCA) to
+  remove copies.
+
+The Owner's failure to enforce a term at any time is not a waiver of it.
+
+## 11. No warranty; limitation of liability
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+OWNER OR THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 12. General
+
+This license is governed by the laws of the United States and of the State in
+which The BOL Group, LLC is organized, without regard to conflict-of-law
+rules. If any part of it is found unenforceable, the rest still applies, and
+that part is enforced to the fullest extent the law allows. Only a written
+agreement signed by the Owner can change or add to these terms.
+
+## Contact
+
+Commercial licensing and permission requests: open an issue at
+https://github.com/b-i-king/Data-Consulting-Platform, or contact the Owner
+through GitHub (https://github.com/b-i-king).

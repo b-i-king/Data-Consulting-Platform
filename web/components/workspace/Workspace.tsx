@@ -106,6 +106,7 @@ import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
 import DashboardTabs from "@/components/explore/DashboardTabs";
+import AssistantPanel from "@/components/explore/AssistantPanel";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
@@ -820,9 +821,9 @@ export default function Workspace() {
         )}
         {isConsultant && current === AI && currentService && !currentService.available && (
           <p className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
-            <strong>AI is in preview.</strong> Only admins see it open; clients see it as “Early access”. Questions are
-            answered by the built-in plain-English parser (totals, averages, top N, by category, by year) with the
-            calculation shown. A language model comes later (docs/ROADMAP.md).
+            <strong>Beacon uses {plan?.account.company_name ?? "this client"}&apos;s allowance.</strong> Every client has
+            a free monthly allowance (premium with the AI package); your questions count toward theirs. Answers come
+            from the built-in parser, or Google Gemini when the platform has a Gemini key.
           </p>
         )}
         {isConsultant && addingClient && (
@@ -899,8 +900,9 @@ export default function Workspace() {
           </div>
         )}
 
-        {currentService && !currentService.active ? (
-          // A grayed-out service: what it adds, and how to get it.
+        {currentService && !currentService.active && current !== AI ? (
+          // A grayed-out service: what it adds, and how to get it. (AI is never
+          // grayed out: everyone gets the free allowance — AssistantPanel.)
           <Card>
             <ServiceInfo service={currentService} />
             <div className="mt-4 flex flex-wrap gap-3">
@@ -935,6 +937,22 @@ export default function Workspace() {
               )}
             </Card>
           )
+        ) : current === AI && analysis && group && plan ? (
+          // The AI page: Beacon, with this month's allowance (free / premium / unlimited).
+          <AssistantPanel
+            key={`ai-${group.group_id}-${planAccountId}`}
+            token={session.token}
+            input={input}
+            groupId={group.group_id}
+            tableLabel={group.label}
+            rows={group.report.rows_after}
+            columns={group.report.column_reports
+              .filter((c) => c.action !== "dropped")
+              .map((c) => ({ name: c.column, type: c.inferred_type === "number" ? "numeric" : c.inferred_type }))}
+            isAdmin={!!session.account.is_admin}
+            canUpgrade={!!plan.can_add}
+            onUpgrade={() => add(AI)}
+          />
         ) : currentService && analysis && group ? (
           <div className="space-y-6">
             {analysis.groups.length > 1 && (

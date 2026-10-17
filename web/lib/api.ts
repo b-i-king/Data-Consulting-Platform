@@ -13,6 +13,8 @@ import type {
   CloudSchema,
   CloudTable,
   CloudTableFile,
+  AiAnswer,
+  AiUsage,
   EntityMatch,
   LiveDataset,
   QuickLook,
@@ -430,6 +432,30 @@ export async function runSkill(
     method: "POST",
     body: filesForm(input.files, { params: JSON.stringify(params), group_id: String(groupId), ...choiceFields(input) }),
   });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/**
+ * Beacon, the AI assistant: one plain-English question about the open table, counted
+ * against this month's allowance (429 when it's used up). `simulate` is for
+ * admins only ("free" | "premium").
+ */
+export async function askAi(token: string, input: CleaningInput, question: string, groupId = 0,
+  simulate?: string): Promise<AiAnswer> {
+  const res = await apiFetch(`${API_URL}/api/ai/ask`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: filesForm(input.files, { question, group_id: String(groupId), simulate: simulate ?? "", ...choiceFields(input) }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** This month's Beacon allowance (tier, used, limit, reset date). */
+export async function getAiUsage(token: string, simulate?: string): Promise<AiUsage> {
+  const q = simulate ? `?simulate=${encodeURIComponent(simulate)}` : "";
+  const res = await apiFetch(`${API_URL}/api/ai/usage${q}`, { headers: authHeaders(token) });
   await raiseForStatus(res);
   return res.json();
 }

@@ -97,6 +97,8 @@ services the client chose are offered; the rest are badges from
 | `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
 | `api/services/business_tools.py` | QuickBooks and Xero read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
 | `web/components/workspace/QuickLook.tsx` | The live quick look card (income, expenses, owed, by month, top customers) | How the quick look looks |
+| `api/services/ai_assistant.py` + `api/routers/ai.py` | Beacon, the AI assistant: free / premium monthly allowance, admins unlimited, consultants use the client's; optional Google Gemini planner (schema only) | AI limits and models |
+| `web/components/explore/AssistantPanel.tsx` | The AI page (Beacon): conversation, usage bar, suggestions, table facts | How Beacon looks |
 | `api/services/sync.py` + `scripts/run_syncs.py` | The stored sync: QuickBooks / Xero into managed storage, only what changed, within the free limits; the scheduler | Stored sync |
 | `api/services/entities.py` + `api/routers/entities.py` | Each customer / vendor / product stored once (`fact.entities`), linked from every source; "Is this the same customer?" | Customers across sources |
 | `api/services/dedupe.py` | The same record from two sources (date, amount, reference) — at preview and in the sync | Duplicates across sources |

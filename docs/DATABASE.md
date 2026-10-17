@@ -42,6 +42,7 @@ erDiagram
     accounts ||--o{ data_connections : "integrations (schedule / encrypted login)"
     accounts ||--o{ dashboard_tabs : "their own dashboard tabs"
     accounts ||--o{ question_log : "questions asked of the data"
+    accounts ||--o{ ai_usage : "AI questions per day (the allowance)"
     consultants |o--o{ data_connections : "set up on the client's behalf"
     accounts ||--o{ account_data : "fact: stored data"
     consultants |o--o{ account_data : "loaded by"
@@ -167,10 +168,10 @@ erDiagram
         date month PK "1st of the month"
         int calls "whole app, that month"
     }
-    api_usage {
-        text connector PK "quickbooks | xero"
-        date month PK "1st of the month"
-        int calls "whole app, that month"
+    ai_usage {
+        uuid account_id PK "the plan holder"
+        date usage_date PK "UTC"
+        int question_count "AI questions that day"
     }
     question_log {
         bigint id PK
@@ -218,7 +219,7 @@ erDiagram
 | `dim.data_connections` | integration a client set up | `PUT /api/connections/{connector}/refresh`; `POST /api/connections/supabase` | Business tools (QuickBooks): the refresh schedule and status; pulled data goes to `fact.account_data`. Cloud storage (Supabase database): `credentials_encrypted` = the client's own database login, encrypted (`api/services/cloud_sources.py`); nothing read from it is stored. For a "Connect" sign-in (QuickBooks, Xero, "Sign in with Supabase") it holds the OAuth tokens plus the company / organization / project id, encrypted (`api/services/oauth.py`); `display_name` = the company or project name. `api_calls_day` / `api_calls_count` = API calls made to it today (UTC), so the tools' daily limits are never passed (`CallMeter` in `api/services/business_tools.py`). `sync_state` = the stored sync's progress: per record type, the newest change already stored (`api/services/sync.py`). The customers, vendors and products the sync stores are in `fact.entities` (docs/DATA_MODEL.md). |
 | `dim.dashboard_tabs` | one of the client's own dashboard tabs | `POST/PUT/DELETE /api/dashboards/tabs` | A name + saved questions, answered again on the open data each time (`api/services/dashboards.py`). |
 | `dim.api_usage` | API calls the whole app made to one tool in one month | every QuickBooks / Xero read (`CallMeter` in `api/services/business_tools.py`) | Not tied to an account. QuickBooks' free tier allows 500,000 read calls a month for the whole app and blocks every client past it, so the app stops at 90%. |
-| `dim.api_usage` | API calls the whole app made to one tool in one month | every QuickBooks / Xero read (`CallMeter` in `api/services/business_tools.py`) | Not tied to an account. QuickBooks' free tier allows 500,000 read calls a month for the whole app and blocks every client past it, so the app stops at 90%. |
+| `dim.ai_usage` | AI questions one client (plan holder) asked on one day | each question to the AI assistant (`POST /api/ai/ask`) | The monthly allowance is this month's sum: free 20, premium (AI package) 200 (`AI_FREE_MONTHLY` / `AI_PREMIUM_MONTHLY`); admins have no limit; a consultant's questions count toward the client they work on. Counts only (the text is in `dim.question_log`). |
 | `dim.question_log` | one question asked of the data | `POST /api/questions` (after "Ask your data") | The text only. Questions asked again and again are suggested as dashboard tabs. Only the newest 500 per account are kept (`QUESTION_LOG_KEEP` in `account_store.py`), so it never grows without end. |
 | `fact.account_data` | **one metric** of one record (or one record with no numbers) | the load (`api/services/warehouse_store.py`) | Every client's stored data in one shape. Explained in [DATA_MODEL.md](DATA_MODEL.md). |
 | `fact.field_map` | source field ("in QuickBooks, `TxnDate` means `transaction_date`") | `db/schema.sql` seed (same pairs as `unified.py`) | Shared by every client: lines names up and says which fields are metrics. |

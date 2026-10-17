@@ -1096,6 +1096,37 @@ export interface QuickLook {
   stored: false;
 }
 
+/** GET /api/ai/usage — this month's Beacon allowance (api/services/ai_assistant.py). */
+export interface AiUsage {
+  /** "admin" = no limit; "premium" = the AI package; "free" = everyone else. */
+  tier: "admin" | "premium" | "free";
+  used: number;
+  /** null = no limit (admins). */
+  limit: number | null;
+  left: number | null;
+  /** The 1st of next month (ISO): when the allowance starts over. */
+  reset_date: string;
+  is_unlimited: boolean;
+  /** An admin seeing a tier as a client would ("free" | "premium"). */
+  simulating: string | null;
+  /** "gemini" = a Google Gemini model plans each question; "built-in" = the plain-English parser. */
+  engine: "gemini" | "built-in";
+  model: string | null;
+  /** A consultant working on a client: whose allowance this is. */
+  acting_for: string | null;
+}
+
+/** POST /api/ai/ask — one answer. */
+export interface AiAnswer {
+  answered: boolean;
+  result: SkillResult | null;
+  /** Why it couldn't be answered (with examples of what works). */
+  message: string | null;
+  engine: "gemini" | "built-in";
+  usage: AiUsage;
+  runtime_seconds: number;
+}
+
 /** "Is this the same customer?" — a name match between sources waiting for a person (api/services/entities.py). */
 export interface EntityMatch {
   link_id: number;
