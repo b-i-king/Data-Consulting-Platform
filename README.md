@@ -118,7 +118,12 @@ licenses/       third-party license texts
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Vendored skills keep their own licenses: Daniel
-Rosehill's Claude-Data-Analyst-plugin (MIT) and Anthropic's data plugin
-(Apache-2.0). City data for the location picker is from GeoNames (CC BY 4.0).
-See [`licenses/`](licenses).
+**Proprietary — all rights reserved** by The BOL Group, LLC. See [LICENSE](LICENSE):
+you may read the code and evaluate it for 30 days; any other use (commercial
+use, hosting it as a service, copying, modifying, distributing, or training AI
+on it) needs a signed commercial license, and any permitted use must credit
+"Brandon I. King / The BOL Group, LLC — https://github.com/b-i-king".
+
+Third-party parts keep their own licenses: Daniel Rosehill's
+Claude-Data-Analyst-plugin (MIT) and Anthropic's data plugin (Apache-2.0) for
+some skills, and GeoNames (CC BY 4.0) for city data. See [`licenses/`](licenses).

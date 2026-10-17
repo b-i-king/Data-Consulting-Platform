@@ -54,7 +54,8 @@ Offer one natural follow-up ("Want this by month?").
 
 ## Implementation notes for the platform feature
 
-- Model: a current Claude model via the Anthropic API, with the schema summary
+- Model: Google Gemini (Flash-Lite for free, Flash for premium) via the Gemini API — the
+  platform's assistant, Beacon (`api/services/ai_assistant.py`) — with the schema summary
   (not the raw data) in the prompt, returning a structured plan.
 - Execute the plan with a whitelist of pandas operations (filter, groupby,
   agg, sort, head) — never `eval` free-form generated code.

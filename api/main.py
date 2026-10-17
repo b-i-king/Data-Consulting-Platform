@@ -30,7 +30,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from api.core import database
 from api.core.config import get_settings
-from api.routers import (accounts, admin, billing, connections, consultants, consultations, dashboards, entities,
+from api.routers import (accounts, admin, ai, billing, connections, consultants, consultations, dashboards, entities,
                          files, intake, skills, warehouse)
 from api.services import auth
 
@@ -100,6 +100,7 @@ app.include_router(consultants.router, prefix="/api", tags=["consultants"])
 app.include_router(admin.router, prefix="/api", tags=["admin"])
 app.include_router(dashboards.router, prefix="/api", tags=["dashboards"])
 app.include_router(entities.router, prefix="/api", tags=["entities"])
+app.include_router(ai.router, prefix="/api", tags=["ai"])
 app.include_router(billing.router, prefix="/api", tags=["billing"])
 app.include_router(consultations.router, prefix="/api", tags=["consultations"])
 app.include_router(warehouse.router, prefix="/api", tags=["warehouse"])

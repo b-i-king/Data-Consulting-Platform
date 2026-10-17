@@ -148,6 +148,11 @@ after each restart (accounts live in memory).
       Supabase → Authentication → URL Configuration → **Redirect URLs** (for
       "Forgot password"). Invite emails are still to do (ROADMAP → Security).
 - [ ] Leave `ALLOW_PRIVATE_DB_HOSTS` unset (it's for local testing of the Supabase integration only).
+- [ ] Beacon (optional): `GEMINI_API_KEY` (aistudio.google.com -> Get API key) lets Google Gemini
+      plan each question (Flash-Lite for free, Flash for premium; `AI_MODEL_FREE` / `AI_MODEL_PREMIUM`).
+      **Turn on billing** for that Google Cloud project before real clients use it (the free tier
+      may use prompts to improve Google's products). Without a key the built-in parser answers at
+      no cost. Allowances: `AI_FREE_MONTHLY` (20), `AI_PREMIUM_MONTHLY` (200).
 - [ ] Stored sync schedule: Render → New → **Cron Job**, same repo and environment variables as the
       API, command `python scripts/run_syncs.py`, schedule `0 * * * *` (hourly; `*/15 * * * *` if you
       sell "live"). Without it, syncs only run when a client clicks "Sync now".

@@ -141,6 +141,23 @@ class Settings(BaseSettings):
     # private / local address (only for testing with a database on this machine).
     allow_private_db_hosts: bool = Field(default=False, alias="ALLOW_PRIVATE_DB_HOSTS")
 
+    # ── AI: Beacon, the "Ask your data" assistant (api/services/ai_assistant.py) ──
+    # Monthly question allowances, per client (the plan holder): FREE for
+    # everyone, PREMIUM with the AI package. Admins have no limit; a consultant
+    # uses the allowance of the client they're working on.
+    ai_free_monthly: int = Field(default=20, alias="AI_FREE_MONTHLY")
+    ai_premium_monthly: int = Field(default=200, alias="AI_PREMIUM_MONTHLY")
+    # OPTIONAL: with a Google Gemini key (aistudio.google.com -> Get API key), a
+    # Gemini model turns each question into a calculation plan (only the
+    # table's column names and category values are sent — never the rows).
+    # Without it, the built-in plain-English parser answers (no cost). Free uses
+    # Flash-Lite, premium Flash. For client data, turn on BILLING for the key's
+    # Google project: Google may use free-tier prompts to improve its products,
+    # paid-tier prompts are not used (docs/PRICING.md).
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    ai_model_free: str = Field(default="gemini-2.5-flash-lite", alias="AI_MODEL_FREE")
+    ai_model_premium: str = Field(default="gemini-2.5-flash", alias="AI_MODEL_PREMIUM")
+
     # ── Integrations: "Connect" sign-in buttons (api/services/oauth.py) ──────
     # Each provider needs ONE pair of keys from its developer site — the keys
     # belong to the platform, not to each client. A pair left empty simply

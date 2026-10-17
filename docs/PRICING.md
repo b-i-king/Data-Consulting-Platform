@@ -23,6 +23,43 @@ Each service is also a **skill category**: the skills behind it
 Clients can pick several. If any selected service needs a consultant, the quote
 includes your `BOOKING_URL`.
 
+## Beacon (AI questions): a free and a premium allowance
+
+**Beacon** is the platform's data assistant (the AI page, `api/services/ai_assistant.py`).
+It works like Bolt:
+
+| Who | Questions a month | Planned by (with `GEMINI_API_KEY`) |
+|---|---|---|
+| **Free** — every client | `AI_FREE_MONTHLY` (20) | Google `gemini-2.5-flash-lite` (`AI_MODEL_FREE`) |
+| **Premium** — a client with the AI package | `AI_PREMIUM_MONTHLY` (200) | Google `gemini-2.5-flash` (`AI_MODEL_PREMIUM`) |
+| **Admins** | no limit (can simulate free / premium) | `gemini-2.5-flash` |
+
+- The allowance belongs to the client (the plan holder): a team shares it, and
+  a **consultant uses the client's allowance and tier** while working on them.
+- It starts over on the 1st of each month (UTC), counted in `dim.ai_usage`.
+- Without a Gemini key, the built-in parser answers (no cost), and the
+  allowance still applies, so clients see the same product either way.
+- Charging for premium = the AI package's price (below), billed once AI is
+  launched (`available` / `billable` in `api/services/pricing.py`).
+
+**What a question costs YOU.** Beacon sends about 700 tokens (instructions,
+the column list, the question) and gets back a ~60-token plan; "thinking" is
+off, and the platform does the math, not the model. At list prices (check
+ai.google.dev/gemini-api/docs/pricing):
+
+| Model | Per 1M tokens (in / out) | Per question | 20 a month | 200 a month |
+|---|---|---|---|---|
+| Gemini 2.5 Flash-Lite (free tier) | $0.10 / $0.40 | ~$0.0001 | ~$0.002 | ~$0.02 |
+| Gemini 2.5 Flash (premium) | $0.30 / $2.50 | ~$0.0004 | ~$0.01 | ~$0.07 |
+| (for comparison) Claude Haiku | $1 / $5 | ~$0.001 | ~$0.02 | ~$0.20 |
+| (for comparison) Claude Sonnet | $3 / $15 | ~$0.003 | ~$0.06 | ~$0.60 |
+
+**Client data and Google's free tier.** Google's free Gemini tier may use
+prompts to improve its products (and people may review them); the PAID tier
+does not. Beacon sends column names and category values (store names,
+product types), so **turn on billing for the key's Google Cloud project**
+before real clients use it — at these prices it stays pennies a month.
+
 ## Consulting: free 30 minutes, then hourly
 
 | | Price | How it's paid |

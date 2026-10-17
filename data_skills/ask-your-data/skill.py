@@ -8,7 +8,7 @@ small PLAN (filters → group → aggregate → sort → limit) that is executed
 a fixed set of pandas operations.
 
 Where the plan comes from:
-  * `plan` (JSON) — given directly. This is what a language model (Claude)
+  * `plan` (JSON) — given directly. This is what a language model (Google Gemini, in Beacon)
     will produce once the AI service launches; the executor stays the same.
   * `question` (text) — a built-in rule-based parser for common shapes:
         "total amount by store"          "average csat by store"

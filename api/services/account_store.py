@@ -1843,28 +1843,27 @@ async def add_api_usage(connector: str, month: date, calls: int) -> None:
         connector, month, calls)
 
 
-_api_usage: dict[tuple[str, date], int] = {}   # (connector, month) -> calls (memory path)
+_ai_usage: dict[tuple[str, date], int] = {}    # (account_id, day) -> AI questions (memory path)
 
 
-async def get_api_usage(connector: str, month: date) -> int:
-    """Calls the whole app made to a tool in a month (dim.api_usage; 0 when none)."""
+async def ai_questions_since(account_id: str, since: date) -> int:
+    """AI questions the plan holder asked since a day (the 1st of the month -> this month's count)."""
     if database.pool is None:
-        return _api_usage.get((connector, month), 0)
+        return sum(n for (aid, day), n in _ai_usage.items() if aid == account_id and day >= since)
     return await database.pool.fetchval(
-        "SELECT coalesce((SELECT calls FROM dim.api_usage WHERE connector = $1 AND month = $2), 0)", connector, month)
+        "SELECT coalesce(sum(question_count), 0)::int FROM dim.ai_usage WHERE account_id = $1 AND usage_date >= $2",
+        uuid.UUID(account_id), since)
 
 
-async def add_api_usage(connector: str, month: date, calls: int) -> None:
-    """Add calls to a tool's monthly count (one small upsert per request, never per call)."""
-    if calls <= 0:
-        return
+async def add_ai_question(account_id: str, day: date) -> None:
+    """Count one AI question for the plan holder on a day (UTC)."""
     if database.pool is None:
-        _api_usage[(connector, month)] = _api_usage.get((connector, month), 0) + calls
+        _ai_usage[(account_id, day)] = _ai_usage.get((account_id, day), 0) + 1
         return
     await database.pool.execute(
-        """INSERT INTO dim.api_usage (connector, month, calls) VALUES ($1, $2, $3)
-           ON CONFLICT (connector, month) DO UPDATE SET calls = dim.api_usage.calls + EXCLUDED.calls""",
-        connector, month, calls)
+        """INSERT INTO dim.ai_usage (account_id, usage_date, question_count) VALUES ($1, $2, 1)
+           ON CONFLICT (account_id, usage_date) DO UPDATE SET question_count = dim.ai_usage.question_count + 1""",
+        uuid.UUID(account_id), day)
 
 
 async def delete_integration(account_id: str, connector: str) -> bool:
