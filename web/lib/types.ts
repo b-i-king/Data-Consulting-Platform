@@ -1090,10 +1090,27 @@ export interface QuickLook {
   /** true = added up from records (Xero), not the tool's own report. */
   estimate: boolean;
   basis: string;
-  totals: { income: number; expenses: number; net_income: number; owed_to_you: number; you_owe: number };
-  monthly: { month: string; income: number; expenses: number; net: number }[];
+  /** null = the tool doesn't share it (Wave's API has no expenses or bills). */
+  totals: { income: number; expenses: number | null; net_income: number | null; owed_to_you: number; you_owe: number | null };
+  monthly: { month: string; income: number; expenses: number | null; net: number | null }[];
   top_customers: { name: string; amount: number }[];
   stored: false;
+}
+
+/** POST /api/compare/over-time — two tables by week or month (api/services/compare.py). */
+export interface CompareResult {
+  /** The periods' first days ("2026-01-01"), both tables together. */
+  periods: string[];
+  /** null = that table has nothing in that period. */
+  left: { label: string; values: (number | null)[] };
+  right: { label: string; values: (number | null)[] };
+  /** Periods both tables have. */
+  overlap: number;
+  /** -1 to 1; null when too few shared periods (or one doesn't change). */
+  correlation: number | null;
+  summary: string;
+  cautions: string[];
+  period: "week" | "month";
 }
 
 /** GET /api/ai/usage — this month's Beacon allowance (api/services/ai_assistant.py). */

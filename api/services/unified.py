@@ -321,8 +321,36 @@ _XERO_VENDOR_FIELDS = {"Contact.ContactID": "vendor_source_id", "Contact.Name": 
                        "Contact.EmailAddress": "vendor_email", "Invoice.Contact.ContactID": "vendor_source_id",
                        "Invoice.Contact.Name": "vendor_name"}
 
+# ── Wave ─────────────────────────────────────────────────────────────────────
+# Wave's API shares invoices (with items), customers and products; the stored
+# sync stores INVOICES (invoice/sent). Money comes as {"value": "12.50"}.
+WAVE_SKIP = ("pdfUrl", "viewUrl", "source", "items.taxes", "items.account")
+WAVE_FIELD_MAP: dict[str, FieldSpec] = {
+    "id":                  ("source_record_id", "text", None, None, None),
+    "invoiceNumber":       ("reference_number", "text", None, None, None),
+    "invoiceDate":         ("transaction_date", "date", None, None, None),
+    "dueDate":             ("due_date", "date", None, None, None),
+    "status":              ("status", "text", None, None, None),
+    "modifiedAt":          ("source_updated_at", "timestamp", None, None, None),
+    "currency.code":       ("currency", "text", None, None, None),
+    "total.value":         ("total_amount", "number", "amount", "total", "usd"),
+    "amountDue.value":     ("balance_due", "number", "balance", "due", "usd"),
+    "amountPaid.value":    ("amount_paid", "number", "amount", "paid", "usd"),
+    "taxTotal.value":      ("tax_amount", "number", "tax", None, "usd"),
+    "customer.id":         ("customer_source_id", "text", None, None, None),
+    "customer.name":       ("customer_name", "text", None, None, None),
+    "customer.email":      ("customer_email", "text", None, None, None),
+    "items.description":   ("line_description", "text", None, None, None),
+    "items.quantity":      ("quantity", "number", "quantity", None, "count"),
+    "items.unitPrice":     ("unit_price", "number", "price", "unit", "usd"),
+    "items.subtotal.value": ("line_amount", "number", "amount", "line", "usd"),
+    "items.total.value":   ("line_total", "number", "amount", "line_with_tax", "usd"),
+    "items.product.id":    ("item_source_id", "text", None, None, None),
+    "items.product.name":  ("item_name", "text", None, None, None),
+}
+
 # system name (fact.account_data.source_system, fact.field_map.system) -> its map.
-FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP, "xero": XERO_FIELD_MAP}
+FIELD_MAPS = {"quickbooks": QUICKBOOKS_FIELD_MAP, "file_upload": FILE_UPLOAD_FIELD_MAP, "xero": XERO_FIELD_MAP, "wave": WAVE_FIELD_MAP}
 
 # ── Guessing metrics nobody mapped ──────────────────────────────────────────
 # (word in the name) -> (metric_type, metric_unit, subtype when the word itself
@@ -1162,6 +1190,40 @@ def xero_response_to_unified(endpoint: str, items: list[dict]) -> pd.DataFrame:
     rows: list[dict] = []
     for obj in items:
         rows.extend(flatten_xero(endpoint, obj))
+    return _to_frame(rows)
+
+
+def flatten_wave_invoice(obj: dict, *, field_map: dict | None = None) -> list[dict]:
+    """
+    Turn one Wave invoice into unified rows: the invoice is line 0, its items
+    lines 1, 2, 3 (invoice/sent). Drafts aren't stored (returns []).
+
+    Example:
+        >>> rows = flatten_wave_invoice({"id": "w1", "invoiceDate": "2026-03-01", "status": "PAID",
+        ...     "total": {"value": "108.00"}, "items": [{"subtotal": {"value": "100.00"}}]})
+        >>> [(r["line_number"], r["field_name"]) for r in rows]
+        [(0, 'total_amount'), (1, 'line_amount')]
+    """
+    if str(obj.get("status", "")).upper() == "DRAFT":
+        return []
+    fmap = WAVE_FIELD_MAP if field_map is None else field_map
+    raw_date = obj.get("invoiceDate")
+    event_date = None if _is_missing(raw_date) else _typed_value(str(raw_date)[:10], "date")[1]
+    raw_updated = obj.get("modifiedAt")
+    source_modified_at = None if _is_missing(raw_updated) else _typed_value(raw_updated, "timestamp")[1]
+    header = {k: v for k, v in obj.items() if k != "items"}
+    groups = [(0, header, [])] + [(n, line, ["items"]) for n, line in enumerate(obj.get("items") or [], start=1)]
+    return _flatten_lines(record_id=f"Invoice:{obj['id']}", event_type="invoice", event_subtype="sent",
+                          event_date=event_date, source_modified_at=source_modified_at,
+                          currency=(obj.get("currency") or {}).get("code"), expense=None, groups=groups, fmap=fmap,
+                          skip=WAVE_SKIP)
+
+
+def wave_invoices_to_unified(items: list[dict]) -> pd.DataFrame:
+    """Flatten a page of Wave invoices into one unified DataFrame (drafts skipped)."""
+    rows: list[dict] = []
+    for obj in items:
+        rows.extend(flatten_wave_invoice(obj))
     return _to_frame(rows)
 
 

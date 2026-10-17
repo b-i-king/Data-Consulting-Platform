@@ -43,7 +43,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getCloudTableFile, getIntakeOptions, getLiveDatasetFile } from "@/lib/api";
-import { FALLBACK_BOOKING_URL } from "@/lib/format";
+import { FALLBACK_BOOKING_URL, TOOL_NAMES } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
 import type { AccountType, AnalyzeResponse, CleaningInput, CloudTable, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, LiveDataset, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import AuthForm from "@/components/auth/AuthForm";
@@ -77,7 +77,7 @@ const FLOWS: Record<DataSource, { id: StepId; label: string }[]> = {
     { id: "next", label: "Next steps" },
   ],
 };
-const PROVIDER_NAMES: Record<string, string> = { supabase: "Supabase", quickbooks: "QuickBooks", xero: "Xero" };
+const PROVIDER_NAMES = TOOL_NAMES;
 // The answers kept while the browser is away at a provider's sign-in (this tab only).
 const SAVED_KEY = "dcp-get-started";
 

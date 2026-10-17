@@ -74,6 +74,15 @@ PROVIDERS: dict[str, dict] = {
                  "accounting.banktransactions.read accounting.contacts.read",
         "pkce": False,
     },
+    "wave": {
+        "name": "Wave",
+        "authorize_url": "https://api.waveapps.com/oauth2/authorize/",
+        "token_url": "https://api.waveapps.com/oauth2/token/",
+        "revoke_url": None,          # the business removes access in Wave's settings
+        "scope": None,               # from WAVE_SCOPES (Settings), read-only by default
+        "pkce": False,
+        "client_auth": "body",       # Wave takes the client ID and secret as form fields
+    },
     "supabase": {
         "name": "Supabase",
         "authorize_url": "https://api.supabase.com/v1/oauth/authorize",
@@ -92,6 +101,7 @@ def _keys(provider: str) -> tuple[str, str]:
         "quickbooks": (s.quickbooks_client_id, s.quickbooks_client_secret),
         "xero": (s.xero_client_id, s.xero_client_secret),
         "supabase": (s.supabase_oauth_client_id, s.supabase_oauth_client_secret),
+        "wave": (s.wave_client_id, s.wave_client_secret),
     }.get(provider, ("", ""))
 
 
@@ -198,8 +208,9 @@ def authorize_url(provider: str, account_id: str, consultant_id: str | None = No
         verifier = secrets.token_urlsafe(48)
         params["code_challenge"] = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         params["code_challenge_method"] = "S256"
-    if p["scope"]:
-        params["scope"] = p["scope"]
+    scope = get_settings().wave_scopes if provider == "wave" else p["scope"]
+    if scope:
+        params["scope"] = scope
     params["state"] = make_state(provider, account_id, consultant_id, verifier, return_to)
     return f"{p['authorize_url']}?{urlencode(params)}"
 
@@ -217,9 +228,11 @@ def _tokens_from(body: dict, old: dict | None = None) -> dict:
 async def _token_request(provider: str, data: dict) -> dict:
     """POST to the provider's token address (client ID + secret as HTTP Basic, the standard way)."""
     client_id, secret = _keys(provider)
+    body_auth = PROVIDERS[provider].get("client_auth") == "body"   # Wave: in the form, not HTTP Basic
     async with http_client() as http:
-        res = await http.post(PROVIDERS[provider]["token_url"], data=data, auth=(client_id, secret),
-                              headers={"Accept": "application/json"})
+        res = await http.post(PROVIDERS[provider]["token_url"],
+                              data={**data, "client_id": client_id, "client_secret": secret} if body_auth else data,
+                              auth=None if body_auth else (client_id, secret), headers={"Accept": "application/json"})
     if res.status_code >= 400:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             detail=f"{PROVIDERS[provider]['name']} didn't accept the sign-in. Please click Connect again.")
@@ -311,6 +324,7 @@ async def finish_connect(provider: str, tokens: dict, realm_id: str = "") -> tup
       QuickBooks: the company id (`realmId`, sent with the callback) and its name.
       Xero:       the organization ("tenant") the client picked, and the
                   connection id (to free the slot on disconnect).
+      Wave:       the business (the first that isn't a personal one).
       Supabase:   the client's projects; with exactly one it is chosen
                   straight away, otherwise they pick one in Integrations.
 
@@ -327,6 +341,9 @@ async def finish_connect(provider: str, tokens: dict, realm_id: str = "") -> tup
     if provider == "xero":
         org = await business_tools.xero_tenant(tokens["access_token"])
         return org["name"], {"tenant_id": org["tenant_id"], "connection_id": org["connection_id"]}
+    if provider == "wave":
+        biz = await business_tools.wave_business(tokens["access_token"])
+        return biz["name"], {"business_id": biz["business_id"]}
     projects = await cloud_sources.mgmt_projects(tokens["access_token"])
     if len(projects) == 1:
         return f"Supabase: {projects[0]['name']}", {"project_ref": projects[0]["ref"], "project_name": projects[0]["name"]}

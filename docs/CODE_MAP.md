@@ -95,9 +95,11 @@ services the client chose are offered; the rest are badges from
 | `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
 | `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only); "Sign in with Supabase" reads through the Management API | Cloud integrations |
 | `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
-| `api/services/business_tools.py` | QuickBooks and Xero read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
+| `api/services/business_tools.py` | QuickBooks, Xero and Wave read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
 | `web/components/workspace/QuickLook.tsx` | The live quick look card (income, expenses, owed, by month, top customers) | How the quick look looks |
 | `api/services/ai_assistant.py` + `api/routers/ai.py` | Beacon, the AI assistant: free / premium monthly allowance, admins unlimited, consultants use the client's; optional Google Gemini planner (schema only) | AI limits and models |
+| `api/services/compare.py` + `api/routers/compare.py` + `web/components/explore/CompareOverTime.tsx` | "Compare over time" (beta): two tables with only dates in common, by week or month, with a correlation and its cautions (to remove: delete these and the card in Workspace.tsx) | Unrelated sources side by side |
+| `docs/images/logo-512.png` | A copy of the logo (512 x 512) to upload in the QuickBooks / Xero / Wave / Supabase developer settings; the site serves the same picture at `/logo.png` | Your logo elsewhere |
 | `web/components/explore/AssistantPanel.tsx` | The AI page (Beacon): conversation, usage bar, suggestions, table facts | How Beacon looks |
 | `api/services/sync.py` + `scripts/run_syncs.py` | The stored sync: QuickBooks / Xero into managed storage, only what changed, within the free limits; the scheduler | Stored sync |
 | `api/services/entities.py` + `api/routers/entities.py` | Each customer / vendor / product stored once (`fact.entities`), linked from every source; "Is this the same customer?" | Customers across sources |

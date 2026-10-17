@@ -224,7 +224,8 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
     h = _h(me["access_token"])
     listed = client.get("/api/connections", headers=h).json()
     kinds = {c["connector"]: c["kind"] for c in listed["connectors"]}
-    assert kinds == {"quickbooks": "business_tool", "xero": "business_tool", "supabase": "cloud_storage"}
+    assert kinds == {"quickbooks": "business_tool", "xero": "business_tool", "wave": "business_tool",
+                     "supabase": "cloud_storage"}
     assert listed["kinds"]["cloud_storage"] == "Cloud storage"
     # The roadmap is listed per section, and none of it can be set up yet.
     planned = {(p["kind"], p["name"]): p["when"] for p in listed["coming_soon"]}

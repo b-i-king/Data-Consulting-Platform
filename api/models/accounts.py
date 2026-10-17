@@ -550,6 +550,12 @@ class CloudConnectIn(BaseModel):
     connection_string: str = Field(min_length=12, max_length=1000)
 
 
+class WaveTokenIn(BaseModel):
+    """Admins only: a Wave FULL ACCESS TOKEN for their own business (no Wave Pro needed)."""
+
+    token: str = Field(min_length=10, max_length=500)
+
+
 class SyncIn(BaseModel):
     """Start the stored sync. consent = "store my data" ticked (needed once, like any storing)."""
 

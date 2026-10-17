@@ -12,12 +12,13 @@
 
 import { useEffect, useState } from "react";
 import { getQuickLook } from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, toolName } from "@/lib/format";
 import type { QuickLook as QuickLookData } from "@/lib/types";
 import { Button, ErrorBox, Stat } from "@/components/wizard/ui";
 
 /** Money in the report's currency, US formatting: $1,234.56. */
-function money(n: number, currency: string) {
+function money(n: number | null, currency: string) {
+  if (n === null) return "—"; // the tool doesn't share it (Wave: no expenses)
   try {
     return n.toLocaleString("en-US", { style: "currency", currency });
   } catch {
@@ -61,7 +62,7 @@ export default function QuickLook(props: { token: string; connector: string }) {
 
   const cur = data?.currency ?? "USD";
   // Bars are scaled to the biggest month, so the tallest bar is full width.
-  const biggest = Math.max(1, ...(data?.monthly ?? []).flatMap((m) => [m.income, m.expenses]));
+  const biggest = Math.max(1, ...(data?.monthly ?? []).flatMap((m) => [m.income, m.expenses ?? 0]));
 
   return (
     <div className="space-y-4 rounded-xl border border-line p-4">
@@ -81,7 +82,7 @@ export default function QuickLook(props: { token: string; connector: string }) {
         </Button>
       </div>
       <ErrorBox message={error} />
-      {busy && !data && <p className="text-sm text-ink-muted">Reading from {props.connector === "xero" ? "Xero" : "QuickBooks"}…</p>}
+      {busy && !data && <p className="text-sm text-ink-muted">Reading from {toolName(props.connector)}…</p>}
       {data && (
         <>
           <p className="text-xs text-ink-muted">
@@ -92,7 +93,7 @@ export default function QuickLook(props: { token: string; connector: string }) {
             <Stat label="Income" value={money(data.totals.income, cur)} />
             <Stat label="Expenses" value={money(data.totals.expenses, cur)} />
             <Stat label="Net income" value={money(data.totals.net_income, cur)}
-              tone={data.totals.net_income >= 0 ? "good" : "bad"} />
+              tone={data.totals.net_income === null ? undefined : data.totals.net_income >= 0 ? "good" : "bad"} />
             <Stat label="Customers owe you" value={money(data.totals.owed_to_you, cur)} />
             <Stat label="You owe" value={money(data.totals.you_owe, cur)} />
           </div>
@@ -110,9 +111,13 @@ export default function QuickLook(props: { token: string; connector: string }) {
                     <span className="text-ink-muted">{monthLabel(m.month)}</span>
                     <span className="space-y-0.5">
                       <span className="block h-2 rounded-sm bg-good" style={{ width: `${(m.income / biggest) * 100}%` }} />
-                      <span className="block h-2 rounded-sm bg-bad" style={{ width: `${(m.expenses / biggest) * 100}%` }} />
+                      {m.expenses !== null && (
+                        <span className="block h-2 rounded-sm bg-bad" style={{ width: `${(m.expenses / biggest) * 100}%` }} />
+                      )}
                     </span>
-                    <span className={`text-right font-mono ${m.net >= 0 ? "text-good" : "text-bad"}`}>{money(m.net, cur)}</span>
+                    <span className={`text-right font-mono ${m.net === null ? "text-ink-muted" : m.net >= 0 ? "text-good" : "text-bad"}`}>
+                      {m.net === null ? money(m.income, cur) : money(m.net, cur)}
+                    </span>
                   </li>
                 ))}
               </ul>

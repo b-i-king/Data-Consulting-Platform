@@ -148,6 +148,10 @@ after each restart (accounts live in memory).
       Supabase → Authentication → URL Configuration → **Redirect URLs** (for
       "Forgot password"). Invite emails are still to do (ROADMAP → Security).
 - [ ] Leave `ALLOW_PRIVATE_DB_HOSTS` unset (it's for local testing of the Supabase integration only).
+- [ ] Vercel: `NEXT_PUBLIC_SITE_URL` = your site's address (e.g. `https://data-consulting-platform.vercel.app`)
+      — without it Google's structured data, link previews and the logo point at localhost.
+- [ ] Your logo on the QuickBooks / Xero / Supabase sign-in screens: download `https://<your site>/logo.png`
+      (512 x 512) and upload it as the app's logo in each developer site.
 - [ ] Beacon (optional): `GEMINI_API_KEY` (aistudio.google.com -> Get API key) lets Google Gemini
       plan each question (Flash-Lite for free, Flash for premium; `AI_MODEL_FREE` / `AI_MODEL_PREMIUM`).
       **Turn on billing** for that Google Cloud project before real clients use it (the free tier
@@ -158,6 +162,9 @@ after each restart (accounts live in memory).
       sell "live"). Without it, syncs only run when a client clicks "Sync now".
 - [ ] After deploying this version: `python scripts/setup_database.py`, then once
       `python scripts/backfill_entities.py` (links data stored before customers were stored once).
+- [ ] Wave (optional): `WAVE_CLIENT_ID` / `WAVE_CLIENT_SECRET` from developer.waveapps.com (the business
+      needs Wave Pro); same redirect URI as below. Limits: `WAVE_MAX_CONNECTIONS` (9),
+      `WAVE_DAILY_CALL_LIMIT` (500) — 9 × 500 stays under Wave's 5,000 calls a day per app.
 - [ ] "Connect" buttons (optional, per tool): set `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET`,
       `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` (and `QUICKBOOKS_ENVIRONMENT=production`
       with production keys), `SUPABASE_OAUTH_CLIENT_ID` / `SUPABASE_OAUTH_CLIENT_SECRET`, and register

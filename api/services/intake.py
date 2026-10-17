@@ -72,6 +72,7 @@ DATA_LOCATIONS = [
         "options": [
             {"id": "quickbooks", "label": "QuickBooks", "available": False, "connector": "quickbooks"},
             {"id": "xero", "label": "Xero", "available": False, "connector": "xero"},
+            {"id": "wave", "label": "Wave", "available": False, "connector": "wave"},
             {"id": "gusto", "label": "Gusto", "available": False},
             {"id": "shopify", "label": "Shopify", "available": False},
             {"id": "square", "label": "Square", "available": False},

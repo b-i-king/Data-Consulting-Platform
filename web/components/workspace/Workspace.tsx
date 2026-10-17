@@ -75,7 +75,7 @@ import {
   setActingAs,
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
-import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd } from "@/lib/format";
+import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd, toolName } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
 import type {
   AnalyzeResponse,
@@ -107,6 +107,7 @@ import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
 import DashboardTabs from "@/components/explore/DashboardTabs";
 import AssistantPanel from "@/components/explore/AssistantPanel";
+import CompareOverTime from "@/components/explore/CompareOverTime";
 import { priceLabel } from "@/components/explore/LockedService";
 import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
@@ -292,7 +293,7 @@ export default function Workspace() {
     // Back from "Connect QuickBooks / Xero / Supabase" (api/routers/connections.py oauth_callback).
     const integration = q.get("integration");
     if (integration) {
-      const name = { quickbooks: "QuickBooks", xero: "Xero", supabase: "Supabase" }[integration] ?? integration;
+      const name = toolName(integration);
       setIntegrationNotice(
         q.get("connected") === "1"
           ? { ok: true, text: `${name} is connected. Nothing is stored — it's read live when you ask.` }
@@ -438,7 +439,7 @@ export default function Workspace() {
     try {
       const got = await getLiveDatasetFile(session.token, connector, d.id);
       setCloudNote(got.truncated ? `the first ${fmtInt(got.rows)} records (there are more)` : null);
-      setCloudFrom(`Live from ${connector === "xero" ? "Xero" : "QuickBooks"}`);
+      setCloudFrom(`Live from ${toolName(connector)}`);
       await clean([got.file], "cloud");
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't read those records.");
@@ -881,6 +882,7 @@ export default function Workspace() {
         )}
         {accountTab === "integrations" && (
           <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_add}
+            isAdmin={!!session.account.is_admin}
             onOpenTable={openCloud} onOpenLive={openLive} notice={integrationNotice} />
         )}
         {accountTab === "consultant" && isConsultant && <ConsultantSetup token={session.token} onSetupNeeded={setSetupNeeded} />}
@@ -1040,6 +1042,10 @@ export default function Workspace() {
               </>
             )}
 
+            {/* Beta: two open tables, compared by period (CompareOverTime.tsx — easy to remove). */}
+            {current === DASHBOARD && choice === VIEW && analysis.groups.length >= 2 && (
+              <CompareOverTime key={`compare-${files.map((f) => f.name).join("|")}`} input={input} analysis={analysis} />
+            )}
             {current === DASHBOARD && choice === VIEW && group.report.analysis_ready && (
               <DashboardTabs
                 key={`dash-${group.group_id}-${planAccountId}`}

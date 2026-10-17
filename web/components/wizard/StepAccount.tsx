@@ -48,7 +48,7 @@ import { addMyService, chooseConsultant, downloadCleaned, getMyServices, startCh
 import AuthForm from "@/components/auth/AuthForm";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
-import { fmtInt, fmtUsd } from "@/lib/format";
+import { fmtInt, fmtUsd, toolName } from "@/lib/format";
 import type { Session } from "@/lib/session";
 import type { AccountType, AnalyzeResponse, CleaningInput, ConsultantLoad, ConsultantPlan, Industry, MyServices, Subscription, SubscriptionChoice } from "@/lib/types";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "./DownloadConfirm";
@@ -335,7 +335,7 @@ function NextSteps(props: {
  * consent. The first sync runs now (api/routers/connections.py sync).
  */
 function SyncBox(props: { token: string; connector: string; canStore: boolean; planStarted: boolean }) {
-  const name = props.connector === "xero" ? "Xero" : "QuickBooks";
+  const name = toolName(props.connector);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
