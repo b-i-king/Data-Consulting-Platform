@@ -22,6 +22,9 @@ class TeamMemberIn(BaseModel):
     first_name: str = Field(min_length=1, max_length=200)
     last_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
+    # "developer" (upload, connect, load, edit dashboards) or "member" (view
+    # only) — api/services/teams.py.
+    role: Literal["developer", "member"] = "developer"
 
     # Format rules live in api/services/validation.py (letters only, capital
     # first letter, valid email stored in lowercase).
@@ -435,6 +438,10 @@ class AccountOut(BaseModel):
     wants_consultant: bool = False
     consultant_plan: str | None = None    # "one_time" or "monthly" consultant help
     consultant_name: str | None = None    # the assigned consultant's first name
+    mfa_enabled: bool = False             # two-step sign-in is on
+    mfa_required: bool = False            # admins / consultants must turn it on (MFA_REQUIRED_FOR_STAFF)
+    is_healthcare: bool = False           # HIPAA approved: data access is audited (api/services/audit.py)
+    hipaa_status: str | None = None       # None | "pending" | "approved" | "denied" (api/services/hipaa.py)
 
 
 class AuthOut(BaseModel):
@@ -446,9 +453,36 @@ class AuthOut(BaseModel):
 
     access_token: str | None = None
     token_type: str = "bearer"
-    account: AccountOut
+    account: AccountOut | None = None
     needs_confirmation: bool = False
     message: str | None = None
+    # Two-step sign-in: the password was right; send `mfa_ticket` + the code to
+    # POST /api/accounts/signin/mfa (no token yet, no account details).
+    mfa_required: bool = False
+    mfa_ticket: str | None = None
+    # Devices signed out to make room (3 at most): ["Chrome on Windows"].
+    signed_out_devices: list[str] = Field(default_factory=list)
+
+
+class HipaaRequestIn(BaseModel):
+    """Settings -> Health information (HIPAA): who the healthcare business is, for an admin to confirm."""
+
+    organization: str = Field(min_length=2, max_length=200)   # legal name of the practice / organization
+    npi: str | None = Field(default=None, max_length=20)       # 10-digit National Provider Identifier
+    note: str | None = Field(default=None, max_length=1000)    # what health data they'd store
+
+
+class MfaCodeIn(BaseModel):
+    """A 6-digit code from the authenticator app, or a backup code like "7f3k-9q2m"."""
+
+    code: str = Field(min_length=6, max_length=20)
+
+
+class MfaSigninIn(BaseModel):
+    """Step two of signing in: the ticket from step one and the code."""
+
+    ticket: str = Field(min_length=10, max_length=2000)
+    code: str = Field(min_length=6, max_length=20)
 
 
 class QuoteIn(BaseModel):
@@ -616,10 +650,19 @@ class QuestionLogIn(BaseModel):
     answered: bool = True
 
 
+class TeamRoleIn(BaseModel):
+    """The team owner changes a colleague's role."""
+
+    role: Literal["developer", "member"]
+
+
 class DeleteAccountIn(BaseModel):
     """ "Delete my account": the person types their own email to confirm."""
 
     confirm_email: str = Field(min_length=3, max_length=320)
+    # Optional "Why are you leaving?" pick. Kept only as a count in the anonymous
+    # dim.account_deletions row (a fixed list, so no personal text is ever stored).
+    reason: Literal["too_expensive", "missing_features", "not_needed", "switching_tools", "privacy", "other"] | None = None
 
 
 class ChooseConsultantIn(BaseModel):

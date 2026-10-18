@@ -130,14 +130,33 @@ services the client chose are offered; the rest are badges from
 | `api/services/cleaning.py` | Cleaning pipeline | Adding a cleaning step |
 | `api/services/spark_engine.py` | Optional PySpark engine: pandas-vs-Spark choice, JDBC reads, Spark cleaning + the unified "one row per metric" reshape ([SPARK.md](SPARK.md)) | Big data / cloud-warehouse connectors |
 | `api/services/sample_size.py` | Adequacy snapshot | Adding rules of thumb |
-| `api/services/pricing.py` | Services & prices | Changing packages/prices |
+| `api/services/pricing.py` | Services & the tools on sale (default prices; `apply_prices` swaps in the live ones) | Changing packages |
+| `data_skills/build-dashboard/layout.py` + `templates/` | Dashboard building blocks: KPI row (1–4) above the fold, container rows (full, ½+½, ⅔+⅓, ⅓+⅔, thirds) from the Canva design; the downloadable HTML | Dashboard layout |
+| `data_skills/build-dashboard/industry.py` + `industry_metrics.json` / `INDUSTRY_METRICS.md` | Industry KPI recipes by NAICS sector; generic fallback | Industry dashboards |
+| `web/components/explore/Dashboard.tsx` + `charts/HBarChart.tsx` | The dashboard on the site: Filter panel, KPI row, containers, green / gray / red changes | Dashboard screens |
+| `api/services/sessions.py` | Signed-in devices: 3 per person, 8-hour idle sign-out, sign out one / all | Sign-in security |
+| `api/services/mfa.py` | Two-step sign-in (authenticator codes, backup codes), required for staff | Sign-in security |
+| `api/services/audit.py` | Activity log for healthcare clients only | Healthcare |
+| `api/services/hipaa.py` + `web/components/workspace/HipaaCard.tsx` / `AdminHipaa.tsx` | HIPAA requests: the NPI check, storing paused while waiting, an admin approves or denies | Healthcare |
+| `api/services/pii.py` + `api/core/crypto.py` | Encrypt emails / phone numbers in stored data; the keys | Sensitive data |
+| `api/core/rate_limit.py` | Per-IP request limits | Abuse protection |
+| `api/core/monitoring.py` | Sentry error reports with personal data stripped | Monitoring |
+| `web/components/workspace/SecurityPanel.tsx` | Settings: two-step sign-in, your devices, activity log | Security screens |
+| `api/services/teams.py` | Business team roles (owner / developer / member = view only), the 5-person limit, `require_editor` | Team and permission changes |
+| `api/services/offers.py` | A first package's free trial or the seasonal sale running today (yearly windows) | Trials and sales |
+| `web/components/workspace/TeamPanel.tsx` | Settings → Account → Your team: people, roles, add / remove, "5 of 5 people" | Team screens |
+| `web/components/workspace/AdminSales.tsx` | Admin → Seasonal sales | Sale screens |
+| `api/services/login_guard.py` | Sign-in lockout: tries left, 15-minute lock after 3 wrong passwords, reset unlocks | Sign-in security |
+| `api/services/price_store.py` | Live tool prices in `dim.plan_prices`: loaded at startup, changed in Admin → Prices (Stripe first) | Changing prices |
+| `api/services/stripe_catalog.py` | Stripe products and prices by lookup key (`sync`, `sync_plan`) | Stripe product changes |
 | `api/services/intake.py` | Questionnaire choices | Launching a connector |
 | `api/services/account_store.py` | Account, consultant, subscription and usage storage | Changing tables |
 | `db/schema.sql` | Database tables ([DATABASE.md](DATABASE.md)) | Any table change (also update `account_store.py` and DATABASE.md) |
 | `api/services/billing.py` + `api/routers/billing.py` | Stripe: packages of tools, Checkout, webhook, portal; the AI rule (needs stored data) | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
 | `api/services/fair_use.py` | Download limit per 24 h and free repeats (one-way data fingerprint) | Changing fair-use rules ([PRICING.md](PRICING.md)) |
 | `api/services/connections.py` + `api/routers/connections.py` | Connectors and how often they refresh (schedule rules, "Refresh now" gap) | Adding a connector or refresh choice |
-| `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), admin approval of consultant requests | Consultant and admin features |
+| `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), admin approval of consultant requests, deactivating / reactivating consultants, testers, prices, the deletion counts | Consultant and admin features |
+| `web/components/workspace/AdminPanel.tsx` (+ `AdminPrices.tsx`, `AdminTesters.tsx`) | The Admin panel: requests, consultants (deactivate / reactivate), prices, testers, account deletions | Admin screens |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
 | `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its README.md in step) |
@@ -147,7 +166,7 @@ services the client chose are offered; the rest are badges from
 | `web/components/explore/*.tsx` | Dashboard + skills panel | Changing the Explore UI |
 | `scripts/make_sample_data.py` | Builds `samples/` | Adding a sample story or file |
 | `scripts/sync_skill_docs.py` | Regenerates each README.md "Run it" section | After changing a skill's options |
-| `scripts/sync_stripe.py` | Creates/updates Stripe products and prices from `pricing.py` | After changing a plan or price |
+| `scripts/sync_stripe.py` | Creates/updates Stripe products and prices: the tools in `pricing.py` at the prices in `dim.plan_prices` | When first connecting Stripe, or after editing `dim.plan_prices` by hand |
 | `web/components/billing/` | Build-your-own package selector and Plan & billing panel | Billing screens |
 | `web/components/ui/SearchSelect.tsx` | Searchable dropdown (business size, "Working on") | Adding another searchable picker |
 | `web/components/wizard/MissingValues.tsx` | Missing-value advice + fill/remove choices | Changing the missing-value UI |

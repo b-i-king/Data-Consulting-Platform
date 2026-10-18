@@ -151,7 +151,8 @@ def test_test_mode_turns_a_plan_on_and_off_without_charging():
     """
     token, _ = _signup()
     res = client.post("/api/billing/checkout", headers=_h(token), json={"plan_ids": ["all_tools"], "interval": "year"})
-    assert res.json() == {"url": None, "activated": True, "updated": False, "test_mode": True}
+    assert res.json() == {"url": None, "activated": True, "updated": False, "test_mode": True,
+                          "trial_days": 0, "sale": None}   # no trial or sale switched on
     plan = client.get("/api/accounts/services", headers=_h(token)).json()
     assert plan["billing"]["stripe"] is False and plan["downloads_included"]
     assert [s["plan_ids"] for s in plan["subscriptions"]] == [["all_tools"]]
@@ -370,7 +371,7 @@ def test_checkout_sends_the_client_to_stripe(stripe_on, monkeypatch):
     # One line per billable tool (AI is free until it launches, so it isn't charged).
     assert kw["line_items"] == [{"price": f"price_dcp_{t}_year", "quantity": 1}
                                 for t in ("data_cleaning", "data_visualization", "data_engineering")]
-    assert kw["subscription_data"]["metadata"] == {"account_id": account_id}
+    assert kw["subscription_data"]["metadata"] == {"account_id": account_id, "free_plans": "ai"}   # AI: free, kept
     # Nothing is unlocked until Stripe's webhook says it's paid.
     assert client.get("/api/accounts/services", headers=_h(token)).json()["subscriptions"] == []
     assert client.post("/api/billing/portal", headers=_h(token)).json()["url"].startswith("https://billing.stripe.com/")
@@ -469,7 +470,7 @@ def test_changing_tools_modifies_the_stripe_subscription(stripe_on):
                       json={"plan_ids": ["data_science_ml"], "interval": "month"}).json()
     assert res["updated"] and res["url"] is None
     kind, kw = stripe_on.calls[-1]
-    assert kind == "modify" and kw["proration_behavior"] == "create_prorations"
+    assert kind == "modify" and kw["proration_behavior"] == "always_invoice"
     assert {"id": "si_data_visualization", "deleted": True} in kw["items"]
     assert {"price": "price_dcp_data_science_ml_month"} in kw["items"]
     assert not any(i.get("id") == "si_data_cleaning" for i in kw["items"])   # the base stays
@@ -520,9 +521,16 @@ def test_sync_creates_products_and_both_prices_once():
             return NS(data=[p for p in products.values() if p.metadata["dcp_key"] == key])
 
         @staticmethod
-        def create(name, description, metadata):
+        def retrieve(pid):
+            """Fake stripe.Product.retrieve: the product with this id, or an error like Stripe's."""
+            if pid not in products:
+                raise RuntimeError("No such product")
+            return products[pid]
+
+        @staticmethod
+        def create(name, description, metadata, id=None):  # noqa: A002 (Stripe's own name)
             """
-            Fake stripe.Product.create: store a new product with id "prod_<n>".
+            Fake stripe.Product.create: store a new product with our id (or "prod_<n>").
 
             Args:
                 name: Product name.
@@ -532,7 +540,7 @@ def test_sync_creates_products_and_both_prices_once():
             Returns:
                 SimpleNamespace: The new product (id, name, description, metadata).
             """
-            p = NS(id=f"prod_{len(products)}", name=name, description=description, metadata=metadata)
+            p = NS(id=id or f"prod_{len(products)}", name=name, description=description, metadata=metadata)
             products[p.id] = p
             return p
 
@@ -608,3 +616,74 @@ def test_sync_creates_products_and_both_prices_once():
     assert all(r["stripe_monthly_price_id"] and r["stripe_annual_price_id"] for r in rows)
     mod.sync(fake, log=lambda *_: None)                              # running again changes nothing
     assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS)
+
+
+def test_running_the_sync_twice_quickly_makes_no_duplicates():
+    """
+    Stripe's search can lag about a minute behind; products have our own fixed ids
+    ("dcp_<plan>") and are looked up by id, so a second run right away finds them.
+    """
+    from api.services import stripe_catalog
+
+    products, prices = {}, {}
+
+    class Product:
+        @staticmethod
+        def retrieve(pid):
+            if pid not in products:
+                raise RuntimeError("No such product")
+            return products[pid]
+
+        @staticmethod
+        def search(query, limit):
+            return NS(data=[])            # lagging search: never finds anything yet
+
+        @staticmethod
+        def create(name, description, metadata, id=None):  # noqa: A002
+            products[id] = NS(id=id, name=name, description=description, metadata=metadata)
+            return products[id]
+
+        @staticmethod
+        def modify(*a, **k):
+            pass
+
+    class Price:
+        @staticmethod
+        def list(lookup_keys, active, limit):
+            return NS(data=[p for p in prices.values() if p.lookup_key == lookup_keys[0] and p.active])
+
+        @staticmethod
+        def create(product, currency, unit_amount, lookup_key, transfer_lookup_key, recurring=None):
+            p = NS(id=f"price_{len(prices)}", unit_amount=unit_amount, lookup_key=lookup_key, active=True,
+                   recurring=NS(interval=recurring["interval"]) if recurring else None)
+            prices[p.id] = p
+            return p
+
+        @staticmethod
+        def modify(pid, active):
+            prices[pid].active = active
+
+    fake = NS(Product=Product, Price=Price)
+    stripe_catalog.sync(fake, log=lambda *_: None)
+    stripe_catalog.sync(fake, log=lambda *_: None)                  # right away
+    assert sorted(products) == sorted(f"dcp_{p.id}" for p in pricing.SUBSCRIPTIONS)
+    assert len(prices) == 2 * len(pricing.SUBSCRIPTIONS)
+
+
+def test_the_cancellation_reason_from_stripes_portal_is_saved(stripe_on, monkeypatch):
+    """A cancel in Stripe's portal (with "Collect cancellation reason") reaches the Admin panel's counts."""
+    monkeypatch.setenv("ADMIN_EMAILS", "boss@example.com")
+    get_settings.cache_clear()
+    _, account_id = _signup()
+    payload, headers = _signed(_sub_event("customer.subscription.created", account_id, "active"))
+    client.post("/api/billing/webhook", content=payload, headers=headers)
+    event = _sub_event("customer.subscription.deleted", account_id, "canceled")
+    event["data"]["object"].update(canceled_at=1767225600, cancellation_details={
+        "feedback": "too_expensive", "comment": "  Great tools, but over my budget right now.  ", "reason": "cancellation_requested"})
+    payload, headers = _signed(event)
+    assert client.post("/api/billing/webhook", content=payload, headers=headers).status_code == 200
+    [sub] = account_store._subscriptions.values()
+    assert sub["cancel_feedback"] == "too_expensive" and sub["cancel_comment"] == "Great tools, but over my budget right now."
+    admin, _ = _signup("boss@example.com")
+    summary = client.get("/api/admin/consultant-requests", headers=_h(admin)).json()["cancellations"]
+    assert summary["by_reason"] == {"too_expensive": 1} and summary["comments"][0]["comment"].startswith("Great tools")

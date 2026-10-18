@@ -6,6 +6,8 @@ the same code path a laptop without Supabase uses. Supabase mode is checked
 with a fake Supabase client, so no network is needed.
 """
 
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -200,3 +202,73 @@ def test_supabase_mode(monkeypatch):
     pending = _signup("confirm@example.com")
     assert pending.status_code == 201
     assert pending.json()["needs_confirmation"] is True and pending.json()["access_token"] is None
+
+
+# ── Sign-in lockout (api/services/login_guard.py) ────────────────────────────
+
+def _wrong(email="ana@example.com"):
+    """One sign-in with a wrong password."""
+    return client.post("/api/accounts/signin", json={"email": email, "password": "not-it-at-all"})
+
+
+def test_three_wrong_passwords_lock_sign_in_and_say_how_many_are_left(monkeypatch):
+    """
+    Each wrong password says how many tries are left; the third locks sign-in for 15 minutes
+    (even the right password is refused); a success before that starts the count over.
+    """
+    from api.services import login_guard
+
+    login_guard._unknown.clear()
+    client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": "Ana", "last_name": "Lee",
+                                              "email": "ana@example.com", "password": PW, "accept_terms": True})
+    first = _wrong()
+    assert first.status_code == 401 and "2 attempts left before sign-in is locked for 15 minutes" in first.json()["detail"]
+    # A success clears the count.
+    assert client.post("/api/accounts/signin", json={"email": "ana@example.com", "password": PW}).status_code == 200
+    assert "2 attempts left" in _wrong().json()["detail"]
+    second = _wrong().json()["detail"]
+    assert "1 attempt left" in second and "Reset your password instead" in second
+    locked = _wrong()
+    assert locked.status_code == 429 and "locked for 15 more minutes" in locked.json()["detail"]
+    right = client.post("/api/accounts/signin", json={"email": "ana@example.com", "password": PW})
+    assert right.status_code == 429 and "Reset your password" in right.json()["detail"]
+
+    # When the lock has ended, the right password works again.
+    acc = next(iter(account_store._accounts.values()))
+    acc["login_locked_until"] = account_store._now() - timedelta(seconds=1)
+    assert client.post("/api/accounts/signin", json={"email": "ana@example.com", "password": PW}).status_code == 200
+    assert acc["failed_logins"] == 0 and acc["login_locked_until"] is None
+
+
+def test_a_password_reset_unlocks_sign_in_at_once(monkeypatch):
+    """Locked out? The reset link sets a new password AND lifts the lock."""
+    from api.services import auth as auth_service, login_guard
+
+    login_guard._unknown.clear()
+    links = []
+    monkeypatch.setattr(auth_service.log, "warning", lambda msg, *args: links.append(msg % args))
+    client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": "Ana", "last_name": "Lee",
+                                              "email": "ana@example.com", "password": PW, "accept_terms": True})
+    for _ in range(3):
+        _wrong()
+    assert _wrong().status_code == 429
+    client.post("/api/accounts/forgot-password", json={"email": "ana@example.com"})
+    token = links[-1].split("token=")[1]
+    assert client.post("/api/accounts/reset-password", json={"token": token, "password": "A-brand-new-pass"}).status_code == 200
+    ok = client.post("/api/accounts/signin", json={"email": "ana@example.com", "password": "A-brand-new-pass"})
+    assert ok.status_code == 200
+
+
+def test_unknown_emails_get_the_same_replies_and_lock(monkeypatch):
+    """No account with that email: same 'attempts left' wording and the same lock (kept in memory only)."""
+    from api.services import login_guard
+
+    login_guard._unknown.clear()
+    monkeypatch.setenv("LOGIN_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("LOGIN_LOCK_MINUTES", "5")
+    get_settings.cache_clear()
+    first = _wrong("ghost@example.com")
+    assert first.status_code == 401 and "1 attempt left before sign-in is locked for 5 minutes" in first.json()["detail"]
+    assert _wrong("ghost@example.com").status_code == 429
+    assert "locked for 5 more minutes" in _wrong("GHOST@example.com").json()["detail"]
+    assert account_store._accounts == {}                            # nothing stored for an unknown email

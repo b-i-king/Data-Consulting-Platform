@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import get_acting_context
 from api.models.accounts import EntityDecisionIn
-from api.services import entities, entitlements
+from api.services import entities, entitlements, teams
 
 router = APIRouter(prefix="/entities")
 
@@ -46,11 +46,10 @@ async def decide(body: EntityDecisionIn, ctx: Annotated[dict, Depends(get_acting
         dict: {"matches": [...]} still waiting.
 
     Raises:
-        HTTPException: 403 for a team colleague; 404 for an unknown match.
+        HTTPException: 403 for a view-only member; 404 for an unknown match.
     """
+    teams.require_editor(ctx)   # the owner, a developer, or the consultant
     holder = await entitlements.plan_holder_id(ctx["account"])
-    if holder != str(ctx["account"]["id"]):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can merge customers.")
     if not await entities.decide(holder, body.link_id, body.same):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That match wasn't found.")
     return {"matches": await entities.pending_reviews(holder)}

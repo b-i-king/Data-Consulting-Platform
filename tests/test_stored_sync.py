@@ -128,7 +128,8 @@ def test_customers_are_stored_once_and_come_back_on_export():
     assert "customer_link" in attrs and "customer_name" not in attrs and "customer_email" not in attrs
     customers = [e for e in entities._entities.values() if e["entity_type"] == "customer"]
     assert sorted(e["display_name"] for e in customers) == ["Blue Door Cafe", "Corner Market"]
-    assert next(e for e in customers if e["display_name"] == "Blue Door Cafe")["details"] == {"customer_email": "bd@example.com"}
+    stored_email = next(e for e in customers if e["display_name"] == "Blue Door Cafe")["details"]["customer_email"]
+    assert stored_email.startswith("enc1:") and "bd@example.com" not in stored_email   # encrypted (api/services/pii.py)
 
     # Use my stored data: the same table back, names and emails in place.
     # (Loaded here without the API, so no column plan is saved: the shared names come back.)

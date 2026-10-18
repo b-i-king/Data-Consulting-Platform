@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Privacy Policy" };
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" updated="10/15/2026">
+    <LegalPage title="Privacy Policy" updated="10/17/2026">
       <Section title="Introduction">
         <p>
           Welcome to <strong>{SITE_NAME}</strong> (&quot;the Platform&quot;), operated by <strong>{COMPANY}</strong>. This
@@ -109,6 +109,16 @@ export default function PrivacyPage() {
         <p>
           Account information is kept while your account is open. Uploaded files are not kept. Data in managed storage
           is kept until you delete it or close your account. Billing records may be kept longer where the law requires.
+          When an account is deleted we keep only an anonymous count — the account type, how long it was open, whether
+          it had a paid package, and the reason you picked, if any — with nothing that identifies you (no name, email,
+          business or location).
+        </p>
+        <p>
+          <Strong>How we protect it:</Strong> email addresses and phone numbers in stored data are encrypted; each
+          business sees only its own data, enforced by the database itself; sign-in allows at most three devices and
+          signs out idle ones; and admins and consultants must use two-step sign-in. For healthcare businesses we keep
+          an activity log of who opened, stored or downloaded their data (never the data itself), deleted with the
+          account.
         </p>
       </Section>
 

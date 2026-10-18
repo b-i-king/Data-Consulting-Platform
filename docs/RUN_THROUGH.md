@@ -92,6 +92,30 @@ up in a private window with another email and tick **I'd like to work as a
 consultant**; approve them in **Admin**, and their workspace switches to
 consultant mode on its next load.
 
+More in **🛡️ Admin**:
+
+- **Consultants** — **Deactivate** someone (optional note): their clients move
+  to a consultant with room, they can't be picked, and they sign in as a client.
+  **Reactivate** switches them back on (and gives them anyone waiting).
+- **Prices** — change a tool's monthly / annual price and **Save**. The plans
+  page and the package builder show it at once (check `dim.plan_prices` in
+  Supabase: the row has your name in `updated_by`). With Stripe connected, a new
+  Stripe price appears under the same lookup key.
+- **Testers** — search a friend's account and **Make tester**: they can pick any
+  package for free (it says "Tester account"), even after Stripe is live.
+- **Account deletions** — anonymous counts of deleted accounts and the reasons
+  people picked.
+- **Prices → trial days** — e.g. 14 on All tools: a brand-new client's first
+  package then says "Starts with a 14-day free trial" and starts as `trialing`.
+- **Seasonal sales** — set a window that includes today and **Switch on**: Plan &
+  billing shows the sale, and the checkout confirmation takes the percent off the
+  first payment. Switch it back off (or set the real dates) when you're done.
+
+**Teams:** sign up a business with a colleague, then Settings → Account → **Your
+team**: change their role (Developer / Member (view only)), remove them, or add
+people up to 5. Sign in as a Member: the workspace says "View only", and storing
+or connecting data is refused.
+
 ## Step 6 — Make test clients
 
 - **A "done for you" client** — in the workspace's **Working on** picker, choose

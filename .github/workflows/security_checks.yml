@@ -1,0 +1,51 @@
+name: Security Checks
+
+# Checks the libraries the API and the website use against public lists of
+# known security holes (vulnerabilities), on every pull request to main and
+# every Monday (new holes are found in old versions all the time).
+#   * pip-audit  — requirements.txt, against the Python Packaging Advisory Database
+#   * npm audit  — web/package-lock.json, against GitHub's advisory database
+# A failed check names the library and the version that fixes it.
+#
+# Run the same checks on your computer:
+#   pip install pip-audit && pip-audit -r requirements.txt
+#   cd web && npm audit --omit=dev --audit-level=high
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 13 * * 1"   # Mondays, 13:00 UTC
+  workflow_dispatch:        # "Run workflow" button in GitHub -> Actions
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python libraries (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit requirements.txt
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --progress-spinner off
+
+  web:
+    name: Website libraries (npm audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Only what ships to visitors (--omit=dev), and only high / critical holes.
+      - name: Audit web/package-lock.json
+        run: npm audit --omit=dev --audit-level=high

@@ -15,6 +15,10 @@
 //                     (usually one hour at a time), so nothing about them is
 //                     bought or stored here (api/services/consultations.py).
 //
+// OFFERS on a FIRST package (api/services/offers.py): a free-trial banner
+// (trial days set per tool in Admin -> Prices; one trial per account), or —
+// when no trial applies — the seasonal sale running today, shown in the
+// banner and as a line in the confirmation.
 // Everything that costs money asks for confirmation first, with the total.
 // TEST MODE (no Stripe key on the server): choices take effect at once with no
 // charge, and a banner says so. A consultant working on a client (X-Acting-As)
@@ -24,7 +28,7 @@
 
 import { useState } from "react";
 import { cancelPlanTestMode, openBillingPortal, startCheckout } from "@/lib/api";
-import { fmtUsd } from "@/lib/format";
+import { fmtDate, fmtUsd } from "@/lib/format";
 import type { BillingInterval, MyServices } from "@/lib/types";
 import { Card, ConfirmDialog, ErrorBox, TotalRow } from "@/components/wizard/ui";
 import PackageBuilder, { normalizePackage, packageTotal } from "./PackageBuilder";
@@ -56,6 +60,14 @@ export default function BillingPanel(props: {
   const nextTotal = packageTotal(plan.plans, next, interval);
   const unchanged = !!live && live.interval === interval && [...live.plan_ids].sort().join() === [...next].sort().join();
   const nextNames = next.map((id) => plan.plans.find((p) => p.id === id)?.name).join(" + ");
+  // A FIRST package's offer (api/services/offers.py): a free trial if they qualify
+  // (the longest trial among the tools picked), otherwise today's seasonal sale.
+  const offer = plan.offer;
+  const trialDays = !live && offer?.trial_eligible
+    ? Math.max(0, ...next.map((id) => plan.plans.find((p) => p.id === id)?.trial_days ?? 0))
+    : 0;
+  const sale = !live && !trialDays ? offer?.sale ?? null : null;
+  const bestTrial = offer?.trial_eligible ? Math.max(0, ...plan.plans.map((p) => p.trial_days ?? 0)) : 0;
 
   /** Run a billing action: go to Stripe's page, or (test mode) refresh. */
   async function act(run: () => Promise<{ url: string | null }>, done: string) {
@@ -95,8 +107,35 @@ export default function BillingPanel(props: {
     <div className="space-y-6">
       {!stripe && (
         <p role="status" className="rounded-2xl border border-warn/40 bg-warn/10 p-3 text-sm">
-          <strong>Test mode:</strong> payments aren&apos;t switched on yet, so packages take effect right away
-          and nothing is charged.
+          {plan.billing.tester ? (
+            <>
+              <strong>Tester account:</strong> you can try any package for free — it takes effect right away and
+              nothing is charged. Downloads are free too.
+            </>
+          ) : (
+            <>
+              <strong>Test mode:</strong> payments aren&apos;t switched on yet, so packages take effect right away
+              and nothing is charged.
+            </>
+          )}
+        </p>
+      )}
+
+      {!live && (bestTrial > 0 || offer?.sale) && (
+        <p role="status" className="rounded-2xl border border-brand/40 bg-brand-soft p-3 text-sm">
+          {bestTrial > 0 ? (
+            <>
+              <strong>Free trial:</strong> your first package starts with up to {bestTrial} days free — nothing is charged
+              until the trial ends, and you can cancel before then.
+            </>
+          ) : (
+            offer?.sale && (
+              <>
+                <strong>{offer.sale.name}:</strong> {offer.sale.percent_off}% off your first payment (the first month, or
+                the first year on annual billing) until {fmtDate(offer.sale.ends)}.
+              </>
+            )
+          )}
         </p>
       )}
 
@@ -209,10 +248,22 @@ export default function BillingPanel(props: {
               );
             })}
             <TotalRow strong label={`Total ${interval === "month" ? "per month" : "per year"}`} value={fmtUsd(nextTotal)} />
+            {sale && (
+              <TotalRow
+                label={`${sale.name}: ${sale.percent_off}% off your first payment`}
+                value={`−${fmtUsd(Math.round(nextTotal * sale.percent_off) / 100)}`}
+              />
+            )}
           </div>
+          {trialDays > 0 && (
+            <p className="text-sm">
+              <strong>Starts with a {trialDays}-day free trial.</strong> Nothing is charged for the first {trialDays} days;
+              cancel before then and you pay nothing.
+            </p>
+          )}
           <p className="text-xs text-ink-muted">
             {nextNames}. Renews automatically; cancel anytime — you keep access until the end of the period you paid for.
-            {live && stripe && " Changes are prorated: you're charged (or credited) the difference on your next invoice."}
+            {live && stripe && " Changes are prorated: you're charged (or credited) the difference right away."}
             {!live && stripe && " You'll pay on Stripe's secure page; your card details never reach our server."}
           </p>
         </ConfirmDialog>

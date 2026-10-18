@@ -38,7 +38,14 @@ import {
   requestConsultantRole,
   saveConsultantSettings,
 } from "@/lib/api";
-import type { Account, AnalyzeResponse, CleaningInput, ConsultantSettings, WarehouseCounts } from "@/lib/types";
+import type {
+  Account,
+  AnalyzeResponse,
+  CleaningInput,
+  ConsultantSettings,
+  DeletionReason,
+  WarehouseCounts,
+} from "@/lib/types";
 import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
@@ -113,6 +120,8 @@ export function UpdateLatestUpload(props: {
 export function DeleteAccount(props: { token: string; account: Account; onDeleted: () => void }) {
   const [asking, setAsking] = useState(false);
   const [typed, setTyped] = useState("");
+  // Optional "Why are you leaving?" — kept only as an anonymous count, never with who you are.
+  const [reason, setReason] = useState<DeletionReason | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const owner = props.account.team_role === "owner";
@@ -121,7 +130,7 @@ export function DeleteAccount(props: { token: string; account: Account; onDelete
     setBusy(true);
     setError(null);
     try {
-      await deleteMyAccount(props.token, typed);
+      await deleteMyAccount(props.token, typed, reason || null);
       props.onDeleted();
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't delete the account.");
@@ -165,6 +174,24 @@ export function DeleteAccount(props: { token: string; account: Account; onDelete
             aria-label="Your email address"
             autoComplete="off"
           />
+          <label className="block">
+            <span className="text-xs text-ink-muted">
+              Why are you leaving? (optional — we keep only a count, never who you are)
+            </span>
+            <select
+              className="mt-1 w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
+              value={reason}
+              onChange={(e) => setReason(e.target.value as DeletionReason | "")}
+            >
+              <option value="">Rather not say</option>
+              <option value="too_expensive">It costs too much</option>
+              <option value="missing_features">It&apos;s missing something I need</option>
+              <option value="not_needed">I don&apos;t need it anymore</option>
+              <option value="switching_tools">I&apos;m switching to another tool</option>
+              <option value="privacy">Privacy concerns</option>
+              <option value="other">Something else</option>
+            </select>
+          </label>
           <ErrorBox message={error} />
         </ConfirmDialog>
       )}

@@ -1,0 +1,20 @@
+# Dependabot: GitHub watches the libraries this project uses and opens a pull
+# request when one has a known security hole (or a newer version). You review
+# and merge them like any other change — nothing updates on its own.
+# Turn on alerts too: GitHub -> Settings -> Code security -> Dependabot alerts.
+version: 2
+updates:
+  - package-ecosystem: "pip"          # requirements.txt (the API)
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "npm"          # web/package.json (the website)
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"   # the versions of the actions in .github/workflows
+    directory: "/"
+    schedule:
+      interval: "monthly"

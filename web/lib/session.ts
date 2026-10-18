@@ -40,6 +40,26 @@ export function saveSession(session: Session): void {
   announce();
 }
 
+const DEVICE_KEY = "dcp.device";
+
+/**
+ * This browser's device id: a random value kept in localStorage (NOT a secret),
+ * sent at sign-in as X-Device-Id so every tab of this browser counts as ONE
+ * device toward the 3-device limit (api/services/sessions.py).
+ */
+export function deviceId(): string {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Math.random()).slice(2);
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return ""; // storage blocked: the server treats it as a new device
+  }
+}
+
 export function clearSession(): void {
   try {
     sessionStorage.removeItem(KEY);

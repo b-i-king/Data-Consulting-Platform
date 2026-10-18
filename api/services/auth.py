@@ -34,7 +34,8 @@ FORGOT / RESET PASSWORD
        * Local account (no Supabase): a random token; only its sha256 is
          stored (accounts.password_reset_hash, 1 hour). There is no email
          server in local mode, so the link is written to the API's log.
-  2. /reset-password -> reset_password(token, new password):
+  2. /reset-password -> reset_password(token, new password). A reset also
+     lifts a sign-in lock (3 wrong passwords; api/services/login_guard.py):
        * Supabase's link carries an access token (a JWT, it has dots): the new
          password is sent to Supabase's /auth/v1/user with that token.
        * A local token: matched by its hash, then replaced by the new hash.
@@ -416,6 +417,7 @@ async def reset_password(token: str, new_password: str) -> dict:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
         await account_store.set_credentials(str(account["id"]), auth_user_id=None, password_hash=hash_password(password))
         await account_store.set_password_reset(str(account["id"]), None, None)
+        await account_store.clear_failed_logins(str(account["id"]))   # a reset unlocks sign-in at once
         return account
     if mode() != "supabase" or token.count(".") != 2:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
@@ -436,4 +438,5 @@ async def reset_password(token: str, new_password: str) -> dict:
     account = await account_store.get_account_by_auth_user(user_id) if user_id else None
     if account is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=RESET_BAD_LINK)
+    await account_store.clear_failed_logins(str(account["id"]))   # a reset unlocks sign-in at once
     return account

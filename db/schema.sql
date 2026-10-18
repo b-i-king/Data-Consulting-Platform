@@ -67,7 +67,13 @@ CREATE TABLE IF NOT EXISTS dim.accounts (
     -- The "team column": NULL for individuals; set for business owners and the
     -- colleagues they add. (Foreign key added below: teams points back here.)
     team_id               UUID,
-    team_role             TEXT CHECK (team_role IN ('owner', 'member')),
+    -- What each person on a business team may do:
+    --   'owner'     the team's ADMIN: holds the plan; billing, people and roles
+    --   'developer' uploads, connects and loads data, edits dashboards, sees everything
+    --   'member'    VIEWS and downloads everything; changes nothing
+    -- Teams hold at most TEAM_MAX_PEOPLE people, owner included (default 5);
+    -- beyond that it's an Enterprise conversation (api/services/teams.py).
+    team_role             TEXT CHECK (team_role IN ('owner', 'developer', 'member')),
     status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'disabled')),
     -- Passwords (api/services/auth.py). One of the two is set once the person
     -- has a password; both stay NULL for an account made FOR someone (a
@@ -115,8 +121,43 @@ CREATE TABLE IF NOT EXISTS dim.accounts (
     -- through dim.subscriptions. Service ids from api/services/pricing.py.
     interested_services   TEXT[] NOT NULL DEFAULT '{}',
     stripe_customer_id    TEXT UNIQUE,               -- cus_..., set the first time they pay
+    -- A TESTER (set by an admin, Admin panel -> Testers) tries the paid tools
+    -- without paying, even when Stripe is live: choosing a package switches it
+    -- on at once (as in test mode) and downloads are free. Stripe never sees them.
+    is_tester             BOOLEAN NOT NULL DEFAULT false,
+    -- When this account's one free trial started (NULL = never had one): one
+    -- trial per account, so nobody cancels and starts another.
+    trial_used_at         TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Last time anything about the account changed (set by the trigger
+    -- dim.touch_updated_at below; signing in alone doesn't count).
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at         TIMESTAMPTZ,               -- NULL until an invited member first signs in
+    -- Sign-in lockout (api/services/login_guard.py): wrong passwords in a row,
+    -- and when the lock ends after LOGIN_MAX_ATTEMPTS (3) of them. A successful
+    -- sign-in or a password reset sets them back to 0 / NULL.
+    failed_logins         INTEGER NOT NULL DEFAULT 0,
+    login_locked_until    TIMESTAMPTZ,
+    -- Two-step sign-in (api/services/mfa.py): required for admins and
+    -- consultants. mfa_secret = the authenticator-app key, ENCRYPTED;
+    -- mfa_recovery_codes = one-way hashes of the one-time backup codes.
+    mfa_secret            TEXT,
+    mfa_enabled_at        TIMESTAMPTZ,
+    mfa_recovery_codes    JSONB NOT NULL DEFAULT '[]',
+    -- HIPAA (api/services/hipaa.py): a business that will store health
+    -- information ASKS (automatically when it picks NAICS 62 "Health Care" at
+    -- sign-up), and an ADMIN checks it's a real healthcare business (its NPI
+    -- number) and approves or denies. While 'pending', storing data is paused.
+    -- Approved -> is_healthcare = true: their data access goes to dim.audit_log.
+    hipaa_status          TEXT CHECK (hipaa_status IN ('pending', 'approved', 'denied')),
+    hipaa_requested_at    TIMESTAMPTZ,
+    hipaa_organization    TEXT,                      -- legal name of the practice / organization
+    hipaa_npi             TEXT,                      -- its 10-digit National Provider Identifier (checked)
+    hipaa_note            TEXT,                      -- what health data they'd store (their words)
+    hipaa_decided_at      TIMESTAMPTZ,
+    hipaa_decided_by      UUID,                      -- the admin's account id
+    hipaa_decision_note   TEXT,                      -- the admin's reason (shown to them)
+    is_healthcare         BOOLEAN NOT NULL DEFAULT false,
     CHECK (wants_consultant OR consultant_id IS NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_accounts_team       ON dim.accounts (team_id);
@@ -147,7 +188,17 @@ CREATE TABLE IF NOT EXISTS dim.consultants (
     free_booking_url      TEXT,                      -- e.g. 'https://cal.com/kim/30min' (free first consultation)
     paid_booking_url      TEXT,                      -- e.g. 'https://cal.com/kim/session' (paid on Cal.com)
     calcom_webhook_secret TEXT,                      -- signs this consultant's Cal.com webhook (NULL = not set up)
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- Deactivating (an admin, Admin panel -> Consultants): active = false, so
+    -- they can't be picked or work on clients (they keep their own account),
+    -- and their clients move to the default consultant (or wait for one).
+    -- Reactivating sets active = true again. The latest of each is kept.
+    deactivated_at        TIMESTAMPTZ,
+    deactivated_by        UUID,                      -- the admin's account id
+    deactivation_reason   TEXT,                      -- optional note from the admin
+    reactivated_at        TIMESTAMPTZ,
+    reactivated_by        UUID,                      -- the admin's account id
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now() -- set by the trigger dim.touch_updated_at
 );
 
 -- Upgrading a database made before these columns existed (CREATE TABLE IF NOT
@@ -175,6 +226,59 @@ ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL D
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS free_booking_url TEXT;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS paid_booking_url TEXT;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS calcom_webhook_secret TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS is_tester BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS failed_logins INTEGER NOT NULL DEFAULT 0;
+-- 'developer' joined the team roles: replace the old CHECK (owner / member only).
+ALTER TABLE dim.accounts DROP CONSTRAINT IF EXISTS accounts_team_role_check;
+ALTER TABLE dim.accounts ADD CONSTRAINT accounts_team_role_check
+    CHECK (team_role IN ('owner', 'developer', 'member'));
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS trial_used_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS mfa_secret TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS mfa_enabled_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS mfa_recovery_codes JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS is_healthcare BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_status TEXT
+    CHECK (hipaa_status IN ('pending', 'approved', 'denied'));
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_requested_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_organization TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_npi TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_note TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_decided_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_decided_by UUID;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_decision_note TEXT;
+-- The admin's HIPAA to-do list.
+CREATE INDEX IF NOT EXISTS idx_accounts_hipaa_pending ON dim.accounts (hipaa_requested_at)
+    WHERE hipaa_status = 'pending';
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMPTZ;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivated_by UUID;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivation_reason TEXT;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS reactivated_at TIMESTAMPTZ;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS reactivated_by UUID;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- "Modified" timestamps: any UPDATE that changes a row sets updated_at = now().
+-- Columns that change on their own all the time (last_login_at on every
+-- sign-in, the wrong-password count) are ignored, so updated_at means "the
+-- person's information changed".
+CREATE OR REPLACE FUNCTION dim.touch_updated_at() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (to_jsonb(NEW) - 'updated_at' - 'last_login_at' - 'failed_logins' - 'login_locked_until'
+            - 'mfa_recovery_codes') IS DISTINCT FROM
+       (to_jsonb(OLD) - 'updated_at' - 'last_login_at' - 'failed_logins' - 'login_locked_until'
+            - 'mfa_recovery_codes') THEN
+        NEW.updated_at := now();
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS accounts_touch_updated_at ON dim.accounts;
+CREATE TRIGGER accounts_touch_updated_at BEFORE UPDATE ON dim.accounts
+    FOR EACH ROW EXECUTE FUNCTION dim.touch_updated_at();
+DROP TRIGGER IF EXISTS consultants_touch_updated_at ON dim.consultants;
+CREATE TRIGGER consultants_touch_updated_at BEFORE UPDATE ON dim.consultants
+    FOR EACH ROW EXECUTE FUNCTION dim.touch_updated_at();
 -- The admin's to-do list: who is waiting for a decision.
 CREATE INDEX IF NOT EXISTS idx_accounts_consultant_request ON dim.accounts (consultant_request)
     WHERE consultant_request = 'pending';
@@ -205,8 +309,9 @@ END $$;
 -- yearly. Its tools are in `items`. Written by the Stripe webhook
 -- (api/services/billing.py) — or, in test mode (no Stripe key), switched on
 -- at once with no charge. Held by the plan holder (individual or team owner).
--- The tools on sale and their prices live in code (api/services/pricing.py)
--- and in Stripe (scripts/sync_stripe.py), so there is no plans table.
+-- The tools on sale live in code (api/services/pricing.py); their PRICES live
+-- in dim.plan_prices below (and in Stripe, kept in step by the Admin panel or
+-- scripts/sync_stripe.py).
 CREATE TABLE IF NOT EXISTS dim.subscriptions (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id              UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
@@ -226,6 +331,127 @@ CREATE TABLE IF NOT EXISTS dim.subscriptions (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON dim.subscriptions (account_id, status);
+-- Why a client canceled, from Stripe's customer portal ("Collect cancellation reason"):
+-- Stripe's own codes (too_expensive, missing_features, switched_service, unused,
+-- customer_service, too_complex, low_quality, other), their optional comment,
+-- and when. Written by the webhook (billing._save_subscription); counted in Admin.
+ALTER TABLE dim.subscriptions ADD COLUMN IF NOT EXISTS cancel_feedback TEXT;
+ALTER TABLE dim.subscriptions ADD COLUMN IF NOT EXISTS cancel_comment TEXT;
+ALTER TABLE dim.subscriptions ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ;
+
+-- ── dim.plan_prices: what each tool costs (THE place to change a price) ─────
+-- One row per tool / bundle in api/services/pricing.py SUBSCRIPTIONS (plan_id
+-- is its id). Change a price in the Admin panel (Admin -> Prices): it updates
+-- this row AND Stripe (a new Stripe price under the same lookup key; current
+-- subscribers keep the price they signed up at). The API reads this table at
+-- startup, so if you edit it by hand in Supabase instead, run
+-- `python scripts/sync_stripe.py` and restart the API. A plan with no row here
+-- uses the default price written in pricing.py. Prices only, no client data.
+CREATE TABLE IF NOT EXISTS dim.plan_prices (
+    plan_id      TEXT PRIMARY KEY,                       -- 'data_visualization', 'all_tools', ...
+    monthly_usd  NUMERIC(10, 2) NOT NULL CHECK (monthly_usd >= 0),
+    annual_usd   NUMERIC(10, 2) NOT NULL CHECK (annual_usd >= 0),
+    -- Free trial for a first package with this tool, in days (0 = none). Stripe
+    -- runs it: nothing is charged until it ends. One trial per account.
+    trial_days   INTEGER NOT NULL DEFAULT 0 CHECK (trial_days BETWEEN 0 AND 90),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by   UUID REFERENCES dim.accounts (id) ON DELETE SET NULL   -- the admin (NULL = the seed below)
+);
+-- Starting prices (the same as pricing.py's defaults; tests/test_admin_tools.py
+-- checks they match). ON CONFLICT DO NOTHING: re-running this file never
+-- overwrites a price you changed.
+INSERT INTO dim.plan_prices (plan_id, monthly_usd, annual_usd) VALUES
+    ('all_tools', 99.00, 990.00),
+    ('data_cleaning', 19.00, 190.00),
+    ('data_exploration_analysis', 19.00, 190.00),
+    ('data_visualization', 19.00, 190.00),
+    ('data_engineering', 39.00, 390.00),
+    ('data_science_ml', 39.00, 390.00),
+    ('ai', 29.00, 290.00)
+ON CONFLICT (plan_id) DO NOTHING;
+ALTER TABLE dim.plan_prices ADD COLUMN IF NOT EXISTS trial_days INTEGER NOT NULL DEFAULT 0
+    CHECK (trial_days BETWEEN 0 AND 90);
+
+-- ── dim.seasonal_sales: discounts that come back every year by themselves ───
+-- Each row is a window of the CALENDAR (month-day to month-day, e.g. '11-24'
+-- to '12-31'), so it repeats every year with no edits. While a switched-on
+-- window includes today, new packages get percent_off their FIRST payment
+-- (the first month, or the first year on annual billing). The API makes the
+-- matching Stripe coupon itself (dcp_sale_<id>_<percent>), so you never touch
+-- Stripe for a sale. Windows may wrap the new year ('12-15' to '01-05').
+-- Edit them in Admin -> Seasonal sales. They start switched OFF.
+CREATE TABLE IF NOT EXISTS dim.seasonal_sales (
+    id           TEXT PRIMARY KEY,                      -- 'new_year'
+    name         TEXT NOT NULL,                         -- shown to clients: 'New Year sale'
+    starts_on    TEXT NOT NULL CHECK (starts_on ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),   -- 'MM-DD'
+    ends_on      TEXT NOT NULL CHECK (ends_on ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),     -- 'MM-DD', inclusive
+    percent_off  INTEGER NOT NULL CHECK (percent_off BETWEEN 1 AND 90),
+    active       BOOLEAN NOT NULL DEFAULT false,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by   UUID REFERENCES dim.accounts (id) ON DELETE SET NULL
+);
+-- Three US small-business buying seasons (docs/PRICING.md says why). OFF until you switch them on.
+INSERT INTO dim.seasonal_sales (id, name, starts_on, ends_on, percent_off) VALUES
+    ('new_year', 'New Year planning sale', '01-01', '01-31', 20),
+    ('after_taxes', 'After-tax-season sale', '04-16', '05-15', 20),
+    ('year_end', 'Year-end sale', '11-24', '12-31', 25)
+ON CONFLICT (id) DO NOTHING;
+
+-- ── dim.sessions: one row per person per signed-in device ───────────────────
+-- Each login token carries its session id; a request is refused once the
+-- session is signed out (api/services/sessions.py). At most SESSION_MAX_DEVICES
+-- (3) live per person; idle for SESSION_IDLE_HOURS (8) = signed out.
+-- device = a short label ("Chrome on Windows") — never the full browser string
+-- or an IP address. device_id = the browser's random id (not a secret).
+CREATE TABLE IF NOT EXISTS dim.sessions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id      UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
+    device_id       TEXT,
+    device          TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at      TIMESTAMPTZ,
+    revoked_reason  TEXT CHECK (revoked_reason IN ('signed_out', 'device_limit', 'password_reset',
+                                                   'everywhere', 'admin', 'idle'))
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_account ON dim.sessions (account_id) WHERE revoked_at IS NULL;
+
+-- ── dim.audit_log: who touched a HEALTHCARE client's data, and when ─────────
+-- Written ONLY for accounts with is_healthcare = HIPAA approved by an admin (api/services/audit.py), so
+-- other clients pay nothing for it. One row per access: sign-in, viewing or
+-- exporting stored data, loading, deleting, connecting, syncing, downloads, AI
+-- questions. `detail` holds names and counts (file name, rows) — never the
+-- data itself. Kept with the account: deleting the account deletes its log
+-- (export it first if a business associate agreement asks you to keep it).
+CREATE TABLE IF NOT EXISTS dim.audit_log (
+    id                BIGSERIAL PRIMARY KEY,
+    at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    account_id        UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- whose data (plan holder)
+    actor_account_id  UUID REFERENCES dim.accounts (id) ON DELETE SET NULL,           -- who did it
+    actor_role        TEXT NOT NULL,          -- owner | developer | member | consultant | admin | client
+    action            TEXT NOT NULL,          -- 'sign_in', 'view_stored', 'export', 'load', ...
+    detail            JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_account ON dim.audit_log (account_id, at DESC);
+
+-- ── dim.account_deletions: THAT an account was deleted, never WHO ───────────
+-- "Delete my account" removes every row about the person. To still know how
+-- many people leave (and why), one ANONYMOUS row is written per account
+-- deleted: no id, name, email, company or location — nothing that points back
+-- to them. Age is in whole days, not a sign-up date. reason is the optional
+-- pick from the delete dialog (a fixed list, never free text).
+CREATE TABLE IF NOT EXISTS dim.account_deletions (
+    id                BIGSERIAL PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    account_type      TEXT NOT NULL CHECK (account_type IN ('individual', 'business')),
+    role              TEXT NOT NULL CHECK (role IN ('client', 'team_owner', 'team_member', 'consultant')),
+    removed_by        TEXT NOT NULL DEFAULT 'self' CHECK (removed_by IN ('self', 'team_owner')),
+    account_age_days  INTEGER CHECK (account_age_days >= 0),
+    had_paid_plan     BOOLEAN NOT NULL DEFAULT false,   -- a live package when they left
+    reason            TEXT CHECK (reason IN ('too_expensive', 'missing_features', 'not_needed',
+                                             'switching_tools', 'privacy', 'other'))
+);
+CREATE INDEX IF NOT EXISTS idx_account_deletions_when ON dim.account_deletions (deleted_at);
 
 -- ── dim.consultations: the free first call, then paid sessions ──────────────
 -- One row per consultation booked through Cal.com (written by the Cal.com
@@ -724,7 +950,8 @@ DECLARE t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY['accounts', 'consultants', 'teams', 'subscriptions', 'consultations', 'usage_events',
                              'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
-                             'api_usage', 'ai_usage']
+                             'api_usage', 'ai_usage', 'plan_prices', 'account_deletions', 'seasonal_sales',
+                             'sessions', 'audit_log']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;
@@ -765,6 +992,52 @@ BEGIN
     END LOOP;
 END $$;
 
+
+-- ############################################################################
+-- The API's own login: least privilege (dcp_app)
+-- ############################################################################
+-- Supabase's `postgres` login owns the tables and BYPASSES Row Level Security,
+-- so if the API used it, one coding mistake could read another client's rows.
+-- Instead the API signs in as `dcp_api` (made by scripts/setup_database.py
+-- when API_DATABASE_PASSWORD is set), a member of the role `dcp_app`, which:
+--   * may read and write the tables' ROWS — but never change, drop or create
+--     tables, and never read Supabase's own schemas (auth, storage, ...);
+--   * does NOT bypass RLS, so in fact.* (client data) it sees only the account
+--     named by set_config('app.account_id', ...) in each transaction (the
+--     `one_account` policies above) — the DATABASE now enforces "one client
+--     at a time", not only the API;
+--   * reads fact.field_map but can't change it.
+-- dim.* tables get an `api_all` policy for dcp_app only: the API decides who
+-- sees what there (consultants.acting_context); Supabase's browser roles
+-- (anon, authenticated) still get nothing.
+-- Run the schema (and scripts) that CHANGE tables with the owner login:
+-- ADMIN_DATABASE_URL (scripts/setup_database.py, scripts/backfill_entities.py).
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dcp_app') THEN
+        CREATE ROLE dcp_app NOLOGIN NOBYPASSRLS;
+    END IF;
+END $$;
+GRANT USAGE ON SCHEMA dim, fact TO dcp_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dim TO dcp_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON fact.account_data, fact.entities, fact.entity_sources TO dcp_app;
+GRANT SELECT ON fact.field_map TO dcp_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dim, fact TO dcp_app;
+DO $$
+DECLARE t TEXT;
+BEGIN
+    FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'dim'
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'dim' AND tablename = t
+                       AND policyname = 'api_all') THEN
+            EXECUTE format('CREATE POLICY api_all ON dim.%I TO dcp_app USING (true) WITH CHECK (true)', t);
+        END IF;
+    END LOOP;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'fact' AND tablename = 'field_map'
+                   AND policyname = 'api_read') THEN
+        CREATE POLICY api_read ON fact.field_map FOR SELECT TO dcp_app USING (true);
+    END IF;
+END $$;
 
 -- ############################################################################
 -- Examples (not run): reading account_data

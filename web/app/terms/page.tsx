@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Terms of Service" };
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" updated="10/15/2026">
+    <LegalPage title="Terms of Service" updated="10/17/2026">
       <Section title="Acceptance of Terms">
         <p>
           By using <strong>{SITE_NAME}</strong> (&quot;the Platform&quot;), operated by <strong>{COMPANY}</strong>, you
@@ -43,6 +43,11 @@ export default function TermsPage() {
             choose.
           </li>
           <li>Only upload data you have the right to use, and do not upload anything unlawful.</li>
+          <li>
+            <strong>Health information.</strong> Do not upload protected health information (patients&apos; health
+            records) unless your account is approved for HIPAA (Settings → Account → Health information) and we have
+            signed a Business Associate Agreement with you.
+          </li>
           <li>
             Uploaded files are not kept. If you choose managed storage, the{" "}
             <Link href="/storage-terms" className="text-brand hover:underline">

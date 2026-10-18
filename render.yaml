@@ -36,6 +36,12 @@ services:
         sync: false        # your paid ($80/hour) Cal.com event; shown after the free call is confirmed
       - key: CALCOM_WEBHOOK_SECRET
         sync: false        # Cal.com -> Settings -> Developer -> Webhooks -> Secret
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true  # encrypts stored emails / phones and two-step keys — copy it somewhere safe
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"         # Render's proxy: lets the per-IP limits see the visitor's address
+      - key: SENTRY_DSN
+        sync: false        # optional: error monitoring, personal data stripped (docs/SECURITY.md)
       - key: SUPABASE_URL
         sync: false        # Supabase -> Project Settings -> API -> Project URL (passwords)
       - key: SUPABASE_KEY

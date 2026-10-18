@@ -38,12 +38,12 @@ async def main() -> int:
         return 1
     await database.init_pool()
     try:
-        # The API's login bypasses Row Level Security, so it can list the accounts with data.
-        ids = [str(r["account_id"]) for r in
-               await database.pool.fetch("SELECT DISTINCT account_id FROM fact.account_data")]
+        # Every plan holder, from dim.accounts: the API's least-privilege login (dcp_api) sees
+        # fact.account_data one account at a time only, so it can't list "who has data" there.
+        ids = [str(r["id"]) for r in await database.pool.fetch("SELECT id FROM dim.accounts")]
         for aid in ids:
             holder = await account_store.get_account(aid)
-            if not holder:
+            if not holder or not await warehouse_store.has_data(holder):
                 continue
             res = await warehouse_store.relink_stored(holder)
             print(f"{aid}  {res['rows_relinked']} rows linked, {res['entities_added']} entities, "

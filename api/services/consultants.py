@@ -30,6 +30,18 @@ WHO IS A CONSULTANT? (no access codes)
   directory()                 every consultant with how full they are (the picker)
   set_capacity(consultant, n) a consultant's own setting, 1 to MAX_CAPACITY
   acting_context(token, id)   THE ACCESS RULE (see below)
+  active_consultant(id)       the consultant row, only while they're ACTIVE
+  deactivate(id, admin)       an admin switches a consultant off; their clients
+                              move to someone with room (or wait)
+  reactivate(id, admin)       an admin switches them back on
+  team()                      every consultant, active or not (Admin panel)
+
+DEACTIVATED CONSULTANTS
+-----------------------
+dim.consultants.active = false (set by an admin; deactivated_at / _by / reason
+are stamped). They keep their account and sign in as a client: no consultant
+workspace, can't be picked, can't open any client. Reactivating stamps
+reactivated_at / _by. Admins and the default consultant can't be deactivated.
 
 CAPACITY
 --------
@@ -428,12 +440,17 @@ async def acting_context(token: dict, acting_as: str | None) -> dict:
     me = await account_store.get_account(token["sub"])
     if me is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
-    consultant = await account_store.get_consultant_by_account(str(me["id"]))
+    consultant = await active_consultant(str(me["id"]))   # a deactivated consultant is a client here
     admin = is_admin(me)
     if not acting_as or acting_as == str(me["id"]):
         return {"account": me, "consultant": consultant, "acting": False, "admin": admin}
     if consultant is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only consultants can work on another account.")
+        paused = await account_store.get_consultant_by_account(str(me["id"])) is not None
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail=DEACTIVATED if paused else "Only consultants can work on another account.")
+    from api.services import mfa   # (mfa imports account_store only)
+
+    mfa.require_for_staff(token, me)   # opening a client's data needs the two-step sign-in
     client = await account_store.get_account(acting_as)
     if client is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That client was not found.")
@@ -445,3 +462,142 @@ async def acting_context(token: dict, acting_as: str | None) -> dict:
     if not holder or str(holder.get("consultant_id") or "") != str(consultant["id"]):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="That client isn't assigned to you.")
     return {"account": client, "consultant": consultant, "acting": True, "admin": False}
+
+
+# ── Deactivate / reactivate (admins, Admin panel -> Consultants) ─────────────
+
+DEACTIVATED = "Your consultant access is paused by an admin. You can still use your own account."
+
+
+async def active_consultant(account_id: str) -> dict | None:
+    """
+    The account's consultant row if they are an ACTIVE consultant, else None.
+
+    A deactivated consultant is treated as a normal client everywhere: no
+    consultant workspace, no clients, can't act for anyone.
+
+    Args:
+        account_id: str, the account id.
+
+    Returns:
+        dict | None: the consultants row (active), or None.
+
+    Example:
+        >>> await active_consultant(kim_account_id) is None   # after deactivate(...)
+        True
+    """
+    row = await account_store.get_consultant_by_account(account_id)
+    return row if row and row.get("active", True) else None
+
+
+def _iso(value) -> str | None:
+    """A timestamp as ISO text (None stays None)."""
+    return value.isoformat() if value else None
+
+
+def team_row(consultant: dict) -> dict:
+    """
+    One consultant as the Admin panel lists them (with email: admins only).
+
+    Args:
+        consultant: dict, a consultants row with "client_count" (list_consultants(active_only=False)).
+
+    Returns:
+        dict: load(...) plus {"email", "active", "created_at", "updated_at",
+        "deactivated_at", "deactivation_reason", "reactivated_at"} (ISO text).
+
+    Example:
+        >>> team_row(kim)["active"]
+        True
+    """
+    return {**load(consultant), "email": consultant["email"], "active": bool(consultant.get("active", True)),
+            "created_at": _iso(consultant.get("created_at")), "updated_at": _iso(consultant.get("updated_at")),
+            "deactivated_at": _iso(consultant.get("deactivated_at")),
+            "deactivation_reason": consultant.get("deactivation_reason"),
+            "reactivated_at": _iso(consultant.get("reactivated_at"))}
+
+
+async def team() -> list[dict]:
+    """
+    Every consultant, active or not (active first, then by name), for the Admin panel.
+
+    Returns:
+        list[dict]: team_row(...) for each consultant.
+    """
+    rows = [team_row(c) for c in await account_store.list_consultants(active_only=False)]
+    return sorted(rows, key=lambda c: (not c["active"], not c["is_default"], c["name"].lower()))
+
+
+async def deactivate(consultant_id: str, admin: dict, reason: str | None = None) -> dict:
+    """
+    Switch a consultant off and move their clients to someone with room.
+
+    They keep their own account (and can sign in as a client), but can't be
+    picked, can't open any client, and lose consultant mode. Each of their
+    clients is reassigned by the CAPACITY RULE (pick: the default consultant if
+    they have room, else whoever has the most room) or, if everyone is full,
+    waits for a consultant (assigned when someone has room).
+
+    Args:
+        consultant_id: str, the consultants row id.
+        admin: dict, the admin's accounts row.
+        reason: str | None, an optional short note ("On leave until March").
+
+    Returns:
+        dict: {"moved": n clients reassigned, "waiting": n clients now waiting}.
+
+    Raises:
+        HTTPException: 404 unknown consultant; 400 for the default consultant or
+            an admin (they can't be switched off); 409 already deactivated.
+
+    Example:
+        >>> await deactivate(kim_id, me, "Left the company")
+        {'moved': 2, 'waiting': 0}
+    """
+    row = await account_store.get_consultant(consultant_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That consultant wasn't found.")
+    owner = await account_store.get_account(str(row["account_id"]))
+    if row.get("is_default") or is_admin(owner):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Admins and the default consultant can't be deactivated.")
+    if not row.get("active", True):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="That consultant is already deactivated.")
+    note = (reason or "").strip()[:300] or None
+    await account_store.set_consultant_active(consultant_id, False, str(admin["id"]), note)
+    moved = waiting = 0
+    for client in await account_store.list_clients(consultant_id):
+        new = await pick(None)   # they are inactive now, so pick() never gives them back
+        await account_store.set_consultant_for(str(client["id"]), new, client.get("consultant_plan"))
+        moved, waiting = (moved + 1, waiting) if new else (moved, waiting + 1)
+    return {"moved": moved, "waiting": waiting}
+
+
+async def reactivate(consultant_id: str, admin: dict) -> dict:
+    """
+    Switch a consultant back on. Clients waiting for a consultant are given to them (up to their room).
+
+    Clients moved away when they were deactivated stay with their new consultant.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        admin: dict, the admin's accounts row.
+
+    Returns:
+        dict: {"assigned": n waiting clients given to them}.
+
+    Raises:
+        HTTPException: 404 unknown consultant; 409 already active.
+
+    Example:
+        >>> await reactivate(kim_id, me)
+        {'assigned': 1}
+    """
+    row = await account_store.get_consultant(consultant_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That consultant wasn't found.")
+    if row.get("active", True):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="That consultant is already active.")
+    await account_store.set_consultant_active(consultant_id, True, str(admin["id"]))
+    room = (row.get("capacity") or account_store.DEFAULT_CAPACITY) - await account_store.count_clients(consultant_id)
+    return {"assigned": await account_store.assign_waiting_clients(consultant_id, room)}

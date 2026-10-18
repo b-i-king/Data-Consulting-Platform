@@ -3,7 +3,8 @@ Create (or update) the database tables, then check that everything is there.
 
 WHAT THIS SCRIPT DOES
 ---------------------
-1. Connects to DATABASE_URL (read from your .env file, like the API does).
+1. Connects to ADMIN_DATABASE_URL — the owner login (Supabase's `postgres`),
+   which may create tables — or, if that's empty, DATABASE_URL.
 2. Runs db/schema.sql, which creates the two schemas:
      dim   the platform: accounts, consultants, teams, subscriptions, ...
      fact  client data: account_data (stored data) and field_map (shared names)
@@ -13,6 +14,14 @@ WHAT THIS SCRIPT DOES
 
 db/schema.sql is safe to re-run (CREATE ... IF NOT EXISTS), so run this
 again after every pull that changes it.
+
+THE API'S OWN LOGIN (least privilege)
+-------------------------------------
+With API_DATABASE_PASSWORD set, it also creates (or updates the password of)
+the login `dcp_api`, a member of `dcp_app` (db/schema.sql): it can read and
+write rows but not change tables, and it can't skip Row Level Security. Then
+point the API's DATABASE_URL at `dcp_api` and keep the owner login in
+ADMIN_DATABASE_URL for this script only (docs/DEPLOYMENT.md has the steps).
 
 HOW TO RUN
 ----------
@@ -40,7 +49,8 @@ from api.core.config import get_settings  # noqa: E402
 TABLES = {
     "dim": ["accounts", "consultants", "teams", "subscriptions", "consultations", "usage_events",
             "storage_consents", "load_runs", "data_connections",
-            "dashboard_tabs", "question_log", "api_usage", "ai_usage"],
+            "dashboard_tabs", "question_log", "api_usage", "ai_usage", "plan_prices", "account_deletions",
+            "seasonal_sales", "sessions", "audit_log"],
     "fact": ["account_data", "field_map", "entities", "entity_sources"],
 }
 
@@ -55,7 +65,8 @@ async def main(check_only: bool) -> int:
     Returns:
         int: 0 when every expected table exists, 1 otherwise (the exit code).
     """
-    dsn = get_settings().database_url
+    settings = get_settings()   # reads .env too (os.environ alone would miss it)
+    dsn = settings.admin_database_url or settings.database_url
     if not dsn:
         print("DATABASE_URL is empty. Put your Supabase connection string in .env first "
               "(Supabase -> Connect -> Transaction pooler, port 6543).")
@@ -68,6 +79,15 @@ async def main(check_only: bool) -> int:
             print(f"Running {path.relative_to(ROOT)} ...")
             await conn.execute(path.read_text(encoding="utf-8"))   # a whole script, no parameters
             print("Done.\n")
+            api_password = settings.api_database_password
+            if api_password:
+                # The API's least-privilege login. The password is quoted by the database itself.
+                quoted = await conn.fetchval("SELECT quote_literal($1)", api_password)
+                exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = 'dcp_api'")
+                verb = "ALTER" if exists else "CREATE"
+                await conn.execute(f"{verb} ROLE dcp_api LOGIN NOBYPASSRLS PASSWORD {quoted}")
+                await conn.execute("GRANT dcp_app TO dcp_api")
+                print(f"{'Updated' if exists else 'Created'} the API login dcp_api (member of dcp_app).\n")
 
         missing = 0
         for schema, tables in TABLES.items():

@@ -27,6 +27,17 @@ HOW THE DASHBOARD IS BUILT
    re-uploading the file). The KPI list is ranked on ALL rows, so it stays
    the same when a filter is applied.
 
+5. ABOVE THE FOLD, then containers (layout.py, templates/layouts.json —
+   built from the Canva design): a KPI row of 1–4 headline cards (the main
+   total, the INDUSTRY KPIs this data supports — industry.py reads
+   industry_metrics.json — transactions, average per transaction), then rows
+   of containers: trends as line charts first, categories as horizontal bar
+   charts next, then complementary visuals. No fixed template: the rows are
+   mixed and matched for the data.
+6. Each metric has a direction (higher or lower is better) and a format
+   (number, currency, percent, days), so the site colors a change green
+   (good), gray (about the same) or red (bad).
+
 OUTPUT
 ------
 data.kpis                     metric ids of the KPI cards (one per top type)
@@ -34,13 +45,19 @@ data.overview                 metric ids of the overview: total value, transacti
 data.ranges[<range>]          window dates, KPI numbers, line series per comparison
 data.filter_options           {column: [values]} for the filter dropdowns
 data.breakdown[<range>]       top categories of `dimension_column` vs. previous period
-artifacts["html_dashboard"]   a self-contained interactive HTML dashboard (include_html=True)
+data.layout                   {"kpi_row": [...], "kpi_side": visual | None, "rows": [...]}
+data.breakdowns[<dim>][<range>] top categories of each breakdown column (type, product, store...)
+data.metric_formats / metric_directions / metric_benchmarks   per metric
+data.industry                 {"sector", "name", "metrics": [...found...], "generic": bool}
+artifacts["html_dashboard"]   a self-contained HTML dashboard (templates/page.html, include_html=True)
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -53,6 +70,7 @@ from data_skills._core import (
 
 ROWS = "__rows__"          # every row counted ("Transactions")
 TOTAL = "__total__"        # the value column over all rows ("Total amount")
+AVG = "__avg__"            # total ÷ transactions ("Average per transaction")
 MAX_DAILY_POINTS = 400     # skip day-over-day charts on windows longer than this
 MAX_FILTERS = 9            # filter dropdowns offered (the site lays them out in rows of up to 3)
 MAX_FILTER_VALUES = 12     # values per filter dropdown (most common first)
@@ -82,6 +100,14 @@ SKILL = SkillSpec(
         "comparison": Param("choice", "auto", "Default comparison", ("auto", *(_time.COMPARISONS))),
         "as_of": Param("str", None, "End date for ranges, YYYY-MM-DD (default: latest date in the data)"),
         "title": Param("str", "Dashboard", "Dashboard title"),
+        "subtitle": Param("str", None, "Line under the title (default: what the dashboard covers)"),
+        "industry": Param("str", None, "NAICS sector for industry KPIs, e.g. 72 or 44-45 (the site sends the "
+                                      "client's industry; empty = generic KPIs only)"),
+        "business_name": Param("str", None, "Business name for the header of the downloaded HTML"),
+        "viewer_name": Param("str", None, "Name for the downloaded HTML's greeting (\"Hello! Ana\")"),
+        "kpi_style": Param("choice", "auto", "KPI card style for the whole row: auto, number (just the number), "
+                                            "change (number + change vs. before) or gauge (0–100% dials for the "
+                                            "percentage KPIs only)", ("auto", "number", "change", "gauge")),
         "include_html": Param("bool", True, "Also build the downloadable HTML dashboard (the web app "
                                             "asks for it only when you click Download)"),
     },
@@ -103,6 +129,23 @@ FILTER_GROUPS = (
                r"ethnic|race|marital|household|language|demograph", re.I),
     re.compile(r"region|state|city|county|zip|postal|country|location|store|branch|channel|market", re.I),
 )
+
+
+def _sibling(name: str):
+    """Load a module that sits next to this file (the folder name has a dash, so no normal import)."""
+    key = f"data_skills_build_dashboard_{name}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, Path(__file__).with_name(f"{name}.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        spec.loader.exec_module(module)
+    return sys.modules[key]
+
+
+industry = _sibling("industry")
+layout = _sibling("layout")
+MONEY = re.compile(r"amount|revenue|sales|total|cost|spend|balance|income|expense|pay|price|fee", re.I)
+COSTLY = re.compile(r"cost|expense|spend|refund|return|loss|discount|churn|complaint|defect|waste", re.I)
 
 
 def _label(col: str) -> str:
@@ -240,11 +283,12 @@ def default_metrics(df: pd.DataFrame, agg: str) -> list[str]:
         >>> default_metrics(pd.read_csv("samples/sales.csv"), "sum")
         ['amount', 'quantity']
     """
-    money = re.compile(r"amount|revenue|sales|total|cost|spend|balance|income|expense|pay", re.I)
-    count = re.compile(r"qty|quantity|units|count|orders|visits", re.I)
+    money = re.compile(r"amount|revenue|sales|total|cost|spend|balance|income|expense|pay|fee|charge", re.I)
+    count = re.compile(r"qty|quantity|units|count|orders|visits|hours|minutes|days", re.I)
+    is_money = lambda c: bool(money.search(c)) and not count.search(c)   # "total_hours" is a count, not dollars  # noqa: E731
     per_unit = re.compile(r"price|rate|pct|percent|score|rating|csat|nps|avg|average|age", re.I)
     cols = [c for c in numeric_columns(df) if not (agg == "sum" and per_unit.search(c) and not money.search(c.replace("price", "")))]
-    rank = lambda c: 0 if money.search(c) else 1 if count.search(c) else 2  # noqa: E731
+    rank = lambda c: 0 if is_money(c) else 1 if count.search(c) else 2  # noqa: E731
     return sorted(cols, key=rank)[:3]
 
 
@@ -295,7 +339,8 @@ def _apply_filters(data: pd.DataFrame, filters: dict | None) -> tuple[pd.DataFra
 def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, top_kpis=4, filters=None,
         filter_columns=None, value_columns=None, dimension_column=None, agg="sum",
         range="last_3_months", comparison="auto", as_of=None, title="Dashboard",
-        include_html=True) -> SkillResult:
+        include_html=True, subtitle=None, industry=None, business_name=None, viewer_name=None,
+        kpi_style="auto") -> SkillResult:
     """
     Build the KPI dashboard: cards per top transaction type, time ranges, comparisons and filters.
 
@@ -311,7 +356,7 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
        chart series for each supported comparison (day over day is skipped on windows
        longer than MAX_DAILY_POINTS days) and a breakdown of `dimension_column`.
     6. Pick the default range/comparison from what the data supports, write the
-       summary and findings, and (if `include_html`) fill dashboard_template.html.
+       summary and findings, and (if `include_html`) render templates/page.html (render_html).
 
     Args:
         df: the transaction table.
@@ -345,6 +390,8 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         >>> result = run(df, range="last_1_year", include_html=False)
         >>> result.data["kpis"]   # e.g. ['__kpi_0__', '__kpi_1__', ...], labeled in data["metric_labels"]
     """
+    industry_code = industry
+    industry_mod = globals()["industry"]   # the module (the parameter has the same name)
     date_col = require_column(df, date_column, "date", date_columns(df))
     data = df.copy()
     data[date_col] = as_datetime(data[date_col])
@@ -429,6 +476,36 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         overview = [TOTAL, ROWS]
     metrics = [*kpis, *[m for m in overview if m not in kpis]]
 
+    # How each metric is computed (_totals / _frame): "sum" / "mean" of a column,
+    # or "ratio" (sum ÷ sum, or ÷ a distinct count) / "distinct" (a distinct count).
+    specs: dict[str, dict] = {m: {"agg": metric_agg[m], "column": m, "scale": 1} for m in metrics}
+    money = bool(value_column and MONEY.search(value_column))
+    formats = {m: ("currency" if money and m != ROWS else "number") for m in metrics}
+    # Costs, refunds and losses going UP is bad news (red); everything else up is good (green).
+    directions = {m: ("lower" if COSTLY.search(f"{m} {labels.get(m, '')}") and m != ROWS else "higher") for m in metrics}
+    benchmarks: dict[str, str] = {}
+    targets: dict[str, list] = {}   # metric -> [low, high] healthy band (the gauge card marks it)
+    if value_column and value_agg == "sum":
+        avg_num = TOTAL if TOTAL in data.columns else value_column
+        specs[AVG] = {"agg": "ratio", "num": avg_num, "den": ROWS, "den_agg": "sum", "scale": 1}
+        labels[AVG] = "Average per transaction"
+        metric_agg[AVG] = "ratio"
+        formats[AVG], directions[AVG] = ("currency" if money else "number"), "higher"
+        metrics.append(AVG)
+    # Industry KPIs this table can compute (industry_metrics.json); none = generic only.
+    found = industry_mod.plan(data, industry_code) if industry_code else []
+    for spec in found:
+        m = spec["id"]
+        specs[m] = {k: spec[k] for k in ("agg", "column", "num", "den", "den_agg", "scale") if k in spec}
+        specs[m].setdefault("scale", 1)
+        labels[m], metric_agg[m] = spec["label"], spec["agg"]
+        formats[m], directions[m] = spec["format"], spec["direction"]
+        if spec.get("benchmark"):
+            benchmarks[m] = spec["benchmark"]
+        if spec.get("target"):
+            targets[m] = spec["target"]
+        metrics.append(m)
+
     # ── Time windows ────────────────────────────────────────────────────────
     first, last = data[date_col].min(), data[date_col].max()
     anchor = pd.Timestamp(as_of) if as_of else last
@@ -457,19 +534,25 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
 
     ranges: dict[str, dict] = {}
     breakdown: dict[str, list] = {}
+    # Categories worth a horizontal bar chart each: the type column, the breakdown
+    # column, then the first two filter columns (store, customer type...).
+    dims = list(dict.fromkeys(c for c in (kpi_column, dimension_column, *filter_columns[:2]) if c))[:4]
+    breakdowns: dict[str, dict] = {d: {} for d in dims}
     for key in _time.RANGES:
         w = _time.window(key, anchor, first)
-        kpi_numbers = {m: _time.window_totals(data, date_col, [m], w, metric_agg[m])[m] for m in metrics}
+        kpi_numbers = {m: _totals(data, date_col, specs[m], w) for m in metrics}
         span_days = (w.end - w.start).days + 1
         series = {}
         # Comparisons with at least two periods in this range (and in the data).
         for cmp_key in _time.available_comparisons(first, anchor, w.start, w.end):
             if cmp_key == "dod" and span_days > MAX_DAILY_POINTS:
                 continue
-            series[cmp_key] = {m: _range_series(data, date_col, m, cmp_key, w, metric_agg[m]) for m in metrics}
+            series[cmp_key] = {m: _range_series(data, date_col, specs[m], cmp_key, w) for m in metrics}
         ranges[key] = {"window": w.as_dict(), "kpis": kpi_numbers, "series": series}
         if dimension_column:
             breakdown[key] = _breakdown(data, date_col, dimension_column, breakdown_metric, w, metric_agg[breakdown_metric])
+        for dim in dims:
+            breakdowns[dim][key] = _breakdown(data, date_col, dim, breakdown_metric, w, metric_agg[breakdown_metric])
 
     # ── Summary and findings (plain English) ───────────────────────────────
     w = ranges[range]["window"]
@@ -513,8 +596,44 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
                        {"This period": [r["value"] for r in chart_rows],
                         "Previous period": [r["prior_range"] for r in chart_rows]})
 
+    # ── Layout: KPI row above the fold, then containers (layout.py) ─────────
+    hero = TOTAL if TOTAL in metrics else (kpis[0] if kpis and not kpi_column else ROWS)
+    ind_ids = [s["id"] for s in found]
+    # A daily summary (one row per date): "number of records" is just the number of
+    # days, and "average per transaction" the average day — neither says anything.
+    summary_table = data[date_col].dt.normalize().nunique() >= 0.95 * len(data)
+    per_record = [] if summary_table and hero != ROWS else [ROWS, *([AVG] if AVG in metrics else [])]
+    kpi_candidates = [hero, *ind_ids, *per_record, *([] if kpi_column else kpis)]
+    breakdown_label = labels[breakdown_metric]
+    visuals = [{"kind": "line", "metric": hero, "title": f"{labels[hero]} over time"}]
+    visuals += [{"kind": "hbar", "dimension": d, "metric": breakdown_metric,
+                 "title": f"{breakdown_label} by {_label(d).lower()}"} for d in dims]
+    visuals += [{"kind": "line", "metric": m, "title": f"{labels[m]} over time"} for m in ind_ids]
+    if hero != ROWS and ROWS in per_record:
+        visuals.append({"kind": "line", "metric": ROWS, "title": f"{labels[ROWS]} over time"})
+    visuals += [{"kind": "line", "metric": m, "title": f"{labels[m]} over time"}
+                for m in (kpis[:2] if kpi_column else kpis[1:3])]
+    # ONE KPI card style for the whole row (layout.kpi_style): number, change or gauge.
+    # Gauge rows hold only percentages; the main total still leads the containers.
+    has_previous = any(ranges[k]["window"].get("prev_start") for k in offered_ranges if k in ranges)
+    percent_kpis = [m for m in dict.fromkeys(kpi_candidates) if formats.get(m) == "percent"]
+    card_style = layout.kpi_style(kpi_style, percent_kpis, targets, has_previous)
+    if card_style == "gauge":
+        kpi_candidates = percent_kpis
+    dash_layout = layout.plan(kpi_candidates, visuals)
+    if subtitle is None:
+        subtitle = (f"{industry_mod.sector_name(industry_code)} KPIs and how your business is doing over time"
+                    if found else "How your business is doing over time")
+
     payload = json_safe({
-        "title": title, "date_column": date_col,
+        "title": title, "subtitle": subtitle, "date_column": date_col,
+        "business_name": business_name, "viewer_name": viewer_name,
+        "layout": dash_layout, "breakdowns": breakdowns,
+        "metric_formats": formats, "metric_directions": directions, "metric_benchmarks": benchmarks,
+        "metric_targets": targets, "kpi_style": card_style,
+        "industry": {"sector": industry_code, "name": industry_mod.sector_name(industry_code),
+                     "metrics": [s["key"] for s in found], "sources": {s["id"]: s.get("sources", []) for s in found},
+                     "generic": not found},
         "mode": "kpi_types" if kpi_column else "metrics",
         "kpi_column": kpi_column, "kpi_column_label": _label(kpi_column) if kpi_column else None,
         "value_column": value_column, "value_label": value_label,
@@ -539,9 +658,7 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
     })
     artifacts = {}
     if include_html:
-        artifacts["html_dashboard"] = (
-            Path(__file__).with_name("dashboard_template.html").read_text(encoding="utf-8")
-            .replace("__TITLE__", title).replace("__DATA__", json.dumps(payload).replace("</", "<\\/")))
+        artifacts["html_dashboard"] = render_html(payload)
 
     return SkillResult(
         skill=SKILL.id, summary=summary, findings=findings, charts=[chart],
@@ -550,7 +667,77 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
     )
 
 
-def _range_series(data, date_col, metric, cmp_key, w, agg) -> list[dict]:
+def _totals(data: pd.DataFrame, date_col: str, spec: dict, w) -> dict:
+    """
+    One metric's KPI numbers for a window: current vs. previous, change, % change.
+
+    Args:
+        data: the table (date column parsed).
+        date_col: the date column.
+        spec: {"agg": "sum" | "mean", "column", "scale"} or {"agg": "ratio" | "distinct",
+            "num", "den", "den_agg", "scale"}.
+        w: the _time.Window.
+
+    Returns:
+        dict: {"current"} plus, with a previous window, {"previous", "change", "pct_change"}.
+
+    Example:
+        >>> _totals(data, "date", {"agg": "ratio", "num": "food", "den": "sales", "den_agg": "sum", "scale": 100}, w)
+        {'current': 61.2, 'previous': 63.0, 'change': -1.8, 'pct_change': -0.0286}
+    """
+    scale = spec.get("scale", 1)
+    if spec["agg"] in ("sum", "mean", "count"):
+        t = _time.window_totals(data, date_col, [spec["column"]], w, spec["agg"])[spec["column"]]
+        return {k: (v * scale if k != "pct_change" and v is not None else v) for k, v in t.items()}
+
+    def value(start, end):
+        mask = (data[date_col] >= start) & (data[date_col] < end + pd.Timedelta(days=1))
+        den = data.loc[mask, spec["den"]].agg(spec.get("den_agg", "sum"))
+        if spec["agg"] == "distinct":
+            return float(den) * scale
+        num = data.loc[mask, spec["num"]].sum()
+        return float(num) / float(den) * scale if den else None
+
+    cur = value(w.start, w.end)
+    out = {"current": cur if cur is not None else 0.0}
+    if w.prev_start is not None:
+        prev = value(w.prev_start, w.prev_end)
+        p = prev if prev is not None else 0.0
+        out.update(previous=p, change=out["current"] - p, pct_change=((out["current"] - p) / abs(p)) if p else None)
+    return out
+
+
+def _frame(data: pd.DataFrame, date_col: str, spec: dict, cmp_key: str, start, end) -> pd.DataFrame:
+    """
+    One metric per day / week / month (columns period, value, previous, change, pct_change, partial).
+
+    Sums and means come straight from _time.period_series; a ratio is its two
+    parts per period (numerator ÷ denominator), so 30% of $100 and 50% of $10
+    average to 32%, not 40%.
+    """
+    scale = spec.get("scale", 1)
+    if spec["agg"] in ("sum", "mean", "count"):
+        out = _time.period_series(data, date_col, spec["column"], cmp_key, start, end, spec["agg"])
+        if scale != 1:
+            for col in ("value", "previous", "change"):
+                out[col] = out[col] * scale
+        return out
+    den = _time.period_series(data, date_col, spec["den"], cmp_key, start, end, spec.get("den_agg", "sum"))
+    out = den[["period", "partial"]].copy()
+    if spec["agg"] == "distinct":
+        out["value"] = den["value"].astype(float) * scale
+    else:
+        num = _time.period_series(data, date_col, spec["num"], cmp_key, start, end, "sum")
+        merged = den[["period", "value"]].merge(num[["period", "value"]], on="period", how="left", suffixes=("_d", "_n"))
+        d = merged["value_d"].astype(float)
+        out["value"] = (merged["value_n"].astype(float) / d.where(d != 0) * scale).to_numpy()
+    out["previous"] = out["value"].shift(1)
+    out["change"] = out["value"] - out["previous"]
+    out["pct_change"] = out["change"] / out["previous"].abs().where(out["previous"] != 0)
+    return out[["period", "value", "previous", "change", "pct_change", "partial"]].reset_index(drop=True)
+
+
+def _range_series(data, date_col, spec, cmp_key, w) -> list[dict]:
     """
     Rows for one chart. Each row has:
       value        this period (day / week / month) inside the selected range
@@ -566,23 +753,22 @@ def _range_series(data, date_col, metric, cmp_key, w, agg) -> list[dict]:
     Args:
         data: the table, with `date_col` parsed as datetimes.
         date_col: name of the date column.
-        metric: the column to chart.
+        spec: how the metric is computed (see _totals).
         cmp_key: "dod", "wow" or "mom".
         w: the _time.Window for the selected range.
-        agg: pandas aggregation name for `metric`.
 
     Returns:
         list[dict]: one dict per period with the keys described above.
 
     Example:
-        >>> rows = _range_series(data, "order_date", ROWS, "wow", w, "sum")
+        >>> rows = _range_series(data, "order_date", {"agg": "sum", "column": ROWS}, "wow", w)
         >>> rows[0]["period"], rows[0]["value"], rows[0]["prior_range"]
     """
-    cur = _time.period_series(data, date_col, metric, cmp_key, w.start, w.end, agg)
+    cur = _frame(data, date_col, spec, cmp_key, w.start, w.end)
     cur["prior_range"] = None
     cur["prior_period"] = None
     if w.prev_start is not None:
-        prev = _time.period_series(data, date_col, metric, cmp_key, w.prev_start, w.prev_end, agg)
+        prev = _frame(data, date_col, spec, cmp_key, w.prev_start, w.prev_end)
         n = min(len(cur), len(prev))
         cur.loc[cur.index[:n], "prior_range"] = prev["value"].iloc[:n].to_numpy()
         cur.loc[cur.index[:n], "prior_period"] = prev["period"].iloc[:n].dt.date.astype(str).to_numpy()
@@ -590,8 +776,27 @@ def _range_series(data, date_col, metric, cmp_key, w, agg) -> list[dict]:
     # Round so the JSON stays small (cents are plenty; % to 0.01%).
     for col in ("value", "previous", "change", "prior_range"):
         cur[col] = pd.to_numeric(cur[col], errors="coerce").round(2)
-    cur["pct_change"] = cur["pct_change"].round(4)
+    cur["pct_change"] = pd.to_numeric(cur["pct_change"], errors="coerce").round(4)
     return cur.to_dict(orient="records")
+
+
+def render_html(payload: dict) -> str:
+    """
+    The downloadable dashboard: templates/page.html with the KPI card and container
+    blocks (templates/kpi_card.html, templates/container.html) and the data filled in.
+
+    Args:
+        payload: the skill's data (everything the page draws).
+
+    Returns:
+        str: one self-contained HTML file (no outside files: it opens offline).
+    """
+    folder = Path(__file__).with_name("templates")
+    page = folder.joinpath("page.html").read_text(encoding="utf-8")
+    blocks = "\n".join(folder.joinpath(name).read_text(encoding="utf-8") for name in ("kpi_card.html", "container.html"))
+    safe = json.dumps(payload).replace("</", "<\\/")   # a "</script>" inside the data can't end the script early
+    title = (payload.get("title") or "Dashboard").replace("<", "&lt;")
+    return page.replace("__BLOCKS__", blocks).replace("__TITLE__", title).replace("__DATA__", safe)
 
 
 def _breakdown(data, date_col, dim, value, w, agg) -> list[dict]:

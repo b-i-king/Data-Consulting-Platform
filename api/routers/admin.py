@@ -7,6 +7,20 @@ Admin endpoints (admins only — everyone else gets 403).
     POST /api/admin/consultant-requests/{id}/approve    make them a consultant (their
                                                         dim.consultants row is created at once)
     POST /api/admin/consultant-requests/{id}/deny       say no (they stay a client)
+    POST /api/admin/consultants/{id}/deactivate         switch a consultant off (their
+                                                        clients move to someone with room)
+    POST /api/admin/consultants/{id}/reactivate         switch them back on
+    GET  /api/admin/accounts?q=                         plan holders, to pick testers
+    POST /api/admin/accounts/{id}/tester                tester on / off (try paid tools free)
+    POST /api/admin/accounts/{id}/healthcare            healthcare on / off (their data access is audited)
+    GET  /api/admin/hipaa-requests                      businesses asking to store health information
+    POST /api/admin/hipaa-requests/{id}/{approve|deny}  confirm (audit log on) or turn down
+    POST /api/admin/accounts/{id}/sign-out              sign them out on every device
+    POST /api/admin/accounts/{id}/reset-mfa             clear two-step sign-in (lost phone + backup codes)
+    GET  /api/admin/prices                              every tool's live price
+    PUT  /api/admin/prices/{plan_id}                    change a price or trial (Stripe + dim.plan_prices)
+    GET  /api/admin/sales                               the yearly seasonal sales
+    PUT  /api/admin/sales/{sale_id}                     change one (dates, percent, on / off)
 
 An admin is an ADMIN_EMAILS address (normally just the owner). Admin status is
 checked against the database on every call, never trusted from the token.
@@ -20,7 +34,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import get_current_account
-from api.services import account_store, consultants
+from api.models.admin import DeactivateIn, HealthcareIn, HipaaDecisionIn, PlanPriceIn, SeasonalSaleIn, TesterIn
+from api.services import account_store, billing, consultants, hipaa, mfa, offers, price_store, sessions
+from api.services.entitlements import is_admin
 
 router = APIRouter(prefix="/admin")
 
@@ -44,6 +60,7 @@ async def _admin(token: dict) -> dict:
     me = await account_store.get_account(token["sub"])
     if me is None or not (me.get("is_admin") or consultants.is_admin_email(me["email"])):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="This is for admins only.")
+    mfa.require_for_staff(token, me)   # the Admin panel needs the two-step sign-in
     return me
 
 
@@ -79,14 +96,21 @@ def _request_out(acc: dict) -> dict:
 
 async def _panel() -> dict:
     """
-    Everything the Admin panel shows: the requests and every consultant's load.
+    Everything the Admin panel shows: requests, consultants, and account deletions.
 
     Returns:
-        dict: {"requests": [_request_out, ...], "consultants": [consultants.load, ...]}.
+        dict: {"requests": [_request_out, ...], "consultants": [consultants.load, ...]
+        (active ones), "team": [consultants.team_row, ...] (everyone, with
+        active / deactivated dates), "deletions": account_store.deletion_summary()}.
     """
     return {
         "requests": [_request_out(a) for a in await account_store.list_consultant_requests()],
         "consultants": await consultants.directory(),
+        "team": await consultants.team(),
+        "deletions": await account_store.deletion_summary(),
+        # Why clients cancel their package (Stripe's portal asks; the webhook saves it).
+        "cancellations": await account_store.cancellation_summary(),
+        "hipaa_waiting": sum(1 for r in await account_store.list_hipaa_requests() if r["hipaa_status"] == "pending"),
     }
 
 
@@ -143,3 +167,341 @@ async def decide_request(account_id: str, decision: str, token: Annotated[dict, 
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Use /approve or /deny.")
     await consultants.decide(account_id, decision == "approve", me)
     return await _panel()
+
+
+# ── Consultants: deactivate / reactivate ──────────────────────────────────────
+
+@router.post("/consultants/{consultant_id}/deactivate")
+async def deactivate_consultant(consultant_id: str, body: DeactivateIn,
+                                token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/consultants/{id}/deactivate — switch a consultant off (consultants.deactivate).
+
+    Their clients move to someone with room (or wait); they keep their own account.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        body: DeactivateIn, {"reason": optional note}.
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: the refreshed panel plus "notice" ("Kim is deactivated. 2 clients moved.").
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown; 400 admins / default consultant; 409 already off.
+
+    Example:
+        POST /api/admin/consultants/9c1d.../deactivate   {"reason": "On leave"}
+        -> 200 {"notice": "Kim is deactivated. 2 clients moved to other consultants.", "team": [...], ...}
+    """
+    me = await _admin(token)
+    result = await consultants.deactivate(consultant_id, me, body.reason)
+    row = await account_store.get_consultant(consultant_id)
+    notice = f"{row['display_name']} is deactivated."
+    if result["moved"]:
+        notice += f" {result['moved']} client{'s' if result['moved'] != 1 else ''} moved to other consultants."
+    if result["waiting"]:
+        notice += f" {result['waiting']} waiting for a consultant (everyone else is full)."
+    return {**await _panel(), "notice": notice}
+
+
+@router.post("/consultants/{consultant_id}/reactivate")
+async def reactivate_consultant(consultant_id: str, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/consultants/{id}/reactivate — switch a consultant back on (consultants.reactivate).
+
+    Args:
+        consultant_id: str, the consultants row id.
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: the refreshed panel plus "notice".
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown; 409 already active.
+
+    Example:
+        POST /api/admin/consultants/9c1d.../reactivate
+        -> 200 {"notice": "Kim is active again.", ...}
+    """
+    me = await _admin(token)
+    result = await consultants.reactivate(consultant_id, me)
+    row = await account_store.get_consultant(consultant_id)
+    notice = f"{row['display_name']} is active again."
+    if result["assigned"]:
+        notice += f" {result['assigned']} waiting client{'s' if result['assigned'] != 1 else ''} assigned to them."
+    return {**await _panel(), "notice": notice}
+
+
+# ── Testers ───────────────────────────────────────────────────────────────────
+
+async def _person_out(acc: dict) -> dict:
+    """
+    One account as the Admin panel's Testers list shows it.
+
+    Args:
+        acc: dict, an accounts row (a plan holder).
+
+    Returns:
+        dict: {"id", "name", "email", "company_name", "account_type", "role"
+        ("admin" | "consultant" | "client"), "is_tester", "has_plan",
+        "created_at", "updated_at", "last_login_at"} (dates as ISO text).
+    """
+    def iso(d):
+        return d.isoformat() if d else None
+
+    role = ("admin" if is_admin(acc) else
+            "consultant" if await consultants.active_consultant(str(acc["id"])) else "client")
+    return {
+        "id": str(acc["id"]), "name": f"{acc['first_name']} {acc['last_name']}", "email": acc["email"],
+        "company_name": acc.get("company_name"), "account_type": acc["account_type"], "role": role,
+        "is_tester": bool(acc.get("is_tester")),
+        "is_healthcare": bool(acc.get("is_healthcare")),
+        "mfa_enabled": mfa.is_on(acc),
+        "has_plan": bool(await account_store.list_subscriptions(str(acc["id"]))),
+        "created_at": iso(acc.get("created_at")), "updated_at": iso(acc.get("updated_at")),
+        "last_login_at": iso(acc.get("last_login_at")),
+    }
+
+
+@router.get("/accounts")
+async def people(token: Annotated[dict, Depends(get_current_account)], q: str = "", limit: int = 25):
+    """
+    GET /api/admin/accounts?q=bakery — plan holders (newest first), to switch testers on and off.
+
+    Args:
+        token: dict, the decoded login token.
+        q: str, part of a name, email or company ("" = the newest accounts).
+        limit: int, how many (1 to 100, default 25).
+
+    Returns:
+        dict: {"accounts": [_person_out, ...]}.
+
+    Raises:
+        HTTPException: 403 for non-admins.
+
+    Example:
+        GET /api/admin/accounts?q=ana
+        -> 200 {"accounts": [{"name": "Ana Lee", "is_tester": false, "role": "client", ...}]}
+    """
+    await _admin(token)
+    return {"accounts": [await _person_out(a) for a in await account_store.search_accounts(q, limit)]}
+
+
+@router.post("/accounts/{account_id}/tester")
+async def set_tester(account_id: str, body: TesterIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/accounts/{id}/tester — make an account a tester, or a paying client again.
+
+    Rules are in billing.set_tester (plan holders only; not while they pay through Stripe).
+
+    Args:
+        account_id: str, the account.
+        body: TesterIn, {"is_tester": true | false}.
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: {"account": _person_out}.
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown account; 400 / 409 from billing.set_tester.
+
+    Example:
+        POST /api/admin/accounts/7b1e.../tester   {"is_tester": true}
+        -> 200 {"account": {"is_tester": true, ...}}
+    """
+    await _admin(token)
+    acc = await account_store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That account wasn't found.")
+    return {"account": await _person_out(await billing.set_tester(acc, body.is_tester))}
+
+
+@router.post("/accounts/{account_id}/healthcare")
+async def set_healthcare(account_id: str, body: HealthcareIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/accounts/{id}/healthcare — {"is_healthcare": true | false}.
+
+    Healthcare clients get the audit log (api/services/audit.py). It's set
+    automatically for NAICS sector 62 at sign-up; this switches it by hand.
+
+    Returns:
+        dict: {"account": _person_out}.
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown account; 400 for a colleague (the owner holds it).
+    """
+    await _admin(token)
+    acc = await account_store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That account wasn't found.")
+    if acc.get("team_role") in ("developer", "member"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Set it on the business's owner.")
+    return {"account": await _person_out(await account_store.set_healthcare(account_id, body.is_healthcare) or acc)}
+
+
+@router.get("/hipaa-requests")
+async def hipaa_requests(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/admin/hipaa-requests — businesses asking to store health information (waiting first).
+
+    Returns:
+        dict: {"requests": [{"account_id", "name", "email", "company_name", "organization", "npi",
+        "lookup_url" (NPPES registry), "note", "status", "requested_at", ...}]}.
+    """
+    await _admin(token)
+    return {"requests": await hipaa.pending_requests()}
+
+
+@router.post("/hipaa-requests/{account_id}/{decision}")
+async def decide_hipaa(account_id: str, decision: str, body: HipaaDecisionIn,
+                       token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/hipaa-requests/{id}/approve (or /deny) — after checking the NPI in the NPPES registry.
+
+    Approve: storing works again and every access is audited — sign a Business Associate
+    Agreement with them before patient data is uploaded. Deny: storing works again for
+    ordinary business data (no patient health information, per the Terms).
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown decision or account; 400 nothing waiting.
+    """
+    me = await _admin(token)
+    if decision not in ("approve", "deny"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Use /approve or /deny.")
+    await hipaa.decide(account_id, decision == "approve", me, body.note)
+    return {"requests": await hipaa.pending_requests()}
+
+
+@router.post("/accounts/{account_id}/sign-out")
+async def sign_out_person(account_id: str, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/accounts/{id}/sign-out — sign someone out on every device (e.g. a lost laptop).
+
+    Returns:
+        dict: {"signed_out": n devices}.
+    """
+    await _admin(token)
+    return {"signed_out": await sessions.sign_out_all(account_id, "admin")}
+
+
+@router.post("/accounts/{account_id}/reset-mfa")
+async def reset_mfa(account_id: str, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/accounts/{id}/reset-mfa — clear two-step sign-in (they lost the phone AND the backup codes).
+
+    They're signed out everywhere and set it up again after signing in.
+
+    Returns:
+        dict: {"account": _person_out}.
+    """
+    await _admin(token)
+    acc = await account_store.get_account(account_id)
+    if acc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That account wasn't found.")
+    await mfa.reset(account_id)
+    await sessions.sign_out_all(account_id, "admin")
+    return {"account": await _person_out(await account_store.get_account(account_id))}
+
+
+# ── Prices (dim.plan_prices -> Stripe -> the whole site) ─────────────────────
+
+@router.get("/prices")
+async def prices(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/admin/prices — every plan's live price, its default, and who changed it last.
+
+    Args:
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: {"prices": price_store.list_prices(), "stripe": bool (Stripe is on)}.
+
+    Raises:
+        HTTPException: 403 for non-admins.
+
+    Example:
+        GET /api/admin/prices
+        -> 200 {"prices": [{"id": "all_tools", "monthly_usd": 99.0, "annual_usd": 990.0, ...}], "stripe": false}
+    """
+    await _admin(token)
+    return {"prices": await price_store.list_prices(), "stripe": billing.stripe_enabled()}
+
+
+@router.put("/prices/{plan_id}")
+async def change_price(plan_id: str, body: PlanPriceIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    PUT /api/admin/prices/{plan_id} — change a plan's monthly and annual price (price_store.set_price).
+
+    Stripe is updated first (when on); current subscribers keep their price.
+
+    Args:
+        plan_id: str, e.g. "data_visualization".
+        body: PlanPriceIn, {"monthly_usd": 24, "annual_usd": 240}.
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: {"prices": [...], "stripe": {"enabled": bool, "changes": [str, ...]}}.
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown plan; 400 price outside the
+            rules; 502 Stripe refused (nothing changed).
+
+    Example:
+        PUT /api/admin/prices/data_visualization   {"monthly_usd": 24, "annual_usd": 240}
+        -> 200 {"prices": [...], "stripe": {"enabled": true, "changes": ["replace price ...: $24.00 per month", ...]}}
+    """
+    me = await _admin(token)
+    return await price_store.set_price(plan_id, body.monthly_usd, body.annual_usd, me, trial_days=body.trial_days)
+
+
+# ── Seasonal sales (dim.seasonal_sales: they repeat every year) ──────────────
+
+@router.get("/sales")
+async def sales(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/admin/sales — every yearly sale, and the one running today.
+
+    Args:
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: {"sales": offers.list_sales(), "running": offers.current_sale() or None}.
+
+    Raises:
+        HTTPException: 403 for non-admins.
+
+    Example:
+        GET /api/admin/sales
+        -> 200 {"sales": [{"id": "new_year", "starts_on": "01-01", "ends_on": "01-31", ...}], "running": null}
+    """
+    await _admin(token)
+    return {"sales": await offers.list_sales(), "running": await offers.current_sale()}
+
+
+@router.put("/sales/{sale_id}")
+async def change_sale(sale_id: str, body: SeasonalSaleIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    PUT /api/admin/sales/{sale_id} — change a sale's name, dates (MM-DD), percent off, or switch it on / off.
+
+    No Stripe step: the coupon is made the first time a checkout needs it.
+
+    Args:
+        sale_id: str, e.g. "year_end".
+        body: SeasonalSaleIn.
+        token: dict, the decoded login token.
+
+    Returns:
+        dict: {"sales": [...], "running": ...} after the change.
+
+    Raises:
+        HTTPException: 403 non-admins; 404 unknown sale; 400 bad dates.
+
+    Example:
+        PUT /api/admin/sales/year_end
+        {"name": "Year-end sale", "starts_on": "11-24", "ends_on": "12-31", "percent_off": 25, "active": true}
+    """
+    me = await _admin(token)
+    await offers.set_sale(sale_id, name=body.name, starts_on=body.starts_on, ends_on=body.ends_on,
+                          percent_off=body.percent_off, active=body.active, admin=me)
+    return {"sales": await offers.list_sales(), "running": await offers.current_sale()}

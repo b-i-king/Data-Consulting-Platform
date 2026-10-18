@@ -25,8 +25,11 @@ WHAT THIS FILE DOES
    manual, weekly and daily (the default) are included; hourly and live are
    paid add-ons per connection (REFRESH_OPTIONS; rules in connections.py).
 
-ALL PRICES BELOW ARE PLACEHOLDERS. Edit them here (or move them into the
-database later) once you settle on your packages. The per-minute cleaning
+TOOL PRICES LIVE IN THE DATABASE (dim.plan_prices). The monthly / annual
+numbers written in SUBSCRIPTIONS below are only the DEFAULTS (and the seed in
+db/schema.sql). Change a price in the Admin panel (Admin -> Prices): it saves
+the row, updates Stripe, and calls apply_prices() so the whole site shows the
+new price at once (api/services/price_store.py). The per-minute cleaning
 rate is configured with the PRICE_PER_RUNTIME_MINUTE_USD environment variable.
 
 PRICING MODELS
@@ -46,7 +49,7 @@ labels as "capabilities" for the service cards.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from api.core.config import get_settings
 from api.services.skills_catalog import capability_labels
@@ -244,7 +247,7 @@ class Subscription:
     requires: tuple[str, ...] = ()  # tools that must be picked too (AI needs Data Engineering)
 
 
-# PLACEHOLDER PRICES — set your own, then run `python scripts/sync_stripe.py`.
+# DEFAULT PRICES — the live ones are in dim.plan_prices (Admin -> Prices).
 # Annual = 10 × monthly ("2 months free"). Order = order on the site: the
 # bundle first (shown wide, so it stands out), then the six tools.
 SUBSCRIPTIONS: tuple[Subscription, ...] = (
@@ -293,7 +296,41 @@ SUBSCRIPTIONS: tuple[Subscription, ...] = (
     ),
 )
 SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
+# The prices above, kept so the Admin panel can show "default $19" next to a
+# changed price (and so a plan with no dim.plan_prices row still has one).
+DEFAULT_PRICES: dict[str, tuple[float, float]] = {s.id: (s.monthly_usd, s.annual_usd) for s in SUBSCRIPTIONS}
+# Free-trial days per plan (dim.plan_prices.trial_days, set in Admin -> Prices;
+# missing = 0, no trial). Filled by price_store.load(); used by api/services/offers.py.
+TRIAL_DAYS: dict[str, int] = {}
 INTERVALS = ("month", "year")
+
+
+def apply_prices(prices: dict[str, tuple[float, float]]) -> None:
+    """
+    Swap in the live prices (from dim.plan_prices) for every plan listed.
+
+    Subscription objects are frozen (can't be edited), so each changed plan is
+    rebuilt with `dataclasses.replace` and SUBSCRIPTIONS / SUBSCRIPTIONS_BY_ID are
+    replaced. Every other module reads them as `pricing.SUBSCRIPTIONS`, so they
+    all see the new prices at once. Plans not listed keep their current price;
+    unknown plan ids are ignored.
+
+    Args:
+        prices: dict, plan id -> (monthly_usd, annual_usd).
+
+    Returns:
+        None.
+
+    Example:
+        >>> apply_prices({"data_visualization": (24.0, 240.0)})
+        >>> SUBSCRIPTIONS_BY_ID["data_visualization"].monthly_usd
+        24.0
+    """
+    global SUBSCRIPTIONS, SUBSCRIPTIONS_BY_ID
+    SUBSCRIPTIONS = tuple(
+        replace(s, monthly_usd=float(prices[s.id][0]), annual_usd=float(prices[s.id][1])) if s.id in prices else s
+        for s in SUBSCRIPTIONS)
+    SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
 BUNDLE = "all_tools"
 BASE = "data_cleaning"
 
@@ -501,7 +538,8 @@ def subscription_catalog() -> list[dict]:
     - "annual_per_month_usd": the annual price divided by 12;
     - "annual_savings_usd" / "annual_savings_pct": annual vs. 12 x monthly;
     - "bundle_savings_month_usd": bundle only, how much less per month than
-      picking every tool separately (0 for tools).
+      picking every tool separately (0 for tools);
+    - "trial_days": the free trial a first package with it gets (0 = none).
 
     Returns:
         list[dict]: one dict per item, in the order of SUBSCRIPTIONS (bundle first).
@@ -524,6 +562,7 @@ def subscription_catalog() -> list[dict]:
             "annual_savings_pct": round((full_year - s.annual_usd) / full_year * 100) if full_year else 0,
             # Bundle only: how much less than picking every tool separately (per month).
             "bundle_savings_month_usd": round(all_tools_month - s.monthly_usd, 2) if s.kind == "bundle" else 0,
+            "trial_days": TRIAL_DAYS.get(s.id, 0),
         })
     return out
 

@@ -42,7 +42,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { analyzeFiles, getCloudTableFile, getIntakeOptions, getLiveDatasetFile } from "@/lib/api";
+import { analyzeFiles, getCloudTableFile, getIntakeOptions, getLiveDatasetFile, signOutServer } from "@/lib/api";
 import { FALLBACK_BOOKING_URL, TOOL_NAMES } from "@/lib/format";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
 import type { AccountType, AnalyzeResponse, CleaningInput, CloudTable, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, LiveDataset, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
@@ -263,6 +263,7 @@ export default function Wizard() {
     setSession(s);
   };
   const onSignOut = () => {
+    void signOutServer(loadSession()?.token); // the token stops working on the server at once
     clearSession();
     setSession(null);
   };

@@ -1,7 +1,10 @@
-// The dashboard, in layers (api/services/dashboards.py):
+// The dashboard, in layers (api/services/dashboards.py), laid out like the Canva design:
 //
-//   BUSINESS CONTEXT  a strip at the top: the industry, what the business does,
-//                     its goals (Settings -> Account -> "About your business").
+//   HEADER BAR        the business name (and industry), the dashboard tabs, and
+//                     "Hello! <name>". Keep it to the one Overview when you can —
+//                     each extra tab re-runs its questions (more server work).
+//                     With no business context yet, a nudge sits under it
+//                     (Settings -> Account -> "About your business").
 //   OVERVIEW tab      built from the data automatically (Dashboard.tsx): totals
 //                     over time, comparisons, filters. Needs a date column.
 //   THEIR OWN TABS    each tab = saved plain-English questions ("total amount
@@ -39,6 +42,8 @@ export default function DashboardTabs(props: {
   canBuild: boolean;
   /** Open Settings -> Account (to edit "About your business"). */
   onEditContext: () => void;
+  /** Who's looking (the greeting): the signed-in person's first name. */
+  viewerName?: string | null;
 }) {
   const [info, setInfo] = useState<DashboardsInfo | null>(null);
   const [active, setActive] = useState<string>(OVERVIEW);
@@ -57,30 +62,14 @@ export default function DashboardTabs(props: {
 
   return (
     <div className="space-y-4">
-      {/* Business context: what this dashboard is built around. */}
-      {info && (
-        <div className="flex flex-col gap-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm sm:flex-row sm:items-start sm:justify-between">
-          {hasContext ? (
-            <div>
-              <span className="font-semibold">{info.company ?? "Your business"}</span>
-              {info.industry && <span className="ml-2 rounded-full bg-brand-soft px-2 py-0.5 text-xs">{info.industry}</span>}
-              {ctx?.about && <p className="mt-1 text-ink-muted">{ctx.about}</p>}
-              {ctx?.goals && <p className="mt-1 text-ink-muted"><strong className="text-ink">Goals:</strong> {ctx.goals}</p>}
-            </div>
-          ) : (
-            <p className="text-ink-muted">
-              <strong className="text-ink">Make this dashboard yours:</strong> tell us about the business and the questions
-              you ask most — we&apos;ll suggest the right tabs.
-            </p>
-          )}
-          <button type="button" className="shrink-0 text-xs text-brand hover:underline" onClick={props.onEditContext}>
-            {hasContext ? "Edit" : "Add business context"}
-          </button>
-        </div>
-      )}
-
-      {/* The tab bar: Overview first, then the client's own tabs. */}
-      <div role="tablist" aria-label="Dashboard tabs" className="flex flex-wrap items-center gap-2">
+      {/* The header bar (Canva): business name · dashboard tabs · greeting. */}
+      <header className="flex flex-wrap items-center gap-3 rounded-3xl border border-line bg-surface px-4 py-2.5 shadow-[var(--shadow-card)]">
+        <span className="flex min-w-0 items-center gap-2 font-semibold">
+          <span aria-hidden className="h-4 w-4 shrink-0 rotate-45 rounded-[5px] bg-brand" />
+          <span className="truncate">{info?.company ?? "Your business"}</span>
+          {info?.industry && <span className="hidden rounded-full bg-brand-soft px-2 py-0.5 text-xs font-normal sm:inline">{info.industry}</span>}
+        </span>
+      <div role="tablist" aria-label="Dashboard tabs" className="flex flex-wrap items-center gap-2 lg:mx-auto">
         {[{ id: OVERVIEW, name: "Overview" }, ...(info?.tabs ?? [])].map((t) => (
           <button
             key={t.id}
@@ -90,8 +79,8 @@ export default function DashboardTabs(props: {
               setActive(t.id);
               setEditing(null);
             }}
-            className={`rounded-full border px-4 py-1.5 text-sm ${
-              active === t.id ? "border-brand bg-brand-soft font-semibold" : "border-line bg-surface hover:border-brand"
+            className={`rounded-full px-4 py-1.5 text-sm ${
+              active === t.id ? "bg-brand font-semibold text-on-brand" : "text-ink-muted hover:text-ink"
             }`}
           >
             {t.name}
@@ -104,6 +93,17 @@ export default function DashboardTabs(props: {
           </button>
         )}
       </div>
+        <span className="ml-auto text-right text-xs leading-tight text-ink-muted">
+          Hello!<b className="block text-sm text-ink">{props.viewerName ?? ""}</b>
+        </span>
+      </header>
+      {info && !hasContext && (
+        <p className="text-sm text-ink-muted">
+          <strong className="text-ink">Make this dashboard yours:</strong> tell us about the business and the questions you ask
+          most — we&apos;ll suggest the right tabs.{" "}
+          <button type="button" className="text-brand hover:underline" onClick={props.onEditContext}>Add business context</button>
+        </p>
+      )}
       <ErrorBox message={error} />
 
       {editing ? (
@@ -121,7 +121,8 @@ export default function DashboardTabs(props: {
         />
       ) : active === OVERVIEW || !tab ? (
         props.hasDates ? (
-          <Dashboard key={props.groupId} input={props.input} groupId={props.groupId} />
+          <Dashboard key={props.groupId} input={props.input} groupId={props.groupId} title="Overview"
+            industry={info?.naics_sector} businessName={info?.company} viewerName={props.viewerName} />
         ) : (
           <Card>
             <p className="text-sm">

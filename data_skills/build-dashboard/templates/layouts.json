@@ -1,0 +1,28 @@
+{
+  "_about": "The dashboard's building blocks, from the Canva design 'SaaS Dashboard UI Desktop Prototype' (DAHYT0i6X68). Page = header (business name, dashboard tabs, greeting), title, subtitle, Filter button; then ABOVE THE FOLD the KPI row (1-4 cards), then container rows (any mix of the patterns below, as many rows as there are visuals). Widths are columns of a 6-column grid (phones: one column). layout.py picks and fills them; Dashboard.tsx and page.html draw them.",
+  "kpi_rows": {
+    "1": {"cards": 1, "canva_page": 7, "note": "one KPI, with a trend container beside it in the same row"},
+    "2": {"cards": 2, "canva_pages": [5, 6]},
+    "3": {"cards": 3, "canva_pages": [2, 3, 4]},
+    "4": {"cards": 4, "canva_page": 1}
+  },
+  "kpi_styles": {
+    "number": "the title and the big number (no earlier period to compare with)",
+    "change": "the title, the number and the change vs. the previous range (percentages in points)",
+    "gauge": "a half-circle dial 0-100% with the target band; only when every KPI on the row is a percentage",
+    "_rule": "one style per dashboard (layout.py kpi_style), so the KPI row looks consistent"
+  },
+  "row_patterns": {
+    "full": {"spans": [6], "note": "one wide container"},
+    "half_half": {"spans": [3, 3], "canva_pages": [2, 5, 6]},
+    "two_thirds_third": {"spans": [4, 2], "canva_page": 1},
+    "third_two_thirds": {"spans": [2, 4], "canva_page": 4},
+    "thirds": {"spans": [2, 2, 2], "canva_page": 3}
+  },
+  "visual_priority": [
+    "kpi cards (the KPI row)",
+    "line chart: trends over time",
+    "horizontal bar chart: categories (names on the left, value at the end of each bar)",
+    "complementary visuals (more trends, more breakdowns)"
+  ]
+}

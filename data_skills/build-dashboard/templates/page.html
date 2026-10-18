@@ -1,0 +1,353 @@
+<!doctype html>
+<!--
+  The downloadable dashboard, filled in by data_skills/build-dashboard/skill.py (render_html):
+  three placeholders (double-underscore TITLE, BLOCKS and DATA, used once each below) get
+  the title, the blocks in templates/kpi_card.html + container.html, and the skill's JSON.
+  No outside files: it opens offline and can be emailed.
+
+  Layout (the Canva design, see templates/layouts.json):
+    header     business name · dashboard tab · light / dark / system · "Hello! <name>"
+    title, subtitle, and the FILTER button (a panel opens beside it: the filters
+               this file was made with — filtering again needs the live site)
+    KPI ROW    1–4 cards, the first one the hero (above the fold)
+    ROWS       containers in the planned patterns (data.layout.rows): line charts
+               for trends, horizontal bar charts for categories
+    time bar   date range + comparison, floating at the bottom (like the site)
+  Changes are colored by each metric's direction: good = green, about the same
+  (under 0.5%) = gray, bad = red. Colors are the site's (web/app/globals.css).
+-->
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #f0f2f5; --surface: #ffffff; --surface2: #f6f7f9; --line: #d9dde3; --ink: #111827; --muted: #5f6675;
+    --brand: #a07c1e; --brand-soft: #f7f0dc; --on-brand: #111111; --cur: #a07c1e; --prev: #4f6fb8;
+    --good: #2b8a3e; --bad: #c92a2a; --neutral: #5f6675;
+    --mono: "Fira Code", ui-monospace, monospace; --shadow: 0 1px 2px rgb(16 24 40 / .06), 0 4px 16px rgb(16 24 40 / .06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1117; --surface: #1a1d26; --surface2: #222634; --line: #2e3244; --ink: #e8e8e8; --muted: #9aa0ae;
+    --brand: #c8ac44; --brand-soft: #2a2717; --on-brand: #0e1117; --cur: #a68a2c; --prev: #6f8fd8;
+    --good: #69db7c; --bad: #ff8787; --neutral: #9aa0ae; --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1117; --surface: #1a1d26; --surface2: #222634; --line: #2e3244; --ink: #e8e8e8; --muted: #9aa0ae;
+      --brand: #c8ac44; --brand-soft: #2a2717; --on-brand: #0e1117; --cur: #a68a2c; --prev: #6f8fd8;
+      --good: #69db7c; --bad: #ff8787; --neutral: #9aa0ae; --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .35);
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 16px 160px; }
+  button { font: inherit; color: inherit; }
+  /* Header bar */
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line);
+         border-radius: 999px; padding: 8px 10px 8px 18px; box-shadow: var(--shadow); }
+  .biz { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .biz i { width: 18px; height: 18px; border-radius: 5px; background: var(--brand); transform: rotate(45deg); display: inline-block; }
+  .tabs { display: flex; gap: 6px; margin: 0 auto; }
+  .tab { border: 0; border-radius: 999px; padding: 6px 14px; background: none; color: var(--muted); }
+  .tab[aria-selected="true"] { background: var(--brand); color: var(--on-brand); font-weight: 600; }
+  .hello { text-align: right; font-size: 12px; color: var(--muted); line-height: 1.2; }
+  .hello b { display: block; color: var(--ink); font-size: 13px; }
+  .theme { border: 1px solid var(--line); background: var(--surface2); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  /* Title, subtitle, filter */
+  .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 24px 0 16px; flex-wrap: wrap; }
+  h1 { font: 700 30px/1.15 var(--mono); margin: 0; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .filter-wrap { position: relative; }
+  .filter-btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--brand); background: var(--brand-soft);
+                color: var(--ink); border-radius: 999px; padding: 6px 14px 6px 8px; cursor: pointer; font-weight: 600; }
+  .filter-btn i { width: 22px; height: 22px; border-radius: 50%; background: var(--brand); display: inline-grid; place-items: center; }
+  .filter-btn i::before { content: ""; border: 5px solid transparent; border-top: 6px solid var(--on-brand); margin-top: 6px; }
+  .panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; width: min(320px, calc(100vw - 32px)); background: var(--surface);
+           border: 1px solid var(--line); border-radius: 16px; padding: 14px; box-shadow: var(--shadow); }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; }
+  .panel li { margin: 4px 0; } .panel ul { margin: 0; padding-left: 18px; } .panel p { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  /* KPI row and container rows: a 6-column grid (layouts.json spans) */
+  .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr !important; } .grid > * { grid-column: auto !important; } }
+  .kpi, .box { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 16px; box-shadow: var(--shadow); min-width: 0; }
+  .kpi.hero { background: linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 70%, var(--surface))); color: var(--on-brand); border-color: transparent; }
+  .kpi-label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; opacity: .8; }
+  .kpi-value { font: 700 28px/1.2 var(--mono); margin: 6px 0; font-variant-numeric: tabular-nums; }
+  .kpi-delta { font-size: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .pill { border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+  .pill.good { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .pill.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .pill.neutral { color: var(--neutral); background: color-mix(in srgb, var(--neutral) 14%, transparent); }
+  .kpi.hero .pill { background: color-mix(in srgb, var(--surface) 75%, transparent); }
+  .vs { opacity: .75; }
+  .kpi-bench { font-size: 11px; opacity: .75; margin-top: 6px; }
+  .center { justify-content: center; text-align: center; }
+  .kpi-gauge svg { max-width: 210px; margin: 4px auto 0; }
+  .kpi-gauge svg text { fill: currentColor; font: 700 17px var(--mono); }
+  .box-title { font: 600 15px/1.3 var(--mono); margin: 0 0 6px; }
+  .box-legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 6px; flex-wrap: wrap; }
+  .box-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .box-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  svg text { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; }
+  .hb { display: grid; grid-template-columns: minmax(70px, 34%) 1fr; gap: 6px 10px; align-items: center; font-size: 13px; }
+  .hb .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hb .track { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .hb .fill { height: 14px; border-radius: 0 6px 6px 0; background: var(--cur); min-width: 2px; }
+  .hb .val { font: 600 12px var(--mono); white-space: nowrap; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+         padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); display: none; z-index: 30; }
+  /* The time bar */
+  .timebar { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+  .seg { pointer-events: auto; display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; border: 1px solid var(--line); max-width: 100%; overflow-x: auto;
+         background: color-mix(in srgb, var(--surface) 70%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: var(--shadow); }
+  .seg button { border: 0; background: none; color: var(--muted); padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .seg button[aria-pressed="true"] { background: var(--brand); color: var(--on-brand); font-weight: 600; }
+</style>
+</head>
+<body>
+__BLOCKS__
+<main>
+  <header class="bar">
+    <span class="biz"><i aria-hidden="true"></i><span id="biz"></span></span>
+    <nav class="tabs" role="tablist" aria-label="Dashboards"><button class="tab" role="tab" aria-selected="true">Dashboard</button></nav>
+    <button class="theme" id="theme" type="button" aria-label="Color theme">System</button>
+    <span class="hello" id="hello"></span>
+  </header>
+  <div class="head">
+    <div><h1 id="title"></h1><p class="sub" id="sub"></p></div>
+    <div class="filter-wrap">
+      <button class="filter-btn" id="filterBtn" type="button" aria-expanded="false" aria-controls="filterPanel"><i aria-hidden="true"></i>Filter</button>
+      <div class="panel" id="filterPanel" hidden>
+        <h3>Filters in this file</h3>
+        <ul id="filterList"></ul>
+        <p>This file was saved with these filters. To filter again, open the dashboard on the site.</p>
+      </div>
+    </div>
+  </div>
+  <div class="grid" id="kpiRow"></div>
+  <div id="rows"></div>
+</main>
+<div class="timebar" role="group" aria-label="Date range and comparison">
+  <div class="seg" id="ranges" role="radiogroup" aria-label="Date range"></div>
+  <div class="seg" id="cmps" role="radiogroup" aria-label="Comparison"></div>
+</div>
+<div class="tip" id="tip"></div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var NEUTRAL_BAND = 0.005;   // a change under 0.5% reads as "about the same" (gray)
+  var state = { range: D.default_range, cmp: D.default_comparison };
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ── Theme: Light / Dark / System (like the site's switch) ──
+  var themes = ["system", "light", "dark"], ti = 0;
+  $("theme").onclick = function () {
+    ti = (ti + 1) % 3;
+    if (themes[ti] === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", themes[ti]);
+    $("theme").textContent = themes[ti][0].toUpperCase() + themes[ti].slice(1);
+  };
+
+  // ── Numbers in US formats, by the metric's format ──
+  function fmt(v, m) {
+    if (v === null || v === undefined || isNaN(v)) return "—";
+    var f = (D.metric_formats || {})[m] || "number";
+    var digits = Math.abs(v) < 100 ? 2 : 0;
+    if (f === "currency") return v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits });
+    if (f === "percent") return v.toLocaleString("en-US", { maximumFractionDigits: 1 }) + "%";
+    if (f === "days") return v.toLocaleString("en-US", { maximumFractionDigits: 1 }) + " days";
+    return v.toLocaleString("en-US", { maximumFractionDigits: digits });
+  }
+  function usDate(s) { var p = (s || "").slice(0, 10).split("-"); return p.length === 3 ? p[1] + "/" + p[2] + "/" + p[0] : s; }
+  function tone(pct, m) {
+    if (pct === null || pct === undefined) return "neutral";
+    if (Math.abs(pct) < NEUTRAL_BAND) return "neutral";
+    var up = pct > 0, lowerIsBetter = (D.metric_directions || {})[m] === "lower";
+    return (up !== lowerIsBetter) ? "good" : "bad";
+  }
+  function label(m) { return D.metric_labels[m] || m; }
+  // Percentages change in POINTS (60% -> 62% = "+2.0 pts"); everything else in %.
+  function isPct(m) { return (D.metric_formats || {})[m] === "percent"; }
+  function deltaPill(pill, k, m) {
+    if (k.pct_change === null || k.pct_change === undefined) { pill.className = "pill neutral"; pill.textContent = "—"; return; }
+    if (isPct(m)) {
+      var pts = k.change || 0, lower = (D.metric_directions || {})[m] === "lower";
+      pill.className = "pill " + (Math.abs(pts) < 0.5 ? "neutral" : ((pts > 0) !== lower ? "good" : "bad"));
+      pill.textContent = (pts >= 0 ? "▲ " : "▼ ") + Math.abs(pts).toFixed(1) + " pts";
+    } else {
+      pill.className = "pill " + tone(k.pct_change, m);
+      pill.textContent = (k.pct_change >= 0 ? "▲ " : "▼ ") + Math.abs(k.pct_change * 100).toFixed(1) + "%";
+    }
+  }
+  // A half-circle dial 0-100% with the target band (industry_metrics.json "target").
+  function gauge(v, target, hero) {
+    var NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 120 68"); svg.setAttribute("role", "img");
+    function pt(x) { var a = Math.PI * (1 - Math.min(100, Math.max(0, x)) / 100); return [60 + 48 * Math.cos(a), 60 - 48 * Math.sin(a)]; }
+    function arc(a, b, color, width, op) {
+      var p = pt(a), q = pt(b), path = document.createElementNS(NS, "path");
+      path.setAttribute("d", "M " + p[0] + " " + p[1] + " A 48 48 0 0 1 " + q[0] + " " + q[1]);
+      path.setAttribute("fill", "none"); path.setAttribute("stroke", color); path.setAttribute("stroke-width", width);
+      path.setAttribute("stroke-linecap", "round"); if (op) path.setAttribute("stroke-opacity", op); svg.append(path);
+    }
+    arc(0, 100, hero ? "color-mix(in srgb, var(--on-brand) 25%, transparent)" : "var(--line)", 10);
+    if (target) arc(target[0], target[1], "var(--good)", 10, "0.45");
+    if (v) arc(0, v, hero ? "var(--on-brand)" : "var(--brand)", 6);
+    var t = document.createElementNS(NS, "text"); t.setAttribute("x", 60); t.setAttribute("y", 56); t.setAttribute("text-anchor", "middle");
+    t.textContent = (v === null || v === undefined) ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: 1 }) + "%"; svg.append(t);
+    return svg;
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+
+  // ── Header, title, filters ──
+  $("biz").textContent = D.business_name || "Your business";
+  $("hello").innerHTML = ""; $("hello").append(document.createTextNode("Hello!"), el("b", "", D.viewer_name || ""));
+  $("title").textContent = D.title || "Dashboard";
+  $("filterBtn").onclick = function () {
+    var open = $("filterPanel").hidden; $("filterPanel").hidden = !open; $("filterBtn").setAttribute("aria-expanded", String(open));
+  };
+  var applied = Object.keys(D.filters || {});
+  $("filterList").innerHTML = "";
+  if (!applied.length) $("filterList").append(el("li", "", "None — every row is included."));
+  applied.forEach(function (c) { $("filterList").append(el("li", "", (D.filter_labels[c] || c) + ": " + D.filters[c].join(", "))); });
+
+  // ── Charts ──
+  var tip = $("tip");
+  function lineChart(rows, m, prev) {
+    var W = 640, H = 220, L = 54, R = 10, T = 10, B = 26;
+    var vals = rows.map(function (r) { return r.value; }).concat(prev ? rows.map(function (r) { return r.prior_range; }) : []).filter(function (v) { return v !== null && v !== undefined; });
+    var svgNS = "http://www.w3.org/2000/svg", svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label(m) + " over time");
+    if (!rows.length || !vals.length) { var t = document.createElementNS(svgNS, "text"); t.setAttribute("x", 10); t.setAttribute("y", 20); t.textContent = "Not enough dates for a chart yet."; svg.append(t); return svg; }
+    var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max.apply(null, vals) || 1;
+    var x = function (i) { return L + (rows.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (rows.length - 1)); };
+    var y = function (v) { return T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1)); };
+    for (var g = 0; g <= 3; g++) {
+      var gv = lo + (hi - lo) * g / 3, ln = document.createElementNS(svgNS, "line");
+      ln.setAttribute("x1", L); ln.setAttribute("x2", W - R); ln.setAttribute("y1", y(gv)); ln.setAttribute("y2", y(gv));
+      ln.setAttribute("stroke", "var(--line)"); svg.append(ln);
+      var tx = document.createElementNS(svgNS, "text"); tx.setAttribute("x", L - 6); tx.setAttribute("y", y(gv) + 4); tx.setAttribute("text-anchor", "end"); tx.textContent = fmt(gv, m); svg.append(tx);
+    }
+    [0, rows.length - 1].forEach(function (i) {
+      var tx = document.createElementNS(svgNS, "text"); tx.setAttribute("x", x(i)); tx.setAttribute("y", H - 6);
+      tx.setAttribute("text-anchor", i ? "end" : "start"); tx.textContent = usDate(rows[i].period); svg.append(tx);
+    });
+    function path(key, color, dash) {
+      var d = "", started = false;
+      rows.forEach(function (r, i) { var v = r[key]; if (v === null || v === undefined) { started = false; return; } d += (started ? "L" : "M") + x(i) + " " + y(v) + " "; started = true; });
+      var p = document.createElementNS(svgNS, "path"); p.setAttribute("d", d); p.setAttribute("fill", "none"); p.setAttribute("stroke", color);
+      p.setAttribute("stroke-width", "2.5"); p.setAttribute("stroke-linejoin", "round"); if (dash) p.setAttribute("stroke-dasharray", "5 4"); svg.append(p);
+    }
+    if (prev) path("prior_range", "var(--prev)", true);
+    path("value", "var(--cur)", false);
+    rows.forEach(function (r, i) {
+      var hit = document.createElementNS(svgNS, "rect"); hit.setAttribute("x", x(i) - 8); hit.setAttribute("y", T); hit.setAttribute("width", 16); hit.setAttribute("height", H - T - B); hit.setAttribute("fill", "transparent");
+      hit.addEventListener("mousemove", function (e) {
+        tip.style.display = "block"; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px";
+        tip.textContent = usDate(r.period) + ": " + fmt(r.value, m) + (r.prior_range !== null && r.prior_range !== undefined ? " (before: " + fmt(r.prior_range, m) + ")" : "");
+      });
+      hit.addEventListener("mouseleave", function () { tip.style.display = "none"; });
+      svg.append(hit);
+    });
+    return svg;
+  }
+  // Horizontal bars: names on the left, each value at the end of its bar.
+  function hbar(items, m) {
+    var wrap = el("div", "hb"), max = Math.max.apply(null, items.map(function (b) { return b.current; }).concat([0])) || 1;
+    if (!items.length) { wrap.append(el("span", "", "No categories in this range.")); return wrap; }
+    items.forEach(function (b) {
+      var name = el("span", "name", b.category); name.title = b.category;
+      var track = el("span", "track"), fill = el("span", "fill"); fill.style.width = Math.max(1, 100 * b.current / max) * 0.78 + "%";
+      var val = el("span", "val", fmt(b.current, m));
+      if (b.pct_change !== null && b.pct_change !== undefined) { var t = el("span", "pill " + tone(b.pct_change, m), (b.pct_change >= 0 ? "▲ " : "▼ ") + Math.abs(b.pct_change * 100).toFixed(1) + "%"); val.append(" ", t); }
+      track.append(fill, val); wrap.append(name, track);
+    });
+    return wrap;
+  }
+
+  // ── KPI row and containers ──
+  // ONE style for the whole row: number, change or gauge (data.kpi_style).
+  function kpiCard(m, hero) {
+    var style = D.kpi_style || "change";
+    var tpl = style === "number" ? "tpl-kpi-number" : style === "gauge" ? "tpl-kpi-gauge" : "tpl-kpi";
+    var node = document.getElementById(tpl).content.firstElementChild.cloneNode(true);
+    var k = D.ranges[state.range].kpis[m] || {}, target = (D.metric_targets || {})[m];
+    if (hero) node.classList.add("hero");
+    node.querySelector(".kpi-label").textContent = label(m);
+    if (style === "gauge") {
+      node.querySelector(".kpi-gauge").append(gauge(k.current, target, hero));
+      var pills = node.querySelectorAll(".pill"), st = pills[0];
+      if (target && k.current !== undefined) {
+        var inside = k.current >= target[0] && k.current <= target[1], above = k.current > target[1];
+        var good = inside || (above === ((D.metric_directions || {})[m] !== "lower"));
+        st.className = "pill " + (good ? "good" : "bad");
+        st.textContent = inside ? "On target" : (above ? "Above target" : "Below target");
+      } else st.remove();
+      deltaPill(pills[1], k, m);
+      node.querySelector(".kpi-bench").textContent = target ? "Target " + target[0] + "–" + target[1] + "%" : "";
+      return node;
+    }
+    node.querySelector(".kpi-value").textContent = fmt(k.current, m);
+    if (style === "change") {
+      deltaPill(node.querySelector(".pill"), k, m);
+      node.querySelector(".vs").textContent = k.pct_change === null || k.pct_change === undefined ? "no previous period" : "vs. previous " + D.range_labels[state.range].toLowerCase();
+    }
+    node.querySelector(".kpi-bench").textContent = (D.metric_benchmarks || {})[m] || "";
+    return node;
+  }
+  function container(v, span) {
+    var node = document.getElementById("tpl-container").content.firstElementChild.cloneNode(true);
+    node.style.gridColumn = "span " + span;
+    node.querySelector(".box-title").textContent = v.title;
+    var body = node.querySelector(".box-body"), legend = node.querySelector(".box-legend"), R = D.ranges[state.range];
+    if (v.kind === "line") {
+      var rows = (R.series[state.cmp] || {})[v.metric] || [], w = R.window;
+      legend.innerHTML = '<span><i style="background:var(--cur)"></i>This period</span>' + (w.prev_start ? '<span><i style="background:var(--prev)"></i>Previous (' + usDate(w.prev_start) + " – " + usDate(w.prev_end) + ")</span>" : "");
+      body.append(lineChart(rows, v.metric, !!w.prev_start));
+      node.querySelector(".box-note").textContent = rows.length && rows[rows.length - 1].partial ? "The last period is still in progress." : "";
+    } else {
+      legend.remove();
+      body.append(hbar(((D.breakdowns || {})[v.dimension] || {})[state.range] || [], v.metric));
+    }
+    return node;
+  }
+  function draw() {
+    var Lay = D.layout, R = D.ranges[state.range], w = R.window;
+    $("sub").textContent = (D.subtitle || "") + " · " + D.range_labels[state.range] + ": " + usDate(w.start) + " – " + usDate(w.end);
+    var row = $("kpiRow"); row.innerHTML = "";
+    // 1–4 equal cards; a single card shares its row with a trend (span 2 + 4 of 6, Canva page 7).
+    var n = Lay.kpi_row.length;
+    row.style.gridTemplateColumns = Lay.kpi_side ? "" : "repeat(" + n + ", minmax(0, 1fr))";
+    Lay.kpi_row.forEach(function (m, i) {
+      var card = kpiCard(m, i === 0); card.style.gridColumn = Lay.kpi_side ? "span 2" : "auto"; row.append(card);
+    });
+    if (Lay.kpi_side) row.append(container(Lay.kpi_side, 4));
+    var rowsEl = $("rows"); rowsEl.innerHTML = "";
+    Lay.rows.forEach(function (r) {
+      var g = el("div", "grid"); r.items.forEach(function (v, i) { g.append(container(v, r.spans[i])); }); rowsEl.append(g);
+    });
+  }
+
+  // ── Time bar ──
+  function seg(id, options, key) {
+    var box = $(id); box.innerHTML = "";
+    Object.keys(options).forEach(function (k) {
+      var b = el("button", "", options[k]); b.type = "button"; b.setAttribute("aria-pressed", String(state[key] === k));
+      b.onclick = function () { state[key] = k; if (key === "range" && !(D.ranges[k].series[state.cmp])) state.cmp = Object.keys(D.ranges[k].series)[0] || state.cmp; seg("ranges", rangeOpts(), "range"); seg("cmps", cmpOpts(), "cmp"); draw(); };
+      box.append(b);
+    });
+    box.hidden = Object.keys(options).length < 2;
+  }
+  function rangeOpts() { var o = {}; (D.available_ranges || []).forEach(function (k) { o[k] = D.range_labels[k]; }); return o; }
+  function cmpOpts() { var o = {}; Object.keys(D.ranges[state.range].series).forEach(function (k) { o[k] = D.comparison_labels[k]; }); return o; }
+  seg("ranges", rangeOpts(), "range"); seg("cmps", cmpOpts(), "cmp"); draw();
+})();
+</script>
+</body>
+</html>

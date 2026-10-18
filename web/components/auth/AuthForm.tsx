@@ -39,12 +39,21 @@
 //     (and the server refuses an address that already has an account)
 //   * location: picked from the city list, never free text
 // Messages appear under each field once you leave it (or press Create account).
+//
+// WRONG PASSWORDS (api/services/login_guard.py): each one says how many tries
+// are left; after 3 in a row sign-in is locked for 15 minutes. When one try is
+// left, or once locked, a "Reset my password" button appears under the error:
+// it emails the reset link to the address typed (a reset unlocks at once).
+//
+// TWO-STEP SIGN-IN (api/services/mfa.py): when the account has it on, the
+// password step answers "mfa_required" with a 5-minute ticket, and the form
+// asks for the 6-digit code from the authenticator app (or a backup code).
 
 "use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { getConsultants, signin, signup } from "@/lib/api";
+import { ApiError, forgotPassword, getConsultants, signin, signinMfa, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
 import type { AccountType, ConsultantLoad, ConsultantPlan, Industry, Location, SignupAs, TeamMemberInput } from "@/lib/types";
 import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
@@ -144,6 +153,11 @@ export default function AuthForm({
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState(""); // sign-up: the password typed again
   const [notice, setNotice] = useState<string | null>(null); // e.g. "check your email"
+  // Offer "Reset my password" after a wrong password (last try left) or once sign-in is locked.
+  const [offerReset, setOfferReset] = useState(false);
+  // Two-step sign-in: the ticket from the password step, and the code typed.
+  const [mfaTicket, setMfaTicket] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState<Location | null>(null);
   const [team, setTeam] = useState<TeamMemberInput[]>([]);
@@ -207,6 +221,7 @@ export default function AuthForm({
     setSubmitted(true);
     setError(null);
     setNotice(null);
+    setOfferReset(false);
     if (hasErrors) return; // messages are now shown under each field
     setBusy(true);
     try {
@@ -232,7 +247,13 @@ export default function AuthForm({
                   }
                 : {}),
             });
-      if (!res.access_token || res.needs_confirmation) {
+      if (res.mfa_required && res.mfa_ticket) {
+        // The password was right; now the authenticator code.
+        setMfaTicket(res.mfa_ticket);
+        setNotice(res.message ?? "Enter the 6-digit code from your authenticator app.");
+        return;
+      }
+      if (!res.access_token || !res.account || res.needs_confirmation) {
         // Supabase wants the email confirmed first: no session yet.
         setNotice(res.message ?? "Check your email for a confirmation link, then sign in.");
         setMode("signin");
@@ -244,10 +265,80 @@ export default function AuthForm({
       onSignedIn({ token: res.access_token, account: res.account });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
+      // 429 = locked; a 401 that mentions resetting = one try left.
+      if (mode === "signin" && err instanceof ApiError)
+        setOfferReset(err.status === 429 || (err.status === 401 && err.message.includes("Reset your password")));
     } finally {
       setBusy(false);
     }
   }
+
+  /** Step two: send the authenticator (or backup) code with the ticket. */
+  async function submitCode(e: FormEvent) {
+    e.preventDefault();
+    if (!mfaTicket) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await signinMfa(mfaTicket, mfaCode.trim());
+      if (res.access_token && res.account) onSignedIn({ token: res.access_token, account: res.account });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code didn't work.");
+      if (err instanceof ApiError && err.status === 401 && err.message.includes("sign in again")) setMfaTicket(null);
+      if (err instanceof ApiError) setOfferReset(err.status === 429);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Email the reset link to the address typed (same reply whether or not it has an account). */
+  async function sendReset() {
+    setBusy(true);
+    try {
+      setNotice((await forgotPassword(email.trim())).message);
+      setError(null);
+      setOfferReset(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We couldn't send the reset link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (mfaTicket)
+    return (
+      <>
+        <StepHeader title="Two-step sign-in" subtitle="Open your authenticator app and type the 6-digit code for this site." />
+        <form onSubmit={submitCode} className="max-w-sm space-y-4" noValidate>
+          <input
+            className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-center font-mono text-lg tracking-widest outline-none focus:border-brand"
+            value={mfaCode}
+            onChange={(e) => setMfaCode(e.target.value)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            aria-label="6-digit code"
+            placeholder="123456"
+            autoFocus
+          />
+          <p className="text-xs text-ink-muted">Lost your phone? Type one of your backup codes instead (like 7f3k-9q2m).</p>
+          <ErrorBox message={error} />
+          {offerReset && (
+            <Button variant="secondary" onClick={sendReset} disabled={busy}>
+              Reset my password
+            </Button>
+          )}
+          <div className="flex flex-wrap items-center gap-4">
+            <Button type="submit" disabled={busy || mfaCode.trim().length < 6}>
+              {busy ? "Checking…" : "Verify"}
+            </Button>
+            <button type="button" className="text-sm text-brand hover:underline"
+              onClick={() => { setMfaTicket(null); setMfaCode(""); setNotice(null); setError(null); }}>
+              Back to sign-in
+            </button>
+          </div>
+        </form>
+      </>
+    );
 
   return (
     <>
@@ -489,6 +580,11 @@ export default function AuthForm({
           </p>
         )}
         <ErrorBox message={error} />
+        {offerReset && (
+          <Button variant="secondary" onClick={sendReset} disabled={busy}>
+            Reset my password
+          </Button>
+        )}
 
         <div className="flex flex-wrap items-center gap-4">
           <Button type="submit" disabled={busy || (mode === "signup" && !acceptTerms)}>
