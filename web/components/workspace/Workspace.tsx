@@ -616,7 +616,7 @@ export default function Workspace() {
     const isLocked = !s.active;
     return (
       <li key={s.id} className="shrink-0 lg:shrink">
-        <div className={`flex items-center gap-1 rounded-xl ${current === s.id ? "bg-brand-soft" : "hover:bg-surface-2"} ${isLocked ? "opacity-55" : ""}`}>
+        <div className={`flex items-center gap-1 rounded-xl ${current === s.id ? "bg-brand-soft" : "hover:bg-surface-2"} ${isLocked ? "opacity-80" : ""}`}>
           <button
             type="button"
             onClick={() => goTo(s.id)}
@@ -639,7 +639,7 @@ export default function Workspace() {
                 setInfoOpen(infoOpen === s.id ? null : s.id);
                 goTo(s.id);
               }}
-              className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line text-xs font-semibold text-ink-muted hover:border-brand hover:text-brand"
+              className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line text-xs font-semibold text-ink-muted hover:border-brand hover:text-brand-ink"
             >
               i
             </button>
@@ -708,7 +708,7 @@ export default function Workspace() {
         <Tour id="workspace" steps={WORKSPACE_TOUR} />
         {accountTab ? (
           <nav aria-label="Settings" className="lg:flex-1">
-            <button type="button" onClick={() => setAccountTab(null)} className="mb-3 px-3 text-sm text-brand hover:underline">
+            <button type="button" onClick={() => setAccountTab(null)} className="mb-3 px-3 text-sm text-brand-ink hover:underline">
               ← Back to workspace
             </button>
             <ul className="flex gap-1 overflow-x-auto pb-1 lg:flex-col">
@@ -1112,6 +1112,8 @@ export default function Workspace() {
                 canBuild={!!plan?.active.includes(DASHBOARD)}
                 onEditContext={() => setAccountTab("account")}
                 viewerName={session.account.first_name}
+                // One file: its name ("sales.csv" -> "Sales"); several files or a database: the table's label.
+                dataName={files.length === 1 ? files[0].name : group.label}
               />
             )}
 

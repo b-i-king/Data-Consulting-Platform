@@ -24,8 +24,8 @@
 <style>
   :root {
     --bg: #f0f2f5; --surface: #ffffff; --surface2: #f6f7f9; --line: #d9dde3; --ink: #111827; --muted: #5f6675;
-    --brand: #a07c1e; --brand-soft: #f7f0dc; --on-brand: #111111; --cur: #a07c1e; --prev: #4f6fb8;
-    --good: #2b8a3e; --bad: #c92a2a; --neutral: #5f6675;
+    --brand: #a07c1e; --brand-ink: #7d5f12; --brand-soft: #f7f0dc; --on-brand: #111111; --cur: #a07c1e; --prev: #4f6fb8;
+    --good: #1f6f2e; --bad: #b22424; --neutral: #5f6675;
     --mono: "Fira Code", ui-monospace, monospace; --shadow: 0 1px 2px rgb(16 24 40 / .06), 0 4px 16px rgb(16 24 40 / .06);
   }
   :root[data-theme="dark"] {
@@ -48,7 +48,9 @@
   /* Header bar */
   .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line);
          border-radius: 999px; padding: 8px 10px 8px 18px; box-shadow: var(--shadow); }
-  .biz { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .biz { font-weight: 700; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  /* A long name is cut with "…" (the full name shows on hover). */
+  #biz { max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .biz i { width: 18px; height: 18px; border-radius: 5px; background: var(--brand); transform: rotate(45deg); display: inline-block; }
   .tabs { display: flex; gap: 6px; margin: 0 auto; }
   .tab { border: 0; border-radius: 999px; padding: 6px 14px; background: none; color: var(--muted); }
@@ -113,7 +115,7 @@ __BLOCKS__
 <main>
   <header class="bar">
     <span class="biz"><i aria-hidden="true"></i><span id="biz"></span></span>
-    <nav class="tabs" role="tablist" aria-label="Dashboards"><button class="tab" role="tab" aria-selected="true">Dashboard</button></nav>
+    <nav class="tabs" role="tablist" aria-label="Dashboards"><button class="tab" role="tab" aria-selected="true" id="tabName">Overview</button></nav>
     <button class="theme" id="theme" type="button" aria-label="Color theme">System</button>
     <span class="hello" id="hello"></span>
   </header>
@@ -131,10 +133,10 @@ __BLOCKS__
   <div class="grid" id="kpiRow"></div>
   <div id="rows"></div>
 </main>
-<div class="timebar" role="group" aria-label="Date range and comparison">
-  <div class="seg" id="ranges" role="radiogroup" aria-label="Date range"></div>
-  <div class="seg" id="cmps" role="radiogroup" aria-label="Comparison"></div>
-</div>
+<nav class="timebar" aria-label="Date range and comparison">
+  <div class="seg" id="ranges" role="group" aria-label="Date range"></div>
+  <div class="seg" id="cmps" role="group" aria-label="Comparison"></div>
+</nav>
 <div class="tip" id="tip"></div>
 <script id="data" type="application/json">__DATA__</script>
 <script>
@@ -206,9 +208,10 @@ __BLOCKS__
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 
   // ── Header, title, filters ──
-  $("biz").textContent = D.business_name || "Your business";
+  $("biz").textContent = D.business_name || "Your business"; $("biz").title = $("biz").textContent;
+  $("tabName").textContent = D.tab_name || "Overview";   // the web app's tab name
   $("hello").innerHTML = ""; $("hello").append(document.createTextNode("Hello!"), el("b", "", D.viewer_name || ""));
-  $("title").textContent = D.title || "Dashboard";
+  $("title").textContent = D.title || "At a glance";     // the heading (not the tab name, so it doesn't repeat)
   $("filterBtn").onclick = function () {
     var open = $("filterPanel").hidden; $("filterPanel").hidden = !open; $("filterBtn").setAttribute("aria-expanded", String(open));
   };

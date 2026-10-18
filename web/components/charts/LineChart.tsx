@@ -90,9 +90,12 @@ export default function LineChart(props: {
     <div className="relative" ref={boxRef}>
       {series.length > 1 && (
         <div className="mb-2 flex flex-wrap gap-4 text-xs text-ink-muted">
-          {series.map((s) => (
+          {series.map((s, i) => (
             <span key={s.name} className="inline-flex items-center gap-1.5">
-              <span className="inline-block h-0.5 w-3.5 rounded" style={{ background: s.color }} />
+              {/* Solid for the main line, dashed for the others — told apart without color too. */}
+              <svg width="16" height="4" aria-hidden="true">
+                <line x1="0" y1="2" x2="16" y2="2" stroke={s.color} strokeWidth="2" strokeDasharray={i ? "4 3" : undefined} />
+              </svg>
               {s.name}
             </span>
           ))}
@@ -139,6 +142,8 @@ export default function LineChart(props: {
                 stroke={s.color}
                 strokeWidth={2}
                 strokeLinejoin="round"
+                // The comparison lines are dashed, so the chart doesn't rely on color alone (WCAG 1.4.1).
+                strokeDasharray={isMain ? undefined : "5 4"}
               />
               {fade && s.values[last] != null && s.values[last - 1] != null && (
                 <>

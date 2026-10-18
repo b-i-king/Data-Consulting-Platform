@@ -101,7 +101,7 @@ export default function SocialLinks() {
           rel="noopener noreferrer"
           aria-label={link.label}
           title={link.label}
-          className="text-ink-muted transition-colors hover:text-brand"
+          className="text-ink-muted transition-colors hover:text-brand-ink"
         >
           {link.icon}
         </a>

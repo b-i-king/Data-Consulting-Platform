@@ -134,7 +134,7 @@ export default function AssistantPanel(props: {
           </div>
           {usage && (
             <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-              usage.tier === "free" ? "bg-surface-2 text-ink-muted" : "bg-brand-soft text-brand"}`}>
+              usage.tier === "free" ? "bg-surface-2 text-ink-muted" : "bg-brand-soft text-brand-ink"}`}>
               {TIER_LABEL[usage.tier]}
               {usage.simulating && " (simulated)"}
             </span>
@@ -151,7 +151,7 @@ export default function AssistantPanel(props: {
               <div className="grid gap-2 sm:grid-cols-2">
                 {prompts.map((s) => (
                   <button key={s} type="button" disabled={busy || outOfQuestions} onClick={() => ask(s)}
-                    className="rounded-xl border border-line px-3 py-2 text-left text-sm text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:opacity-50">
+                    className="rounded-xl border border-line px-3 py-2 text-left text-sm text-ink-muted transition-colors hover:border-brand hover:text-brand-ink disabled:opacity-50">
                     {s}
                   </button>
                 ))}
@@ -255,7 +255,7 @@ export default function AssistantPanel(props: {
             {prompts.map((s) => (
               <li key={s}>
                 <button type="button" disabled={busy || outOfQuestions} onClick={() => ask(s)}
-                  className="w-full truncate rounded-lg px-2 py-1 text-left text-xs text-ink-muted hover:bg-surface-2 hover:text-brand disabled:opacity-50">
+                  className="w-full truncate rounded-lg px-2 py-1 text-left text-xs text-ink-muted hover:bg-surface-2 hover:text-brand-ink disabled:opacity-50">
                   {s}
                 </button>
               </li>
@@ -270,7 +270,7 @@ export default function AssistantPanel(props: {
               {frequent.map((f) => (
                 <li key={f.question} className="flex justify-between gap-2">
                   <button type="button" disabled={busy || outOfQuestions} onClick={() => ask(f.question)}
-                    className="truncate text-left text-ink-muted hover:text-brand disabled:opacity-50">
+                    className="truncate text-left text-ink-muted hover:text-brand-ink disabled:opacity-50">
                     {f.question}
                   </button>
                   <span className="shrink-0 font-mono text-ink-muted">{f.times}×</span>
@@ -290,7 +290,7 @@ export default function AssistantPanel(props: {
             {props.columns.slice(0, 24).map((c) => (
               <button key={c.name} type="button" onClick={() => setText((t) => (t ? `${t} ${c.name}` : c.name))}
                 title="Add to your question"
-                className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-ink-muted hover:text-brand">
+                className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-ink-muted hover:text-brand-ink">
                 {c.name}
               </button>
             ))}

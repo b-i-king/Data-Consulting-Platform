@@ -99,7 +99,7 @@ SKILL = SkillSpec(
         "range": Param("choice", "last_3_months", "Default range shown", tuple(_time.RANGES)),
         "comparison": Param("choice", "auto", "Default comparison", ("auto", *(_time.COMPARISONS))),
         "as_of": Param("str", None, "End date for ranges, YYYY-MM-DD (default: latest date in the data)"),
-        "title": Param("str", "Dashboard", "Dashboard title"),
+        "title": Param("str", "At a glance", "The heading above the KPI cards"),
         "subtitle": Param("str", None, "Line under the title (default: what the dashboard covers)"),
         "industry": Param("str", None, "NAICS sector for industry KPIs, e.g. 72 or 44-45 (the site sends the "
                                       "client's industry; empty = generic KPIs only)"),
@@ -338,7 +338,7 @@ def _apply_filters(data: pd.DataFrame, filters: dict | None) -> tuple[pd.DataFra
 
 def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, top_kpis=4, filters=None,
         filter_columns=None, value_columns=None, dimension_column=None, agg="sum",
-        range="last_3_months", comparison="auto", as_of=None, title="Dashboard",
+        range="last_3_months", comparison="auto", as_of=None, title="At a glance",
         include_html=True, subtitle=None, industry=None, business_name=None, viewer_name=None,
         kpi_style="auto") -> SkillResult:
     """
@@ -372,7 +372,7 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         range: default range shown (default "last_3_months"; falls back if the data is too short).
         comparison: "auto" (default), "dod", "wow" or "mom".
         as_of: end date for the ranges, YYYY-MM-DD (default: the latest date in the data).
-        title: dashboard title (default "Dashboard").
+        title: the heading above the KPI cards (default "At a glance"; not the tab name, so they never repeat).
         include_html: also build the self-contained HTML dashboard (default True).
 
     Returns:
@@ -622,8 +622,8 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         kpi_candidates = percent_kpis
     dash_layout = layout.plan(kpi_candidates, visuals)
     if subtitle is None:
-        subtitle = (f"{industry_mod.sector_name(industry_code)} KPIs and how your business is doing over time"
-                    if found else "How your business is doing over time")
+        subtitle = _subtitle(dash_layout["kpi_row"], labels, dims,
+                             industry_mod.sector_name(industry_code) if found else None)
 
     payload = json_safe({
         "title": title, "subtitle": subtitle, "date_column": date_col,
@@ -665,6 +665,43 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         tables={f"kpis_{range}": [{"kpi": labels[m], **v} for m, v in ranges[range]["kpis"].items()]},
         artifacts=artifacts, data=payload,
     )
+
+
+def _subtitle(kpi_row: list[str], labels: dict, dims: list[str], sector: str | None) -> str:
+    """
+    The line under the heading, written from what THIS dashboard shows (works for
+    a business or an individual — it never says "your business").
+
+    Args:
+        kpi_row: metric ids in the KPI row, in order.
+        labels: metric id -> label ("Total amount").
+        dims: the category columns the bar charts break down by.
+        sector: the NAICS sector name when industry KPIs were found, else None.
+
+    Returns:
+        str: e.g. "Total amount, transactions and average per transaction over time,
+        by order type, product and 2 more"; with industry KPIs it starts
+        "Accommodation and Food Services KPIs: ...".
+
+    Example:
+        >>> _subtitle(["__total__"], {"__total__": "Total amount"}, ["store"], None)
+        'Total amount over time, by store'
+    """
+    def lower_first(s: str) -> str:
+        # "Transactions" -> "transactions", but short forms stay ("KPI", "NPS").
+        return s if s[1:2].isupper() else s[:1].lower() + s[1:]
+
+    def join(items: list[str]) -> str:
+        return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+    names = [labels.get(m, m) for m in kpi_row] or ["Your numbers"]
+    text = join([names[0], *map(lower_first, names[1:])]) + " over time"
+    if dims:
+        shown = [_label(d).lower() for d in dims[:2]]
+        if len(dims) > 2:
+            shown.append(f"{len(dims) - 2} more")
+        text += ", by " + join(shown)
+    return f"{sector} KPIs: {lower_first(text)}" if sector else text
 
 
 def _totals(data: pd.DataFrame, date_col: str, spec: dict, w) -> dict:
@@ -791,12 +828,27 @@ def render_html(payload: dict) -> str:
     Returns:
         str: one self-contained HTML file (no outside files: it opens offline).
     """
+    safe = json.dumps(payload).replace("</", "<\\/")   # a "</script>" inside the data can't end the script early
+    title = (payload.get("title") or "At a glance").replace("<", "&lt;")
+    return page_template().replace("__TITLE__", title).replace("__DATA__", safe)
+
+
+def page_template() -> str:
+    """
+    templates/page.html with the KPI card and container blocks put in, but the
+    title and data still blank (the __TITLE__ and __DATA__ placeholders).
+
+    The web app downloads dashboards in the browser from a copy of this
+    (web/public/dashboard-template.html, written by scripts/sync_dashboard_template.py;
+    pytest fails if the copy is out of date), so a download never calls the server.
+
+    Returns:
+        str: the HTML page with two placeholders left.
+    """
     folder = Path(__file__).with_name("templates")
     page = folder.joinpath("page.html").read_text(encoding="utf-8")
     blocks = "\n".join(folder.joinpath(name).read_text(encoding="utf-8") for name in ("kpi_card.html", "container.html"))
-    safe = json.dumps(payload).replace("</", "<\\/")   # a "</script>" inside the data can't end the script early
-    title = (payload.get("title") or "Dashboard").replace("<", "&lt;")
-    return page.replace("__BLOCKS__", blocks).replace("__TITLE__", title).replace("__DATA__", safe)
+    return page.replace("__BLOCKS__", blocks)
 
 
 def _breakdown(data, date_col, dim, value, w, agg) -> list[dict]:

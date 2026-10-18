@@ -1,6 +1,6 @@
 // The dashboard for one cleaned table, laid out like the Canva design (a newspaper's "above the fold"):
 //
-//   title + subtitle, and the FILTER button: a panel opens next to it with the
+//   heading + subtitle, and the FILTER button: a panel opens next to it with the
 //            customer / place filters (hidden until you want them, so the
 //            dashboard stays clean)
 //   KPI ROW  1–4 headline cards, the first one the hero (gold), all in ONE style
@@ -18,17 +18,25 @@
 // client's industry is sent as `industry`), transactions and the average per
 // transaction; with no industry match, the generic ones. Every range ×
 // comparison comes back in one response, so the time bar is instant.
+//
+// The heading ("At a glance" unless they rename it) is different from the tab's
+// name, so it doesn't repeat "Overview". A renamed heading is kept only in this
+// browser (localStorage), never on the server or in the database.
 
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runSkill, saveText } from "@/lib/api";
+import { buildDashboardHtml } from "@/lib/dashboardFile";
 import type { CleaningInput, DashboardData, DashboardVisual, PeriodRow } from "@/lib/types";
 import HBarChart from "@/components/charts/HBarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
 import KpiCard, { ChangePill } from "./KpiCard";
 import TimeBar from "./TimeBar";
 import { Button, ErrorBox } from "@/components/wizard/ui";
+
+// The heading until they rename it (not "Overview", which the tab already says).
+const DEFAULT_HEADING = "At a glance";
 import Tour, { type TourStep } from "@/components/ui/Tour";
 
 // The first-time guide for the dashboard (components/ui/Tour.tsx).
@@ -113,12 +121,39 @@ export default function Dashboard(props: {
   groupId: number;
   /** NAICS sector from sign-up ("72"): industry KPIs when the data has them. */
   industry?: string | null;
+  /** The header's left label (the business name, or the data's name): used in the download. */
   businessName?: string | null;
   viewerName?: string | null;
-  title?: string;
+  /** The tab's name ("Overview"): the downloaded file's tab. */
+  tabName?: string;
+  /** Which data this is, so each data set keeps its own heading (e.g. "Sales"). */
+  dataName?: string | null;
 }) {
   const { input, groupId, industry, businessName, viewerName } = props;
-  const title = props.title ?? "Dashboard";
+  const tabName = props.tabName ?? "Overview";
+  // The heading: theirs to rename. Kept ONLY in this browser (localStorage) — never
+  // sent to the server or saved in the database. Empty = the default.
+  const headingKey = `dcp.dashboard.heading.${props.dataName ?? "data"}`;
+  // Read once when the dashboard first draws (it's remounted per data set: key={groupId}).
+  const [heading, setHeading] = useState(() => {
+    try {
+      return localStorage.getItem(headingKey) || DEFAULT_HEADING;
+    } catch {
+      return DEFAULT_HEADING;   // private window / blocked storage: just the default
+    }
+  });
+  const [renaming, setRenaming] = useState<string | null>(null);   // the text box's value while renaming
+  function saveHeading(text: string) {
+    const clean = text.trim().slice(0, 60);
+    setHeading(clean || DEFAULT_HEADING);
+    setRenaming(null);
+    try {
+      if (clean && clean !== DEFAULT_HEADING) localStorage.setItem(headingKey, clean);
+      else localStorage.removeItem(headingKey);
+    } catch {
+      // Storage blocked: the new heading still shows until the page reloads.
+    }
+  }
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -135,17 +170,18 @@ export default function Dashboard(props: {
     () => Object.fromEntries(Object.entries(filters).filter(([, v]) => v)),
     [filters],
   );
+  // Only what changes the numbers goes to the server. Names (business, viewer,
+  // heading) stay in the browser and are put into the download here.
   const skillParams = useMemo(
-    () => ({ filters: activeFilters, industry: industry ?? null, business_name: businessName ?? null,
-             viewer_name: viewerName ?? null, title }),
-    [activeFilters, industry, businessName, viewerName, title],
+    () => ({ filters: activeFilters, industry: industry ?? null }),
+    [activeFilters, industry],
   );
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    // include_html: false keeps the response small; the HTML file is built on Download.
+    // include_html: false keeps the response small; the HTML file is built in the browser on Download.
     runSkill("build-dashboard", input, { ...skillParams, include_html: false }, groupId)
       .then((r) => {
         if (cancelled) return;
@@ -178,11 +214,14 @@ export default function Dashboard(props: {
     };
   }, [filterOpen]);
 
+  // Built in the browser from the data already on screen: no server call (lib/dashboardFile.ts).
   async function downloadHtml() {
+    if (!data) return;
     setDownloading(true);
     try {
-      const r = await runSkill("build-dashboard", input, { ...skillParams, include_html: true }, groupId);
-      saveText("dashboard.html", r.artifacts.html_dashboard ?? "", "text/html");
+      const named = { ...data, title: heading, tab_name: tabName, business_name: businessName ?? null,
+                      viewer_name: viewerName ?? null };
+      saveText("dashboard.html", await buildDashboardHtml(named, heading), "text/html");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
     } finally {
@@ -259,9 +298,31 @@ export default function Dashboard(props: {
       {/* Title and subtitle on the left; the Filter button on the right (its panel opens beside it). */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="font-mono text-2xl font-bold sm:text-3xl">{title}</h2>
+          {renaming === null ? (
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h2 className="truncate font-mono text-2xl font-bold sm:text-3xl" title={heading}>{heading}</h2>
+              <button type="button" onClick={() => setRenaming(heading)}
+                className="shrink-0 text-xs text-brand-ink hover:underline" aria-label="Rename this heading">
+                Rename
+              </button>
+            </div>
+          ) : (
+            <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); saveHeading(renaming); }}>
+              <input
+                className="min-w-0 rounded-xl border border-line bg-surface px-3 py-1.5 font-mono text-lg font-bold outline-none focus:border-brand"
+                value={renaming} maxLength={60} aria-label="Heading" placeholder={DEFAULT_HEADING}
+                onChange={(e) => setRenaming(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- focus moves to the box the person just asked for
+                autoFocus
+              />
+              <Button type="submit" className="px-4 py-1">Save</Button>
+              <Button type="button" variant="secondary" className="px-4 py-1" onClick={() => setRenaming(null)}>Cancel</Button>
+              <span className="w-full text-xs text-ink-muted">Saved on this computer only. Leave it empty for &ldquo;{DEFAULT_HEADING}&rdquo;.</span>
+            </form>
+          )}
           <p className="mt-1 text-sm text-ink-muted">
-            {data.subtitle ?? "How your business is doing over time"} · {data.range_labels[activeRange]}: {usDate(w.start)} –{" "}
+            {data.subtitle ?? "How it's going over time"} · {data.range_labels[activeRange]}: {usDate(w.start)} –{" "}
             {usDate(w.end)}
             {Object.keys(data.filters).length ? ` · ${data.rows.toLocaleString("en-US")} matching rows` : ""}
           </p>
@@ -291,7 +352,7 @@ export default function Dashboard(props: {
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold">Filter the dashboard</h3>
                     {filterCount > 0 && (
-                      <button type="button" className="text-xs text-brand hover:underline" onClick={() => setFilters({})}>
+                      <button type="button" className="text-xs text-brand-ink hover:underline" onClick={() => setFilters({})}>
                         Clear filters
                       </button>
                     )}

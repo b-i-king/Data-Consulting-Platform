@@ -20,10 +20,10 @@ export default function BarChart(props: {
       {props.categories.map((c, i) => (
         <li
           key={`${c}-${i}`}
-          tabIndex={0}
+         
           // Phones: name + value on one line, full-width bar underneath.
           // Wider screens: name | bar | value in one row.
-          className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 rounded-lg px-1 py-0.5 text-sm hover:bg-surface-2 focus:bg-surface-2 focus:outline-none sm:grid-cols-[minmax(6rem,12rem)_1fr_auto]"
+          className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 rounded-lg px-1 py-0.5 text-sm hover:bg-surface-2 sm:grid-cols-[minmax(6rem,12rem)_1fr_auto]"
         >
           <span className="truncate" title={c}>
             {c}

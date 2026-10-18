@@ -74,7 +74,7 @@ export default function AdminHipaa({ token }: { token: string }) {
             <div className="text-xs">
               NPI:{" "}
               {r.npi ? (
-                <a href={r.lookup_url ?? "#"} target="_blank" rel="noreferrer" className="font-mono text-brand hover:underline">
+                <a href={r.lookup_url ?? "#"} target="_blank" rel="noreferrer" className="font-mono text-brand-ink hover:underline">
                   {r.npi} (look it up)
                 </a>
               ) : (

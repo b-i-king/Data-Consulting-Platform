@@ -13,7 +13,7 @@ export function LegalPage(props: { title: string; updated: string; children: Rea
   return (
     <article className="mx-auto max-w-3xl space-y-6 py-2">
       <header className="space-y-1">
-        <h1 className="font-mono text-3xl font-semibold text-brand">{props.title}</h1>
+        <h1 className="font-mono text-3xl font-semibold text-brand-ink">{props.title}</h1>
         <p className="text-sm text-ink-muted">Last updated: {props.updated}</p>
       </header>
       {props.children}
@@ -43,7 +43,7 @@ export function Strong({ children }: { children: ReactNode }) {
 export function Email({ subject }: { subject?: string }) {
   const href = `mailto:${CONTACT_EMAIL}${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`;
   return (
-    <a href={href} className="text-brand hover:underline">
+    <a href={href} className="text-brand-ink hover:underline">
       {CONTACT_EMAIL}
     </a>
   );

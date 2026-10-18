@@ -41,8 +41,24 @@ things **above the fold**.
 
 1. **Header bar** — the business name (and industry), the dashboard tabs
    (Overview, plus any tabs the client added — keep it to one when you can:
-   each tab re-runs its questions) and "Hello! <first name>".
-2. **Title, subtitle and the Filter button.** The filters (WHO the numbers are
+   each tab re-runs its questions) and "Hello! <first name>". With no business
+   name (individuals), the left shows the **data's name** (the file's name for one
+   file, else the table's label like "Transactions"), tidied in the browser
+   (`prettyDataName` in `web/lib/format.ts`): no extension, no underscores, each
+   word capitalized — `sales_2026.csv` → "Sales 2026", `CUSTOMER_LIST.xlsx` →
+   "Customer List" — and cut with "…" when too long. It's never saved.
+2. **Heading, subtitle and the Filter button.** The subtitle is written from
+   what this dashboard shows (`_subtitle` in `skill.py`), so it fits a business
+   or an individual: "Total amount, transactions and average per transaction
+   over time, by order type, product and 2 more"; with industry KPIs it starts
+   with the sector ("Professional, Scientific, and Technical Services KPIs: …").
+   (Data with no date column has no Overview, so "over time" is always true.)
+   The heading is "At a glance",
+   not the tab's name, so it doesn't repeat "Overview". **Rename** changes it;
+   the new heading is kept only in that browser (localStorage, one per data
+   set) — it is never sent to the server or saved in the database. Names
+   (heading, business, viewer) aren't sent with the dashboard request at all;
+   the browser puts them into the download itself. The filters (WHO the numbers are
    about: customer type, store, age group…) live in a panel that opens next to
    the button — hidden until wanted, so the dashboard stays clean. The button
    shows how many are on; Esc or a click outside closes it. Download (HTML) sits
@@ -270,8 +286,14 @@ in the same layout — header, title, Filter, KPI row, containers, time bar — 
 a Light / Dark / System switch. It's put together from
 `templates/page.html` + `kpi_card.html` + `container.html` (`render_html` in
 `skill.py`). Open it in any browser, offline, or email it to a client.
-The web app builds this file only when you click the button (`include_html`),
-which keeps every other dashboard response about half the size. From the
+In the web app the file is built **in the browser**, with no server call: the
+dashboard on screen already holds every number, so `web/lib/dashboardFile.ts`
+fetches the empty template (`web/public/dashboard-template.html`, a static
+file Vercel serves) and pastes the title and data in, just as `render_html`
+does. A download uses no Render time and no Supabase reads, and dashboard
+responses stay about half the size (`include_html: false`). That template is a
+copy: after changing anything in `templates/`, run
+`python scripts/sync_dashboard_template.py` (pytest fails until you do). From the
 command line:
 `python -m data_skills run build-dashboard yourfile.csv` → `outputs/build-dashboard/html_dashboard.html`.
 

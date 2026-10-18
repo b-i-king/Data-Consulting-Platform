@@ -96,7 +96,7 @@ export function TwoStepCard(props: { token: string; account: Account; onToken: (
           <ol className="list-decimal space-y-2 pl-5">
             <li>
               Open an authenticator app and add an account. Type this key (or, on your phone,{" "}
-              <a href={setup.otpauth_url} className="text-brand hover:underline">open this link</a>):
+              <a href={setup.otpauth_url} className="text-brand-ink hover:underline">open this link</a>):
               <span className="mt-1 block break-all rounded-lg bg-surface-2 px-2 py-1 font-mono">{setup.secret}</span>
             </li>
             <li>Type the 6-digit code the app shows:</li>

@@ -124,7 +124,7 @@ export default function TeamPanel({ token, bookingUrl }: { token: string; bookin
         (full ? (
           <p className="mt-3 rounded-xl border border-line bg-surface p-3 text-sm">
             Your team has {team.seats.limit} people, the most a package includes. Need more people?{" "}
-            <a href={bookingUrl} target="_blank" rel="noreferrer" className="text-brand hover:underline">
+            <a href={bookingUrl} target="_blank" rel="noreferrer" className="text-brand-ink hover:underline">
               Talk to us about an Enterprise plan
             </a>
             .

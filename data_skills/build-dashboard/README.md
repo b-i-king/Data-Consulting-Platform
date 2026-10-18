@@ -1007,7 +1007,7 @@ Input: one table.
 | `range` | choice (last_1_week, last_4_weeks, last_3_months, last_1_year, month_to_date, year_to_date, all) | last_3_months | Default range shown |
 | `comparison` | choice (auto, dod, wow, mom) | auto | Default comparison |
 | `as_of` | str | auto | End date for ranges, YYYY-MM-DD (default: latest date in the data) |
-| `title` | str | Dashboard | Dashboard title |
+| `title` | str | At a glance | The heading above the KPI cards |
 | `subtitle` | str | auto | Line under the title (default: what the dashboard covers) |
 | `industry` | str | auto | NAICS sector for industry KPIs, e.g. 72 or 44-45 (the site sends the client's industry; empty = generic KPIs only) |
 | `business_name` | str | auto | Business name for the header of the downloaded HTML |

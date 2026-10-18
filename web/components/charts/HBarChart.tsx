@@ -26,8 +26,8 @@ export default function HBarChart(props: {
     <div className="@container">
       <ul className="space-y-2" aria-label={props.label}>
         {props.rows.map((r, i) => (
-          <li key={`${r.category}-${i}`} tabIndex={0}
-            className="grid grid-cols-1 items-center gap-x-3 gap-y-0.5 rounded-lg px-1 py-0.5 text-sm hover:bg-surface-2 focus:bg-surface-2 focus:outline-none @sm:grid-cols-[minmax(5rem,32%)_1fr]">
+          <li key={`${r.category}-${i}`}
+            className="grid grid-cols-1 items-center gap-x-3 gap-y-0.5 rounded-lg px-1 py-0.5 text-sm hover:bg-surface-2 @sm:grid-cols-[minmax(5rem,32%)_1fr]">
             <span className="flex min-w-0 items-center justify-between gap-2">
               <span className="truncate" title={r.category}>{r.category}</span>
               {/* narrow: the pill sits by the name, so the bar below gets the whole width */}

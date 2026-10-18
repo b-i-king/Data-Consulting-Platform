@@ -60,7 +60,7 @@ export function Button({
   const styles =
     variant === "primary"
       ? "bg-brand text-on-brand hover:bg-brand-strong disabled:opacity-50"
-      : "border border-line bg-surface hover:border-brand hover:text-brand disabled:opacity-50";
+      : "border border-line bg-surface hover:border-brand hover:text-brand-ink disabled:opacity-50";
   return (
     <button
       type="button"
@@ -190,7 +190,7 @@ export function Pager(props: {
 }) {
   const { page, pages, onPage } = props;
   if (pages <= 1) return null;
-  const btn = "rounded-full border border-line bg-surface px-3 py-1 text-sm hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-40";
+  const btn = "rounded-full border border-line bg-surface px-3 py-1 text-sm hover:border-brand hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-40";
   return (
     <nav aria-label={props.label} className="mt-3 flex flex-wrap items-center justify-end gap-2 text-sm">
       {props.summary && <span className="mr-auto text-xs text-ink-muted">{props.summary}</span>}
@@ -251,7 +251,9 @@ export function ConfirmDialog(props: {
           <Button variant="secondary" onClick={props.onCancel}>
             Cancel
           </Button>
-          <Button onClick={props.onConfirm} autoFocus>
+          {/* No autoFocus here: the dialog focuses Cancel first, so pressing Enter by habit
+              never confirms something like "Delete everything". */}
+          <Button onClick={props.onConfirm}>
             {props.confirmLabel}
           </Button>
         </div>

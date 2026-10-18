@@ -25,7 +25,7 @@ function Section({ section, tables }: { section: EdaReportSection; tables: Recor
   return (
     <Card className={takeaways ? "border-brand" : ""}>
       <section id={anchor(section)} aria-labelledby={`${anchor(section)}-h`} className="scroll-mt-4 space-y-3">
-        <h3 id={`${anchor(section)}-h`} className={`font-mono text-lg font-semibold ${takeaways ? "text-brand" : ""}`}>
+        <h3 id={`${anchor(section)}-h`} className={`font-mono text-lg font-semibold ${takeaways ? "text-brand-ink" : ""}`}>
           {section.title}
         </h3>
         <p className={`text-sm leading-relaxed ${section.applicable ? "" : "text-ink-muted"}`}>{section.explanation}</p>
@@ -59,7 +59,7 @@ export default function EdaReport(props: { report: EdaReportData; tables: Record
     <div className="space-y-4">
       <Card className="space-y-3">
         <div>
-          <h2 className="font-mono text-xl font-semibold text-brand">{report.title}</h2>
+          <h2 className="font-mono text-xl font-semibold text-brand-ink">{report.title}</h2>
           <p className="text-sm text-ink-muted">{report.subtitle}</p>
         </div>
         <nav aria-label="Report sections" className="flex flex-wrap gap-2">

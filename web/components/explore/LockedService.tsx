@@ -39,7 +39,7 @@ export function LockedBadge({ service, onAdd }: { service: Service; onAdd: (id: 
         {service.name}
       </span>
       <span className="text-xs text-ink-muted">· {priceLabel(service)}</span>
-      <span className="text-xs font-semibold text-brand group-hover:underline">Add</span>
+      <span className="text-xs font-semibold text-brand-ink group-hover:underline">Add</span>
     </button>
   );
 }

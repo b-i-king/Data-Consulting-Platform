@@ -320,7 +320,7 @@ function Webhook({ token, data, onSaved }: SectionProps) {
       <ol className="mt-4 list-inside list-decimal space-y-2 text-sm">
         <li>
           In Cal.com, open{" "}
-          <a href="https://app.cal.com/settings/developer/webhooks" target="_blank" rel="noreferrer" className="text-brand underline">
+          <a href="https://app.cal.com/settings/developer/webhooks" target="_blank" rel="noreferrer" className="text-brand-ink underline">
             Settings → Developer → Webhooks
           </a>{" "}
           and press <strong>New</strong>.
@@ -328,7 +328,7 @@ function Webhook({ token, data, onSaved }: SectionProps) {
         <li>
           <strong>Subscriber URL:</strong>{" "}
           <code className="break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">{url}</code>{" "}
-          <button type="button" className="text-xs text-brand hover:underline" onClick={() => copy("url", url)}>
+          <button type="button" className="text-xs text-brand-ink hover:underline" onClick={() => copy("url", url)}>
             {copied === "url" ? "Copied" : "Copy"}
           </button>
         </li>
@@ -341,7 +341,7 @@ function Webhook({ token, data, onSaved }: SectionProps) {
           {data.webhook.secret ? (
             <>
               <code className="break-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">{data.webhook.secret}</code>{" "}
-              <button type="button" className="text-xs text-brand hover:underline" onClick={() => copy("secret", data.webhook.secret!)}>
+              <button type="button" className="text-xs text-brand-ink hover:underline" onClick={() => copy("secret", data.webhook.secret!)}>
                 {copied === "secret" ? "Copied" : "Copy"}
               </button>
             </>

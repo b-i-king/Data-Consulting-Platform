@@ -1,6 +1,8 @@
 // The dashboard, in layers (api/services/dashboards.py), laid out like the Canva design:
 //
-//   HEADER BAR        the business name (and industry), the dashboard tabs, and
+//   HEADER BAR        the business name (and industry) — or, with no business
+//                     name (individuals), the data's name tidied up ("sales_2026.csv"
+//                     -> "Sales 2026", never saved) — the dashboard tabs, and
 //                     "Hello! <name>". Keep it to the one Overview when you can —
 //                     each extra tab re-runs its questions (more server work).
 //                     With no business context yet, a nudge sits under it
@@ -23,6 +25,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { deleteDashboardTab, getDashboardSuggestions, getDashboards, runSkill, saveDashboardTab } from "@/lib/api";
 import type { CleaningInput, DashboardSuggestion, DashboardsInfo, DashboardTab, SkillResult } from "@/lib/types";
+import { prettyDataName } from "@/lib/format";
 import ChartView from "@/components/charts/ChartView";
 import Dashboard from "./Dashboard";
 import ResultTable from "./ResultTable";
@@ -44,6 +47,8 @@ export default function DashboardTabs(props: {
   onEditContext: () => void;
   /** Who's looking (the greeting): the signed-in person's first name. */
   viewerName?: string | null;
+  /** The open data's name ("sales.csv", "Employees / Payroll"): the header's label when there's no business name. */
+  dataName?: string | null;
 }) {
   const [info, setInfo] = useState<DashboardsInfo | null>(null);
   const [active, setActive] = useState<string>(OVERVIEW);
@@ -57,6 +62,8 @@ export default function DashboardTabs(props: {
   }, [props.token]);
 
   const tab = info?.tabs.find((t) => t.id === active) ?? null;
+  // Left of the header: the business name, else the data's name (display only).
+  const headerName = info?.company || prettyDataName(props.dataName);
   const ctx = info?.context;
   const hasContext = !!(ctx && (ctx.about || ctx.goals)) || !!info?.industry;
 
@@ -66,7 +73,8 @@ export default function DashboardTabs(props: {
       <header className="flex flex-wrap items-center gap-3 rounded-3xl border border-line bg-surface px-4 py-2.5 shadow-[var(--shadow-card)]">
         <span className="flex min-w-0 items-center gap-2 font-semibold">
           <span aria-hidden className="h-4 w-4 shrink-0 rotate-45 rounded-[5px] bg-brand" />
-          <span className="truncate">{info?.company ?? "Your business"}</span>
+          {/* Too long: cut with "…" (the full name shows on hover). */}
+          <span className="max-w-[14rem] truncate sm:max-w-xs" title={headerName}>{headerName}</span>
           {info?.industry && <span className="hidden rounded-full bg-brand-soft px-2 py-0.5 text-xs font-normal sm:inline">{info.industry}</span>}
         </span>
       <div role="tablist" aria-label="Dashboard tabs" className="flex flex-wrap items-center gap-2 lg:mx-auto">
@@ -86,13 +94,14 @@ export default function DashboardTabs(props: {
             {t.name}
           </button>
         ))}
+      </div>
+        {/* Outside the tab list: a tab list may hold only tabs (screen readers count them). */}
         {props.canBuild && info && info.tabs.length < info.max_tabs && (
           <button type="button" onClick={() => setEditing("new")}
-            className="rounded-full border border-dashed border-brand px-4 py-1.5 text-sm text-brand hover:bg-brand-soft">
+            className="rounded-full border border-dashed border-brand px-4 py-1.5 text-sm text-brand-ink hover:bg-brand-soft">
             + Add tab
           </button>
         )}
-      </div>
         <span className="ml-auto text-right text-xs leading-tight text-ink-muted">
           Hello!<b className="block text-sm text-ink">{props.viewerName ?? ""}</b>
         </span>
@@ -101,7 +110,7 @@ export default function DashboardTabs(props: {
         <p className="text-sm text-ink-muted">
           <strong className="text-ink">Make this dashboard yours:</strong> tell us about the business and the questions you ask
           most — we&apos;ll suggest the right tabs.{" "}
-          <button type="button" className="text-brand hover:underline" onClick={props.onEditContext}>Add business context</button>
+          <button type="button" className="text-brand-ink hover:underline" onClick={props.onEditContext}>Add business context</button>
         </p>
       )}
       <ErrorBox message={error} />
@@ -121,8 +130,9 @@ export default function DashboardTabs(props: {
         />
       ) : active === OVERVIEW || !tab ? (
         props.hasDates ? (
-          <Dashboard key={props.groupId} input={props.input} groupId={props.groupId} title="Overview"
-            industry={info?.naics_sector} businessName={info?.company} viewerName={props.viewerName} />
+          <Dashboard key={props.groupId} input={props.input} groupId={props.groupId} tabName="Overview"
+            industry={info?.naics_sector} businessName={headerName} viewerName={props.viewerName}
+            dataName={prettyDataName(props.dataName)} />
         ) : (
           <Card>
             <p className="text-sm">
@@ -288,7 +298,7 @@ function TabEditor(props: {
                 className="rounded-xl border border-line bg-surface px-3 py-2 text-left text-xs hover:border-brand disabled:opacity-40">
                 <span className="block font-medium">{s.why}</span>
                 <span className="block font-mono text-ink-muted">{s.question}</span>
-                <span className="block text-[10px] uppercase tracking-wide text-brand">{SOURCE[s.source]}</span>
+                <span className="block text-[10px] uppercase tracking-wide text-brand-ink">{SOURCE[s.source]}</span>
               </button>
             ))}
           </div>

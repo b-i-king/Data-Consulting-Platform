@@ -76,7 +76,7 @@ export default function LocationPicker(props: {
         </span>
         <button
           type="button"
-          className="text-brand hover:underline"
+          className="text-brand-ink hover:underline"
           onClick={() => {
             props.onChange(null);
             setTimeout(() => inputRef.current?.focus(), 0);
@@ -127,6 +127,9 @@ export default function LocationPicker(props: {
           className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-line bg-surface py-1 shadow-[var(--shadow-card)]"
         >
           {options.map((o, i) => (
+            // Keyboard users choose with the arrow keys + Enter in the input itself (the
+            // ARIA combobox pattern, aria-activedescendant), so the options need no key handler.
+            // eslint-disable-next-line jsx-a11y/click-events-have-key-events
             <li
               key={o.id}
               id={`${listId}-${i}`}
