@@ -6,7 +6,7 @@
 //     string; then the tables schema by schema (empty ones hidden). Picking
 //     one ("Preview this table") reads it, read-only, for the next step.
 //   * QuickBooks / Xero: "Connect" opens the tool's own sign-in page. The
-//     browser LEAVES Get Started and comes back to /start?integration=...;
+//     browser LEAVES Get Started and comes back to /get-started/connect?integration=...;
 //     Wizard.tsx saved its place first (sessionStorage) and returns here.
 //     When every connection spot is taken (Xero 5, QuickBooks 15), the card
 //     says so and the file-export path is offered instead.

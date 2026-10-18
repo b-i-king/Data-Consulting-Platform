@@ -5,7 +5,7 @@
 ```
  Browser (Next.js on Vercel)                    FastAPI (Python on Render)              Supabase (PostgreSQL)
  ───────────────────────────                    ──────────────────────────              ─────────────────────
- /start wizard                                  /api/intake/options   ── questions
+ /get-started wizard                            /api/intake/options   ── questions
    0 About you      ──── GET options ─────────► /api/quote            ── pricing
    1 Your data                                  /api/files/analyze    ── pandas pipeline
    2 Upload ─── files (multipart) ────────────►   read → categorize → clean → preview
@@ -20,6 +20,31 @@ The tech stack follows the [Video_Game_Stats_Tracker](https://github.com/b-i-kin
 template: **Next.js (Vercel) + FastAPI (Render) + Supabase (PostgreSQL)**, with
 the same folder conventions (`api/core`, `api/routers`, `api/services`,
 `api/models`, `web/app`, `web/components`, `web/lib`).
+
+## Addresses (URLs)
+
+Every screen has its own readable address, named after the screen (the full
+map is `web/lib/routes.ts`):
+
+| Address | Screen |
+| --- | --- |
+| `/` | Home (`/home` forwards here) |
+| `/get-started/about-you`, `/your-data`, `/upload`, `/clean`, `/account`, `/connect`, `/preview`, `/quick-look`, `/your-needs`, `/next-steps` | The guest questionnaire, one per step |
+| `/workspace/dashboard`, `/workspace/data-cleaning`, `/workspace/data-engineering`, ... | The workspace, one per service in the left pane |
+| `/workspace/settings/account`, `/billing`, `/integrations`, `/consultant`, `/admin` | Settings (bottom left of the workspace) |
+| `/signin`, `/signup` | Sign in / create an account (`?next=/workspace/...` returns there afterward) |
+
+The questionnaire and the workspace each stay ONE page: moving between steps
+changes the address with `window.history.pushState` instead of loading a new
+page, because the client's files live only in that page's memory (never
+stored). So Back / Forward, bookmarks and refresh work, and a refresh in the
+middle of the questionnaire falls back to the nearest step it can show; while
+files are loaded the browser asks before leaving. The old addresses `/app` and
+`/start` (and `/login`, `/register`, `/settings`) forward to the new ones
+(`redirects` in `web/next.config.mjs`), keeping anything after `?`. Stripe and
+the QuickBooks / Xero / Supabase sign-ins send people back to
+`/workspace/settings/billing`, `/workspace/settings/integrations` and
+`/get-started/connect` (`api/services/billing.py`, `api/services/oauth.py`).
 
 ## Folder map
 
@@ -59,10 +84,12 @@ scripts/                  one-off scripts (rebuild the NAICS list)
 data/reference/           source files for reference data (SBA size standards)
 tests/                    pytest unit + API tests
 web/                      Next.js frontend (TypeScript + Tailwind CSS)
-  app/page.tsx            landing page
-  app/start/page.tsx      the guest wizard page
-  app/signin/page.tsx     sign in / create an account by email
-  app/app/page.tsx        the signed-in workspace (Copilot-style left pane)
+  app/page.tsx            landing page ("/"; "/home" forwards here)
+  app/get-started/[[...step]]/page.tsx   the guest wizard (/get-started/<step>)
+  app/signin/page.tsx     sign in by email (/signup: create an account)
+  app/workspace/[[...view]]/page.tsx     the signed-in workspace (/workspace/<page>)
+  app/not-found.tsx       the friendly "page not found" (404) page
+  lib/routes.ts           every address in the site (old ones forward: next.config.mjs)
   components/auth/        sign-in form (+ LocationPicker), header sign-in links
   lib/validation.ts       the same signup rules, checked while typing
   components/workspace/   the workspace: left pane of services + each service's page

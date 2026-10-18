@@ -23,8 +23,16 @@
 // saved, encrypted, on an account. Connecting QuickBooks / Xero (or "Sign in
 // with Supabase") LEAVES this page for the provider's sign-in; the answers so
 // far are saved in sessionStorage first (this tab only), and the provider
-// sends the person back to /start?integration=... — the wizard picks up at
-// "Connect" again.
+// sends the person back to /get-started/connect?integration=... — the wizard
+// picks up at "Connect" again.
+//
+// ADDRESSES: every step has its own (/get-started/about-you, /upload, /clean,
+// /your-needs, ... — the map is lib/routes.ts). Moving between steps changes
+// the address WITHOUT leaving the page, so the files stay in memory and the
+// browser's Back / Forward buttons move between steps. A refresh (or a link)
+// can only open a step that needs nothing earlier — About you, Your data or
+// Upload; any other step falls back to the nearest one that can be shown.
+// While files are loaded, leaving or refreshing the page asks first.
 //
 // NAVIGATION on every page (components/wizard/ui.tsx NavRow): "← Previous"
 // on every page but the first; "« First step" from the third page on (your
@@ -43,7 +51,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { analyzeFiles, getCloudTableFile, getIntakeOptions, getLiveDatasetFile, signOutServer } from "@/lib/api";
-import { FALLBACK_BOOKING_URL, TOOL_NAMES } from "@/lib/format";
+import { FALLBACK_BOOKING_URL, SITE_NAME, TOOL_NAMES } from "@/lib/format";
+import { setAddress, wizardPath, wizardStepFromPath, WORKSPACE, workspacePath } from "@/lib/routes";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
 import type { AccountType, AnalyzeResponse, CleaningInput, CloudTable, ColumnAction, ColumnActions, ColumnNames, ConsultantPlan, LiveDataset, SubscriptionChoice, TransformStep, Transforms, Industry, IntakeOptions, MissingStrategy } from "@/lib/types";
 import AuthForm from "@/components/auth/AuthForm";
@@ -77,6 +86,9 @@ const FLOWS: Record<DataSource, { id: StepId; label: string }[]> = {
     { id: "next", label: "Next steps" },
   ],
 };
+// Steps a fresh page load (refresh, bookmark, typed address) can open: they
+// need no answers from earlier steps. Any other step starts at "About you".
+const ENTRY_STEPS: StepId[] = ["about", "data", "upload"];
 const PROVIDER_NAMES = TOOL_NAMES;
 // The answers kept while the browser is away at a provider's sign-in (this tab only).
 const SAVED_KEY = "dcp-get-started";
@@ -141,11 +153,12 @@ export default function Wizard() {
           setLocation(saved.location ?? null);
           setLocationOption(saved.locationOption ?? null);
           setSource(saved.source ?? "files");
-          setStep("connect");
         }
       } catch {
-        // storage blocked: they start over at the first step, already connected
+        // storage blocked: "Connect" offers to choose the data again (already connected)
       }
+      setStep("connect");
+      setAddress(wizardPath("connect"), true);
       const name = PROVIDER_NAMES[integration] ?? integration;
       setConnectNotice(
         q.get("connected") === "1"
@@ -153,6 +166,13 @@ export default function Wizard() {
           : { ok: false, text: q.get("integration_error") ?? `${name} wasn't connected.` },
       );
       window.history.replaceState(null, "", window.location.pathname);
+    } else {
+      // Open the step in the address if it can be shown on a fresh load;
+      // otherwise (and for plain /get-started) start at "About you".
+      const asked = wizardStepFromPath(window.location.pathname);
+      const first = asked && ENTRY_STEPS.includes(asked) ? asked : "about";
+      setStep(first);
+      setAddress(wizardPath(first), true);
     }
     const timer = setTimeout(() => setSlow(true), 4000);
     getIntakeOptions()
@@ -217,6 +237,7 @@ export default function Wizard() {
   );
   const go = (n: StepId) => {
     setStep(n);
+    setAddress(wizardPath(n)); // a new history entry: the browser's Back returns here
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -233,6 +254,63 @@ export default function Wizard() {
   // The connected integration on the cloud / business app paths.
   const connector =
     options?.data_locations.find((l) => l.id === location)?.options.find((o) => o.id === locationOption)?.connector ?? null;
+
+  // Whether a step has what it needs to be shown (the browser's Back / Forward
+  // can ask for any step, e.g. "Clean & preview" after the files were changed).
+  const canShow = (s: StepId): boolean => {
+    switch (s) {
+      case "about":
+      case "data":
+      case "upload":
+        return true;
+      case "account":
+        return source !== "files";
+      case "connect":
+      case "quicklook":
+        return !!session && !!connector;
+      case "clean":
+        return source === "files" && !!analysis;
+      case "preview":
+        return !!analysis;
+      case "needs":
+      case "next":
+        return !!analysis || source !== "files";
+    }
+  };
+
+  // The browser's Back / Forward: show the step in the address — or, if it
+  // can't be shown now, the nearest earlier step on this path that can.
+  useEffect(() => {
+    const onPop = () => {
+      const asked = wizardStepFromPath(window.location.pathname) ?? "about";
+      if (canShow(asked)) {
+        setStep(asked);
+        return;
+      }
+      const ids = FLOWS[source].map((f) => f.id);
+      const upTo = ids.indexOf(asked) >= 0 ? ids.indexOf(asked) : ids.indexOf("data");
+      const fallback = ids.slice(0, upTo + 1).reverse().find(canShow) ?? "about";
+      setStep(fallback);
+      setAddress(wizardPath(fallback), true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  });
+
+  // The browser tab's title names the step ("Upload · Get started · ...").
+  useEffect(() => {
+    const label = FLOWS[source].find((f) => f.id === step)?.label ?? (step === "preview" ? "Preview" : null);
+    document.title = `${label ? `${label} · ` : ""}Get started · ${SITE_NAME}`;
+  }, [step, source]);
+
+  // Files live only in this page's memory: ask before a refresh or a closed
+  // tab throws them away (the browser shows its own "Leave site?" message).
+  useEffect(() => {
+    if (!files.length) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [files.length]);
 
   // A cloud table or a QuickBooks / Xero record type, read live and opened like a
   // file — but only as a READ-ONLY preview (the same rule as the workspace).
@@ -283,10 +361,10 @@ export default function Wizard() {
   const providerName = PROVIDER_NAMES[connector ?? ""] ?? "your app";
   const workspaceHref =
     source === "cloud" && pickedTable
-      ? `/app?open_table=${encodeURIComponent(`${pickedTable.schema}.${pickedTable.name}`)}`
+      ? `${workspacePath({ service: "data_cleaning" })}?open_table=${encodeURIComponent(`${pickedTable.schema}.${pickedTable.name}`)}`
       : source === "business"
-        ? "/app?show=integrations"
-        : "/app";
+        ? workspacePath({ settings: "integrations" })
+        : WORKSPACE;
 
   // "Skip to download": with cleaned file data, straight to the download (the
   // "Just download" path); otherwise via Upload (a cloud / app choice switches

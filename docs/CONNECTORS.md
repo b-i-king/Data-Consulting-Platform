@@ -252,7 +252,8 @@ after "Where is your data?" — each with the workspace's rules:
 | Business apps (QuickBooks, Xero) | Account → Connect → Quick look (free; optional record preview) → Your needs → Next steps ("Turn on the stored sync") |
 
 The account comes first on the last two (a connection is saved on it). The
-provider's sign-in returns to `/start` (`return_to=start`), and the wizard
+provider's sign-in returns to `/get-started/connect` (`return_to=start`; from the
+workspace, `return_to=app` returns to `/workspace/settings/integrations`), and the wizard
 picks up at "Connect" from what it saved in the tab's sessionStorage. A
 "coming soon" choice (Snowflake, Square...) offers a consultation or the file
 path. QuickBooks / Xero show "connect now" only when the platform's keys are

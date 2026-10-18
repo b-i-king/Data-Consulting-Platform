@@ -158,7 +158,8 @@ services the client chose are offered; the rest are badges from
 | `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), admin approval of consultant requests, deactivating / reactivating consultants, testers, prices, the deletion counts | Consultant and admin features |
 | `web/components/workspace/AdminPanel.tsx` (+ `AdminPrices.tsx`, `AdminTesters.tsx`) | The Admin panel: requests, consultants (deactivate / reactivate), prices, testers, account deletions | Admin screens |
 | `web/lib/types.ts` | Response shapes | Any API response change |
-| `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps |
+| `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps (give a new step an address in `web/lib/routes.ts`) |
+| `web/lib/routes.ts` + `web/next.config.mjs` (`redirects`) | Every page's address; old addresses forwarding to new ones | Renaming or adding a page (backend return pages: `api/services/billing.py`, `api/services/oauth.py`; checked by `tests/test_web_routes.py`) |
 | `data_skills/<id>/skill.py` | One runnable skill | Changing what a skill computes (keep its README.md in step) |
 | `data_skills/_time.py` | Date ranges, DoD/WoW/MoM | Adding a range or comparison (update DASHBOARDS.md) |
 | `data_skills/registry.py` | Load, validate, run skills | Changing how options are checked |

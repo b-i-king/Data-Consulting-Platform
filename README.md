@@ -14,7 +14,7 @@ higher-impact projects.
 
 The home page offers **Start as a guest**, and under it **Sign in** /
 **Create an account** with an email address. Signed-in users get a
-**workspace** (`/app`) with a Copilot Money-style left pane: the services on
+**workspace** (`/workspace`) with a Copilot Money-style left pane: the services on
 their plan first (the dashboard on top when they have it), the rest grayed out
 with an ⓘ explaining what each adds and how to get it.
 

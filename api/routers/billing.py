@@ -146,7 +146,7 @@ async def portal(ctx: Annotated[dict, Depends(get_acting_context)]):
         ctx: dict, the acting context (injected by `get_acting_context`).
 
     Returns:
-        dict: {"url": "<Stripe portal address>"}; the portal links back to /app.
+        dict: {"url": "<Stripe portal address>"}; the portal links back to /workspace/settings/billing.
 
     Raises:
         HTTPException: 403 "Only the team owner can change billing." when the

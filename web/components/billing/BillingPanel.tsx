@@ -77,7 +77,7 @@ export default function BillingPanel(props: {
     try {
       const res = await run();
       if (res.url) {
-        window.location.assign(res.url); // Stripe's secure page; it sends them back to /app
+        window.location.assign(res.url); // Stripe's secure page; it sends them back to /workspace/settings/billing
         return;
       }
       await props.onChanged();

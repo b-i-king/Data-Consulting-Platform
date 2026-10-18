@@ -292,13 +292,13 @@ Made a mistake? The card's **History** has **undo** on a confirmed free call.
 
 ## Step 8c — Get Started paths, stored sync, customers across sources
 
-1. **Files path:** `/start` → Files on my computer → Upload → Clean & preview → Your needs → Next steps (unchanged).
-2. **Cloud path:** `/start` → Cloud storage → **Supabase / PostgreSQL** ("connect now") → create the
+1. **Files path:** `/get-started` → Files on my computer → Upload → Clean & preview → Your needs → Next steps (unchanged).
+2. **Cloud path:** `/get-started` → Cloud storage → **Supabase / PostgreSQL** ("connect now") → create the
    account → paste a connection string (or Sign in with Supabase) → "Preview this table" → the
    read-only report → Your needs ("Just download" is grayed out, with a note) → Next steps →
    "Open your workspace" opens on that table.
-3. **Business app path** (needs Xero or QuickBooks keys): `/start` → Business apps → **Xero** →
-   account → Connect (Xero's sign-in, then back to `/start`) → Quick look (last 12 months) →
+3. **Business app path** (needs Xero or QuickBooks keys): `/get-started` → Business apps → **Xero** →
+   account → Connect (Xero's sign-in, then back to `/get-started/connect`) → Quick look (last 12 months) →
    optionally preview a record type → Your needs → Next steps → with Data Engineering,
    "Turn on the stored sync".
 4. **Add another source:** in the workspace, with a file open → "Add another source" → a database

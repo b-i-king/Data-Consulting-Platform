@@ -3,7 +3,7 @@
 // Used in two places:
 //   * the wizard's last step (create an account to download), and
 //   * the /signin page (reached from the home page), which then opens the
-//     signed-in workspace at /app.
+//     signed-in workspace at /workspace.
 //
 // Signup asks: individual -> first name, last name, email, password (and
 // "Confirm password"), and (optional) location; business -> plus business name

@@ -340,8 +340,8 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         client_reference_id=str(account["id"]),
         subscription_data=sub_data,
         **discount,
-        success_url=f"{site}/app?checkout=success",
-        cancel_url=f"{site}/app?checkout=canceled",
+        success_url=f"{site}/workspace/settings/billing?checkout=success",
+        cancel_url=f"{site}/workspace/settings/billing?checkout=canceled",
     )
     return {"url": session.url, "activated": False, "updated": False, "test_mode": False,
             "trial_days": trial, "sale": sale}
@@ -355,7 +355,7 @@ async def billing_portal(account: dict) -> dict:
         account: dict, the accounts row of the client.
 
     Returns:
-        dict: {"url": str}, the portal page; it returns to <SITE_URL>/app.
+        dict: {"url": str}, the portal page; it returns to <SITE_URL>/workspace/settings/billing.
 
     Raises:
         HTTPException: 400 in test mode or for a tester (cancel from the workspace instead).
@@ -367,7 +367,7 @@ async def billing_portal(account: dict) -> dict:
     if not charges_real_money(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Test mode: cancel the plan from your workspace.")
     session = _stripe().billing_portal.Session.create(
-        customer=await _customer_id(account), return_url=f"{get_settings().site_url.rstrip('/')}/app")
+        customer=await _customer_id(account), return_url=f"{get_settings().site_url.rstrip('/')}/workspace/settings/billing")
     return {"url": session.url}
 
 

@@ -141,7 +141,10 @@ def _state_fernet() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-RETURN_PAGES = {"app": "/app", "start": "/start"}   # where the browser goes after sign-in
+# Where the browser goes after the provider's sign-in. The keys ("app" = the
+# workspace, "start" = Get Started) are what the website sends as return_to;
+# the values are the website's addresses (web/lib/routes.ts).
+RETURN_PAGES = {"app": "/workspace/settings/integrations", "start": "/get-started/connect"}
 
 
 def make_state(provider: str, account_id: str, consultant_id: str | None, verifier: str | None = None,

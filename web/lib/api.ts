@@ -911,7 +911,8 @@ export async function getCloudTableFile(token: string, schema: string, name: str
 /**
  * "Connect QuickBooks / Xero / Supabase": the provider's sign-in address. The
  * page then goes there; the provider sends the person back to
- * /app?integration=... — or to /start?integration=... (returnTo "start", from Get Started).
+ * /workspace/settings/integrations?integration=... — or to /get-started/connect?integration=...
+ * (returnTo "start", from Get Started).
  */
 export async function startConnect(token: string, connector: string, returnTo: "app" | "start" = "app"): Promise<string> {
   const q = returnTo === "start" ? "?return_to=start" : "";
