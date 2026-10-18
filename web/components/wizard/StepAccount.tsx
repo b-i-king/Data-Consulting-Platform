@@ -317,7 +317,7 @@ function NextSteps(props: {
 
       <p className="mt-6 text-sm text-ink-muted">
         Signed in as {props.session.account.email}.{" "}
-        <Link href={props.workspaceHref ?? "/app"} className="text-brand-ink hover:underline">
+        <Link href={props.workspaceHref ?? "/workspace"} className="text-brand-ink hover:underline">
           Open your workspace
         </Link>{" "}
         ·{" "}

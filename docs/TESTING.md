@@ -80,7 +80,9 @@ tools are offered.
 ### The signed-in workspace
 
 1. On the home page, click **Create an account** (under "Start as a guest"), sign up
-   with any email and a password (8+ characters), and you land in **/app**.
+   with any email and a password (8+ characters), and you land in **/workspace**
+   (each page has its own address, e.g. `/workspace/data-cleaning`; see
+   "Addresses" in [ARCHITECTURE.md](ARCHITECTURE.md)).
    (As the consultant — all seven services, the database load and
    consultations — follow [RUN_THROUGH.md](RUN_THROUGH.md).)
 2. The left pane shows 🧹 Data Cleaning on top (always included) and every other

@@ -138,7 +138,9 @@ charged. A banner in Plan & billing says so.
 6. **On Render → Environment:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
    and `SITE_URL` = your Vercel address (where Stripe sends people back). Save.
 7. **Try it** with Stripe's test card `4242 4242 4242 4242` (any future date,
-   any CVC): subscribe in Plan & billing → you return to the workspace → the
+   any CVC): subscribe in Plan & billing → you return to Plan & billing in the
+   workspace (`/workspace/settings/billing?checkout=success`; canceling returns
+   with `?checkout=canceled`, and "Manage billing" returns there too) → the
    plan shows within a few seconds. Cancel in "Manage billing".
 8. **Go live:** switch Stripe to Live mode, repeat steps 2–6 with the live key
    and a live webhook, and run the sync script with the live key.

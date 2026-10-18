@@ -135,7 +135,7 @@ def test_authorize_urls_ask_for_read_only_access():
 
 def test_bad_callback_goes_back_with_a_message():
     res = client.get("/api/connections/oauth/callback", params={"state": "nonsense", "code": "x"}, follow_redirects=False)
-    assert res.status_code == 303 and res.headers["location"].startswith("https://site.example.com/app?")
+    assert res.status_code == 303 and res.headers["location"].startswith("https://site.example.com/workspace/settings/integrations?")
     assert "integration_error=" in res.headers["location"]
 
 
@@ -205,7 +205,7 @@ def test_xero_connect_quick_look_open_and_disconnect():
     h = _signup()
 
     landed = _connect(h, "xero")
-    assert landed.status_code == 303 and landed.headers["location"] == "https://site.example.com/app?integration=xero&connected=1"
+    assert landed.status_code == 303 and landed.headers["location"] == "https://site.example.com/workspace/settings/integrations?integration=xero&connected=1"
     row = next(c for c in account_store._connections.values() if c["connector"] == "xero")
     assert row["display_name"] == "Sam's Bakery" and row["status"] == "connected"
     assert "xero-access-1" not in row["credentials_encrypted"] and "tenant-1" not in row["credentials_encrypted"]
@@ -576,7 +576,7 @@ def test_sign_in_from_get_started_comes_back_to_get_started():
     url = client.get("/api/connections/xero/authorize?return_to=start", headers=h).json()["url"]
     state = parse_qs(urlparse(url).query)["state"][0]
     back = client.get("/api/connections/oauth/callback", params={"state": state, "code": "c"}, follow_redirects=False)
-    assert back.headers["location"] == "https://site.example.com/start?integration=xero&connected=1"
+    assert back.headers["location"] == "https://site.example.com/get-started/connect?integration=xero&connected=1"
     # Anything else goes to the workspace, as before.
     assert oauth.read_state(oauth.make_state("xero", "a", None, return_to="elsewhere"))["return_to"] == "app"
 

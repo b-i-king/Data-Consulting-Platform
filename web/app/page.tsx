@@ -1,7 +1,7 @@
 // Landing page ("/"). Explains the offer in plain language. The main button
-// starts the guest questionnaire (/start, no sign-in needed); under it,
-// "Sign in" and "Create an account" (by email) lead to /signin and then the
-// signed-in workspace (/app).
+// starts the guest questionnaire (/get-started, no sign-in needed); under it,
+// "Sign in" and "Create an account" (by email) lead to /signin or /signup and
+// then the signed-in workspace (/workspace). "/home" forwards here too.
 //
 // The category list below is short marketing copy for this page only. Full
 // descriptions and prices live in the backend (api/services/pricing.py) and
@@ -10,6 +10,7 @@
 import Link from "next/link";
 import { categoryColor } from "@/lib/categories";
 import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
+import { GET_STARTED, SIGN_IN, SIGN_UP } from "@/lib/routes";
 
 // The first-visit guide for this page (components/ui/Tour.tsx).
 const HOME_TOUR: TourStep[] = [
@@ -58,7 +59,7 @@ export default function Home() {
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3" data-tour="home-start">
             <Link
-              href="/start"
+              href={GET_STARTED}
               className="rounded-full bg-brand px-6 py-2.5 font-semibold text-on-brand hover:bg-brand-strong"
             >
               Start as a guest
@@ -74,11 +75,11 @@ export default function Home() {
           {/* Returning visitors and people ready for an account: sign in by email. */}
           <div className="flex flex-wrap items-center gap-3 text-sm" data-tour="home-signin">
             <span className="text-ink-muted">Or, with your email address:</span>
-            <Link href="/signin" className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand-ink">
+            <Link href={SIGN_IN} className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand-ink">
               Sign in
             </Link>
             <Link
-              href="/signin?mode=signup"
+              href={SIGN_UP}
               className="rounded-full border border-line bg-surface px-4 py-1.5 font-semibold hover:border-brand hover:text-brand-ink"
             >
               Create an account

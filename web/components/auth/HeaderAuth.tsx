@@ -13,6 +13,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { warmUpApi } from "@/lib/api";
 import { loadSession, SESSION_EVENT, type Session } from "@/lib/session";
+import { GET_STARTED, SIGN_IN, WORKSPACE } from "@/lib/routes";
 
 let warmed = false;   // wake the API once per page load, not on every navigation
 
@@ -42,14 +43,14 @@ export default function HeaderAuth() {
       <>
         {session.account.role === "consultant" && (
           <Link
-            href="/app"
+            href={WORKSPACE}
             title={`Signed in as a consultant (${session.account.email})`}
             className="flex items-center gap-1.5 rounded-full bg-consultant px-3 py-1.5 text-sm font-semibold text-on-consultant"
           >
             <span aria-hidden>◆</span> Consultant
           </Link>
         )}
-        <Link href="/app" className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong">
+        <Link href={WORKSPACE} className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong">
           My workspace
         </Link>
       </>
@@ -57,10 +58,10 @@ export default function HeaderAuth() {
   }
   return (
     <>
-      <Link href="/signin" className="text-sm font-medium text-ink-muted hover:text-ink">
+      <Link href={SIGN_IN} className="text-sm font-medium text-ink-muted hover:text-ink">
         Sign in
       </Link>
-      <Link href="/start" className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong">
+      <Link href={GET_STARTED} className="rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-on-brand hover:bg-brand-strong">
         Get started
       </Link>
     </>

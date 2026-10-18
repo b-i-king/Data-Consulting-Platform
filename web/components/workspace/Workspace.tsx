@@ -1,5 +1,11 @@
-// The signed-in workspace ("/app"), laid out like Copilot Money on the web:
+// The signed-in workspace ("/workspace"), laid out like Copilot Money on the web:
 // a left pane of high-level options, and the chosen one on the right.
+//
+// ADDRESSES: each page has its own — /workspace/dashboard,
+// /workspace/data-cleaning, /workspace/settings/billing ... (the map is
+// lib/routes.ts). Changing pages changes the address WITHOUT leaving this
+// page (open data stays in memory), so Back / Forward, bookmarks and refresh
+// all work. Plain /workspace opens the first page in the left pane.
 //
 // LEFT PANE — the services in a fixed ORDER (a hierarchy, top to bottom):
 //     📊 Dashboard                 first when there is data already
@@ -76,7 +82,8 @@ import {
   signOutServer,
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
-import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd, toolName } from "@/lib/format";
+import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd, SITE_NAME, toolName } from "@/lib/format";
+import { HOME, setAddress, SIGN_IN, SIGN_UP, workspacePath, workspaceViewFromPath, type SettingsSection } from "@/lib/routes";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
 import type {
   AnalyzeResponse,
@@ -147,7 +154,11 @@ const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
 /** A service as the plan sends it: the catalog entry plus whether it's on the plan. */
 type PlanService = MyServices["services"][number];
 /** The account area's sections (Settings, bottom left). */
-type AccountTab = "account" | "billing" | "integrations" | "consultant" | "admin";
+type AccountTab = SettingsSection; // "account" | "billing" | "integrations" | "consultant" | "admin"
+/** The browser tab's title for each Settings section. */
+const SETTINGS_TITLES: Record<AccountTab, string> = {
+  account: "Account", billing: "Plan & billing", integrations: "Integrations", consultant: "Consultant", admin: "Administration",
+};
 /** Where the open data came from: picked files, managed storage, or the client's own cloud database. */
 type Origin = "file" | "stored" | "cloud";
 
@@ -193,6 +204,10 @@ export default function Workspace() {
   const [accountTab, setAccountTab] = useState<AccountTab | null>(null); // null = the workspace itself
   const [infoOpen, setInfoOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The address bar: read once on arrival (urlReady), then kept in step with the
+  // page on screen. urlKey is the page the address last showed (see the effect below).
+  const [urlReady, setUrlReady] = useState(false);
+  const urlKey = useRef<string | null>(null);
 
   // Data for this visit (never stored on the server unless the client stores it).
   const [files, setFiles] = useState<File[]>([]);
@@ -231,7 +246,17 @@ export default function Workspace() {
   const [results, setResults] = useState<Record<string, SkillResult>>({});
 
   useEffect(() => {
+    // The page in the address (/workspace/data-engineering, /workspace/settings/billing).
+    const fromUrl = workspaceViewFromPath(window.location.pathname);
     const s = loadSession();
+    // Consultant / Administration only for consultants / admins; others get Account.
+    const allowed =
+      (fromUrl.settings === "consultant" && s?.account.role !== "consultant") || (fromUrl.settings === "admin" && !s?.account.is_admin)
+        ? "account"
+        : fromUrl.settings;
+    setSection(fromUrl.service);
+    setAccountTab(allowed);
+    setUrlReady(true);
     setSession(s);
     setActingAs(null); // a fresh visit starts in your own workspace
     if (!s) return;
@@ -282,6 +307,7 @@ export default function Workspace() {
       setReturnNote("Payment canceled — nothing was charged.");
       setAccountTab("billing");
     }
+    if (q.get("checkout") || q.get("consulting")) window.history.replaceState(null, "", window.location.pathname); // a refresh won't show it again
     // From Get Started's last step: open Integrations (business apps), or the
     // cloud table that was previewed (opened once the session is ready, below).
     if (q.get("show") === "integrations") setAccountTab("integrations");
@@ -481,8 +507,50 @@ export default function Workspace() {
     const known = order.map((id) => byId[id]).filter(Boolean);
     return [...known, ...plan.services.filter((s) => !order.includes(s.id))];
   }, [plan, hasData]);
-  const current = section ?? ordered.find((s) => s.active)?.id ?? null;
+  // A service the plan doesn't list (e.g. a mistyped /workspace/... address)
+  // opens the first page instead; the address is corrected below.
+  const sectionKnown = !plan || !section || plan.services.some((s) => s.id === section);
+  const current = (sectionKnown ? section : null) ?? ordered.find((s) => s.active)?.id ?? null;
   const currentService = accountTab ? undefined : plan?.services.find((s) => s.id === current);
+
+  // ── The address bar follows the page on screen ──
+  // A page someone CHOSE (section / accountTab changed) adds a history entry,
+  // so Back returns to the last page. A page picked automatically (the first
+  // in the left pane, which moves when data arrives) only replaces the address.
+  useEffect(() => {
+    if (!urlReady) return;
+    const key = `${section}|${accountTab}`;
+    const chosen = urlKey.current !== null && key !== urlKey.current;
+    urlKey.current = key;
+    setAddress(workspacePath({ service: current, settings: accountTab }), !chosen);
+  }, [urlReady, section, accountTab, current]);
+
+  // The browser's Back / Forward: open the page in the address.
+  useEffect(() => {
+    const onPop = () => {
+      const view = workspaceViewFromPath(window.location.pathname);
+      urlKey.current = `${view.service}|${view.settings}`; // already in the address: nothing to add
+      setSection(view.service);
+      setAccountTab(view.settings);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // The browser tab's title names the page ("Data Cleaning · Workspace · ...").
+  useEffect(() => {
+    const page = accountTab ? SETTINGS_TITLES[accountTab] : currentService ? navName(currentService) : null;
+    document.title = `${page ? `${page} · ` : ""}Workspace · ${SITE_NAME}`;
+  }, [accountTab, currentService]);
+
+  // Files from the computer live only in this page's memory: ask before a
+  // refresh or a closed tab throws them away. (Stored and cloud data reopen.)
+  useEffect(() => {
+    if (origin !== "file" || !files.length) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [origin, files.length]);
 
   const input: CleaningInput = useMemo(
     () => ({ files, strategy: "keep", columnActions, columnNames, transforms }),
@@ -567,20 +635,22 @@ export default function Workspace() {
   function signOut() {
     void signOutServer(session?.token); // the token stops working on the server at once
     clearSession();
-    router.push("/");
+    router.push(HOME);
   }
 
   if (session === undefined) return <p className="text-sm text-ink-muted">Loading…</p>;
   if (session === null) {
+    // After signing in, come back to this same page (e.g. /workspace/settings/billing).
+    const next = `?next=${encodeURIComponent(window.location.pathname)}`;
     return (
       <Card className="mx-auto max-w-md text-center">
         <h1 className="text-xl font-semibold">Sign in to open your workspace</h1>
         <p className="mt-1 text-sm text-ink-muted">{error ?? "Use the email address you signed up with."}</p>
         <div className="mt-4 flex justify-center gap-3">
-          <Link href="/signin" className="rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
+          <Link href={`${SIGN_IN}${next}`} className="rounded-full bg-brand px-5 py-2 text-sm font-semibold text-on-brand">
             Sign in
           </Link>
-          <Link href="/signin?mode=signup" className="rounded-full border border-line px-5 py-2 text-sm font-semibold">
+          <Link href={`${SIGN_UP}${next}`} className="rounded-full border border-line px-5 py-2 text-sm font-semibold">
             Create an account
           </Link>
         </div>
@@ -913,7 +983,7 @@ export default function Workspace() {
             onSignOut={signOut}
             onDeleted={() => {
               clearSession();
-              router.push("/");
+              router.push(HOME);
             }}
           />
         )}

@@ -375,6 +375,10 @@ def test_checkout_sends_the_client_to_stripe(stripe_on, monkeypatch):
     # Nothing is unlocked until Stripe's webhook says it's paid.
     assert client.get("/api/accounts/services", headers=_h(token)).json()["subscriptions"] == []
     assert client.post("/api/billing/portal", headers=_h(token)).json()["url"].startswith("https://billing.stripe.com/")
+    # Stripe sends the client back to Plan & billing in the workspace (web/lib/routes.ts).
+    assert kw["success_url"].endswith("/workspace/settings/billing?checkout=success")
+    assert kw["cancel_url"].endswith("/workspace/settings/billing?checkout=canceled")
+    assert stripe_on.calls[-1][1]["return_url"].endswith("/workspace/settings/billing")
 
 
 def _signed(event: dict, secret=WHSEC):

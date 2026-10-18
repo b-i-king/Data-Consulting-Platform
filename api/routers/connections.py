@@ -342,9 +342,9 @@ async def oauth_callback(state: str = "", code: str = "", error: str = "", realm
     `code` and our encrypted `state` (QuickBooks also sends `realmId`, the
     company id). We swap the code for tokens, save them encrypted, and send
     the browser back to the workspace:
-        /app?integration=xero&connected=1             it worked
-        /app?integration=xero&integration_error=...   it didn't (the message says why)
-    (/start instead of /app when the sign-in began in Get Started.)
+        /workspace/settings/integrations?integration=xero&connected=1             it worked
+        /workspace/settings/integrations?integration=xero&integration_error=...   it didn't (the message says why)
+    (/get-started/connect instead when the sign-in began in Get Started.)
 
     No sign-in token is needed here: `state` (encrypted, 15 minutes) says
     which account it is for, and can't be forged.

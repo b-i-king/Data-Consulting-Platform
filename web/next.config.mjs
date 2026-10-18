@@ -6,6 +6,27 @@ const API = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Friendly and old addresses forward to the current ones (lib/routes.ts has
+  // the full address map). Anything after "?" (e.g. ?checkout=success from
+  // Stripe) is passed along automatically. `permanent` tells browsers and
+  // search engines the page has moved for good (HTTP 308).
+  async redirects() {
+    return [
+      // The home page is "/"; "/home" is a common guess.
+      { source: "/home", destination: "/", permanent: true },
+      // Renamed 10/2026: /app -> /workspace and /start -> /get-started.
+      { source: "/app", destination: "/workspace", permanent: true },
+      { source: "/app/:path*", destination: "/workspace/:path*", permanent: true },
+      { source: "/start", destination: "/get-started", permanent: true },
+      { source: "/start/:path*", destination: "/get-started/:path*", permanent: true },
+      // Common guesses for signing in or up.
+      { source: "/login", destination: "/signin", permanent: true },
+      { source: "/sign-in", destination: "/signin", permanent: true },
+      { source: "/register", destination: "/signup", permanent: true },
+      { source: "/sign-up", destination: "/signup", permanent: true },
+      { source: "/settings", destination: "/workspace/settings/account", permanent: false },
+    ];
+  },
   async headers() {
     return [
       {
