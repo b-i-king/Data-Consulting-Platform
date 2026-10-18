@@ -84,6 +84,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd()) }} />
       </head>
       <body className="min-h-screen antialiased">
+        {/* Accessibility: the first thing a keyboard user reaches. Hidden until focused (Tab). */}
+        <a href="#main"
+          className="fixed left-4 top-3 z-50 -translate-y-24 rounded-full bg-brand px-4 py-2 font-semibold text-on-brand shadow-[var(--shadow-card)] focus:translate-y-0">
+          Skip to main content
+        </a>
         <header className="sticky top-0 z-10 border-b border-line bg-canvas/80 backdrop-blur">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
             <Link href="/" className="flex items-center gap-2 font-mono font-semibold tracking-tight">
@@ -102,7 +107,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
           </div>
         </header>
-        <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+        {/* id="main" is where the "Skip to main content" link (top of <body>) jumps;
+            tabIndex -1 lets it take focus without joining the Tab order. */}
+        <main id="main" tabIndex={-1} className="mx-auto max-w-5xl px-4 py-8 focus:outline-none">{children}</main>
         <footer className="mx-auto max-w-5xl border-t border-line px-4 pb-8 pt-2 text-xs text-ink-muted">
           {/* Social media icons (components/SocialLinks.tsx). */}
           <SocialLinks />
@@ -115,7 +122,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 href="https://www.linkedin.com/company/thebolgroup"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-brand hover:underline"
+                className="text-brand-ink hover:underline"
               >
                 {COMPANY}
               </a>

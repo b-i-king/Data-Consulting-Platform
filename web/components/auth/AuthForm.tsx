@@ -52,7 +52,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, forgotPassword, getConsultants, signin, signinMfa, signup } from "@/lib/api";
 import type { Session } from "@/lib/session";
 import type { AccountType, ConsultantLoad, ConsultantPlan, Industry, Location, SignupAs, TeamMemberInput } from "@/lib/types";
@@ -105,10 +105,16 @@ const SIGNUP_AS: { id: SignupAs; label: string; note: string }[] = [
 
 /** A labeled field that shows its error once the person has left it. */
 function Field(props: { label: string; error: string | null; show: boolean; children: ReactNode; hint?: string }) {
+  // Screen readers announce a field with a problem as "invalid" (the message itself
+  // is inside the label, so it's read with the field).
+  const invalid = props.show && !!props.error;
+  const child = isValidElement<{ "aria-invalid"?: boolean }>(props.children)
+    ? cloneElement(props.children, { "aria-invalid": invalid || undefined })
+    : props.children;
   return (
     <label className="block space-y-1 text-sm">
       <span>{props.label}</span>
-      {props.children}
+      {child}
       {props.show && props.error ? (
         <span role="alert" className="block text-xs text-bad">
           {props.error}
@@ -158,6 +164,13 @@ export default function AuthForm({
   // Two-step sign-in: the ticket from the password step, and the code typed.
   const [mfaTicket, setMfaTicket] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
+  // When the code step appears, move the keyboard focus to its box (and screen
+  // readers announce it) — done here rather than with autoFocus, which can
+  // surprise screen-reader users when it fires on a normal page load.
+  const codeRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (mfaTicket) codeRef.current?.focus();
+  }, [mfaTicket]);
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState<Location | null>(null);
   const [team, setTeam] = useState<TeamMemberInput[]>([]);
@@ -318,7 +331,7 @@ export default function AuthForm({
             autoComplete="one-time-code"
             aria-label="6-digit code"
             placeholder="123456"
-            autoFocus
+            ref={codeRef}
           />
           <p className="text-xs text-ink-muted">Lost your phone? Type one of your backup codes instead (like 7f3k-9q2m).</p>
           <ErrorBox message={error} />
@@ -331,7 +344,7 @@ export default function AuthForm({
             <Button type="submit" disabled={busy || mfaCode.trim().length < 6}>
               {busy ? "Checking…" : "Verify"}
             </Button>
-            <button type="button" className="text-sm text-brand hover:underline"
+            <button type="button" className="text-sm text-brand-ink hover:underline"
               onClick={() => { setMfaTicket(null); setMfaCode(""); setNotice(null); setError(null); }}>
               Back to sign-in
             </button>
@@ -402,7 +415,7 @@ export default function AuthForm({
           {mode === "signin" && (
             // "Forgot password?" sits on the right of the Password label, like most apps.
             <div className="-mb-1 flex justify-end">
-              <Link href="/forgot-password" className="text-xs text-brand hover:underline">
+              <Link href="/forgot-password" className="text-xs text-brand-ink hover:underline">
                 Forgot password?
               </Link>
             </div>
@@ -551,11 +564,11 @@ export default function AuthForm({
               />
               <span>
                 I agree to the{" "}
-                <Link href="/terms" target="_blank" className="text-brand underline">
+                <Link href="/terms" target="_blank" className="text-brand-ink underline">
                   Terms of Service
                 </Link>{" "}
                 and{" "}
-                <Link href="/privacy" target="_blank" className="text-brand underline">
+                <Link href="/privacy" target="_blank" className="text-brand-ink underline">
                   Privacy Policy
                 </Link>
                 .
@@ -592,7 +605,7 @@ export default function AuthForm({
           </Button>
           <button
             type="button"
-            className="text-sm text-brand hover:underline"
+            className="text-sm text-brand-ink hover:underline"
             onClick={() => {
               setMode(mode === "signup" ? "signin" : "signup");
               setError(null);

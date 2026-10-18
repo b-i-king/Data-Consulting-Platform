@@ -82,7 +82,7 @@ export default function AdminTesters({ token }: { token: string }) {
             <div className="min-w-0 text-sm">
               <span className="font-medium">{p.company_name ?? p.name}</span>
               {p.is_tester && (
-                <span className="ml-2 rounded-full bg-brand/15 px-2 py-0.5 text-[11px] font-semibold text-brand">Tester</span>
+                <span className="ml-2 rounded-full bg-brand/15 px-2 py-0.5 text-[11px] font-semibold text-brand-ink">Tester</span>
               )}
               {p.is_healthcare && (
                 <span className="ml-2 rounded-full bg-warn/15 px-2 py-0.5 text-[11px] font-semibold text-warn">Healthcare</span>

@@ -40,7 +40,7 @@ export default function PrivacyPage() {
           <li>
             <Strong>Managed storage (only if you opt in)</Strong> — if you (or your consultant, for you) accept a
             preview and agree to the{" "}
-            <Link href="/storage-terms" className="text-brand hover:underline">
+            <Link href="/storage-terms" className="text-brand-ink hover:underline">
               Storage Terms
             </Link>
             , the cleaned data you approved is stored so you can view it later.
@@ -130,7 +130,7 @@ export default function PrivacyPage() {
           </li>
           <li>
             <Strong>Delete</Strong> your stored data at any time, or ask us to close your account — see{" "}
-            <Link href="/data-deletion" className="text-brand hover:underline">
+            <Link href="/data-deletion" className="text-brand-ink hover:underline">
               Data Deletion
             </Link>
             .

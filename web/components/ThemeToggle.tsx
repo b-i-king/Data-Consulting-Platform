@@ -94,7 +94,7 @@ export default function ThemeToggle() {
             apply(o.id);
           }}
           className={`rounded-full p-1.5 transition-colors ${
-            choice === o.id ? "bg-surface text-brand shadow-[var(--shadow-card)]" : "text-ink-muted hover:text-ink"
+            choice === o.id ? "bg-surface text-brand-ink shadow-[var(--shadow-card)]" : "text-ink-muted hover:text-ink"
           }`}
         >
           {o.icon}

@@ -16,7 +16,7 @@ export default function TermsPage() {
         <p>
           By using <strong>{SITE_NAME}</strong> (&quot;the Platform&quot;), operated by <strong>{COMPANY}</strong>, you
           agree to these Terms of Service and our{" "}
-          <Link href="/privacy" className="text-brand hover:underline">
+          <Link href="/privacy" className="text-brand-ink hover:underline">
             Privacy Policy
           </Link>
           . If you do not agree, please do not use the Platform.
@@ -50,7 +50,7 @@ export default function TermsPage() {
           </li>
           <li>
             Uploaded files are not kept. If you choose managed storage, the{" "}
-            <Link href="/storage-terms" className="text-brand hover:underline">
+            <Link href="/storage-terms" className="text-brand-ink hover:underline">
               Storage Terms
             </Link>{" "}
             also apply.

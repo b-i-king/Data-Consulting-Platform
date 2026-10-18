@@ -63,7 +63,7 @@ export default function StorageTermsPage() {
         <p>
           Only to provide the services you choose. We do not sell it, use it for advertising, or share it with anyone
           other than the providers that run the Platform (see the{" "}
-          <Link href="/privacy" className="text-brand hover:underline">
+          <Link href="/privacy" className="text-brand-ink hover:underline">
             Privacy Policy
           </Link>
           ).
@@ -82,7 +82,7 @@ export default function StorageTermsPage() {
           <li>
             <Strong>Delete</Strong> it anytime: Data Engineering → Stored for … → Delete stored data. It is deleted right
             away and your consent is withdrawn. See{" "}
-            <Link href="/data-deletion" className="text-brand hover:underline">
+            <Link href="/data-deletion" className="text-brand-ink hover:underline">
               Data Deletion
             </Link>
             .

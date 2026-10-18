@@ -24,7 +24,7 @@ export default function SignInPanel({ initialMode }: { initialMode: "signup" | "
       />
       <p className="mt-6 text-sm text-ink-muted">
         Just looking?{" "}
-        <Link href="/start" className="text-brand hover:underline">
+        <Link href="/start" className="text-brand-ink hover:underline">
           Start as a guest
         </Link>{" "}
         — no account needed until you download.

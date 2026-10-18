@@ -73,7 +73,7 @@ export default function ResetPasswordForm() {
       ) : linkProblem ? (
         <div className="space-y-4">
           <ErrorBox message={linkProblem} />
-          <Link href="/forgot-password" className="text-sm text-brand hover:underline">
+          <Link href="/forgot-password" className="text-sm text-brand-ink hover:underline">
             Send me a new link
           </Link>
         </div>

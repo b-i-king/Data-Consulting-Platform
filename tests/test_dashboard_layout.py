@@ -171,3 +171,43 @@ def test_a_daily_summary_table_skips_the_record_count():
     d = skill.run(_law_firm(), include_html=False).data          # one row per day, no industry
     assert "__rows__" not in d["layout"]["kpi_row"] and "__avg__" not in d["layout"]["kpi_row"]
     assert all(v["metric"] != "__rows__" for r in d["layout"]["rows"] for v in r["items"])
+
+
+# ── Download in the browser (web/lib/dashboardFile.ts) ───────────────────────
+
+def test_the_web_apps_template_copy_is_up_to_date():
+    """The browser builds the download from web/public/dashboard-template.html: it must match templates/."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "sync_dashboard_template.py"
+    spec = importlib.util.spec_from_file_location("sync_dashboard_template", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.sync(check=True), "Run: python scripts/sync_dashboard_template.py"
+
+
+def test_filling_the_template_gives_the_same_file_as_render_html():
+    """What the browser does (paste the title and data into the template) equals the server's file."""
+    page = skill.page_template()
+    assert page.count("__TITLE__") == 1 and page.count("__DATA__") == 1 and "__BLOCKS__" not in page
+    r = skill.run(_law_firm(), title="Q3 <Review>")
+    safe = json.dumps(r.data).replace("</", "<\\/")
+    assert page.replace("__TITLE__", "Q3 &lt;Review>").replace("__DATA__", safe) == r.artifacts["html_dashboard"]
+
+
+def test_the_downloaded_tab_says_overview_and_the_heading_doesnt_repeat_it():
+    """The file's tab is "Overview" (the web app's name); the heading defaults to "At a glance"."""
+    page = skill.page_template()
+    assert 'id="tabName">Overview</button>' in page and ">Dashboard</button>" not in page
+    assert skill.run(_law_firm(), include_html=False).data["title"] == "At a glance"
+
+
+def test_the_subtitle_describes_this_dashboard_not_your_business():
+    """Written from the KPI row and breakdowns (fits individuals too); industry KPIs name the sector."""
+    d = skill.run(pd.read_csv("samples/sales.csv"), include_html=False).data
+    assert d["subtitle"] == "Total amount, transactions and average per transaction over time, by order type, product and 2 more"
+    assert "business" not in d["subtitle"]
+    law = skill.run(_law_firm(), industry="54", include_html=False).data
+    if law["industry"]["metrics"]:
+        assert law["subtitle"].startswith(law["industry"]["name"] + " KPIs: ")
+    assert skill._subtitle(["__total__"], {"__total__": "Total amount"}, ["store"], None) == "Total amount over time, by store"
+    assert skill._subtitle(["a", "b"], {"a": "Revenue", "b": "NPS score"}, [], None) == "Revenue and NPS score over time"

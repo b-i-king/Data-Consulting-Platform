@@ -127,7 +127,7 @@ export function TourButton({ id, className = "" }: { id: string; className?: str
   return (
     <button
       type="button"
-      className={`text-sm text-brand hover:underline ${className}`}
+      className={`text-sm text-brand-ink hover:underline ${className}`}
       onClick={() => window.dispatchEvent(new CustomEvent(REPLAY, { detail: id }))}
     >
       Take the tour

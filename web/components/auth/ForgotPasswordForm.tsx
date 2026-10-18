@@ -59,7 +59,7 @@ export default function ForgotPasswordForm() {
       )}
       <p className="mt-6 text-sm text-ink-muted">
         Remembered it?{" "}
-        <Link href="/signin" className="text-brand hover:underline">
+        <Link href="/signin" className="text-brand-ink hover:underline">
           Back to sign in
         </Link>
       </p>

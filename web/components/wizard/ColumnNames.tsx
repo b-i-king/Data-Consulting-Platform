@@ -89,7 +89,7 @@ export default function ColumnNames(props: {
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-semibold">Column names</h3>
-        <button type="button" className="text-sm text-brand hover:underline" onClick={() => setEditing(!editing)} aria-expanded={editing}>
+        <button type="button" className="text-sm text-brand-ink hover:underline" onClick={() => setEditing(!editing)} aria-expanded={editing}>
           {editing ? "Hide column names" : "Edit column names"}
         </button>
       </div>

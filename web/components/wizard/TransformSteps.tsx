@@ -113,7 +113,7 @@ export default function TransformSteps(props: {
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-semibold">Transform data</h3>
-        <button type="button" className="text-sm text-brand hover:underline" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <button type="button" className="text-sm text-brand-ink hover:underline" onClick={() => setOpen(!open)} aria-expanded={open}>
           {open ? "Hide tools" : "Show tools"}
         </button>
       </div>

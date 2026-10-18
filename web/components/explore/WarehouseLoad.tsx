@@ -587,7 +587,7 @@ export default function WarehouseLoad(props: {
                   <span>
                     Store this data for <strong>{props.clientName}</strong> in the managed database. It&apos;s kept
                     private to this account and can be deleted anytime.{" "}
-                    <Link href="/storage-terms" target="_blank" className="text-brand underline">
+                    <Link href="/storage-terms" target="_blank" className="text-brand-ink underline">
                       Storage terms
                     </Link>{" "}
                     <span className="text-ink-muted">({plan.storage.terms_version})</span>
@@ -610,7 +610,7 @@ export default function WarehouseLoad(props: {
           {declined && !result && (
             <p className="rounded-xl bg-surface-2 p-3 text-sm">
               Nothing was stored. Change the choices above to see a new preview, or{" "}
-              <button type="button" className="text-brand underline" onClick={() => setDeclined(false)}>
+              <button type="button" className="text-brand-ink underline" onClick={() => setDeclined(false)}>
                 load after all
               </button>
               .
@@ -654,7 +654,7 @@ export default function WarehouseLoad(props: {
                     {s.label} · {fmtInt(s.records)} row(s) of the table, {fmtInt(s.rows)} stored row(s)
                     {s.first_date && s.last_date && <> · {fmtDate(s.first_date)} – {fmtDate(s.last_date)}</>}
                   </span>
-                  <button type="button" className="text-xs text-brand underline" onClick={() => download(s.source_name)}>
+                  <button type="button" className="text-xs text-brand-ink underline" onClick={() => download(s.source_name)}>
                     Download CSV
                   </button>
                 </li>
@@ -689,7 +689,7 @@ export default function WarehouseLoad(props: {
                 This permanently deletes {fmtInt(stored.warehouse.rows)} stored row(s) from{" "}
                 {fmtInt(stored.warehouse.sources.length)} file(s), and withdraws the storage consent. It can&apos;t be
                 undone — download a CSV first if you want a copy. The account itself stays (see{" "}
-                <Link href="/data-deletion" className="text-brand underline">Data deletion</Link> to close it).
+                <Link href="/data-deletion" className="text-brand-ink underline">Data deletion</Link> to close it).
               </p>
             </ConfirmDialog>
           )}

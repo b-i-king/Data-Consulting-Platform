@@ -30,7 +30,9 @@ coding, so **understanding the code matters as much as the code itself**.
   - `api/services/entity_matching.py` → update `docs/CONNECTORS.md` and `docs/DATA_MODEL.md`
   - `data_skills/<id>/skill.py` → keep its `README.md` procedure in step, and run
     `python scripts/sync_skill_docs.py` to regenerate the "Run it" options table (`pytest` checks it)
-  - `data_skills/_time.py` or `data_skills/build-dashboard/` → update `docs/DASHBOARDS.md`
+  - `data_skills/_time.py` or `data_skills/build-dashboard/` → update `docs/DASHBOARDS.md`;
+    a change in `build-dashboard/templates/` also needs `python scripts/sync_dashboard_template.py`
+    (the browser's copy, `web/public/dashboard-template.html`; `pytest` checks it)
 - **Never read pickle or HDF5 uploads** — they can run code. Untrusted files only
   go through the readers in `file_reader.py`.
 - **pandas is the data engine.** Prefer clear pandas over clever pandas.
@@ -63,6 +65,7 @@ python -m data_skills list         # skills by category
 python -m data_skills run build-dashboard samples/sales.csv   # run a skill -> outputs/
 python scripts/make_sample_data.py # regenerate samples/ (fictional bakery)
 python scripts/sync_skill_docs.py  # regenerate each README.md "Run it" section from skill.py
+python scripts/sync_dashboard_template.py  # copy the dashboard download template into web/public/
 ```
 
 ## Skills

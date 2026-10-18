@@ -92,7 +92,7 @@ export default function ConsultationPanel(props: {
       ))}
 
       {!adding ? (
-        <button type="button" className="text-sm text-brand hover:underline" onClick={() => setAdding(true)}>
+        <button type="button" className="text-sm text-brand-ink hover:underline" onClick={() => setAdding(true)}>
           Add a call by hand
         </button>
       ) : (

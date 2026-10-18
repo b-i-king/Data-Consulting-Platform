@@ -238,7 +238,7 @@ function NextSteps(props: {
               <strong>Your consultant: {consultantName}</strong> ·{" "}
               {PLAN_LABELS[plan?.account.consultant_plan ?? props.consultantPlan].title}. They&apos;ll reach out for your free
               30-minute consultation.{" "}
-              <a href={plan?.consulting.booking_url} target="_blank" rel="noreferrer" className="text-brand underline">
+              <a href={plan?.consulting.booking_url} target="_blank" rel="noreferrer" className="text-brand-ink underline">
                 Or book it now
               </a>
               .
@@ -317,11 +317,11 @@ function NextSteps(props: {
 
       <p className="mt-6 text-sm text-ink-muted">
         Signed in as {props.session.account.email}.{" "}
-        <Link href={props.workspaceHref ?? "/app"} className="text-brand hover:underline">
+        <Link href={props.workspaceHref ?? "/app"} className="text-brand-ink hover:underline">
           Open your workspace
         </Link>{" "}
         ·{" "}
-        <button type="button" className="text-brand hover:underline" onClick={props.onSignOut}>
+        <button type="button" className="text-brand-ink hover:underline" onClick={props.onSignOut}>
           Sign out
         </button>
       </p>
@@ -374,7 +374,7 @@ function SyncBox(props: { token: string; connector: string; canStore: boolean; p
             <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" />
             <span>
               Yes, store my {name} data in my account (the{" "}
-              <Link href="/storage-terms" className="text-brand underline">storage terms</Link>). I can delete it anytime.
+              <Link href="/storage-terms" className="text-brand-ink underline">storage terms</Link>). I can delete it anytime.
             </span>
           </label>
           <Button disabled={busy} onClick={turnOn}>

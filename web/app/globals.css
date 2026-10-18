@@ -30,19 +30,24 @@
   --color-brand: #a07c1e;         /* gold accent: buttons, highlights */
   --color-brand-strong: #8a6a16;  /* hover */
   --color-brand-soft: #f7f0dc;    /* selected cards, badges */
+  /* Gold for TEXT (links, labels): darker than --color-brand so it passes WCAG AA
+     contrast (4.5:1) on every light background; buttons and fills keep --color-brand. */
+  --color-brand-ink: #7d5f12;
   --color-on-brand: #111111;      /* text on gold buttons */
-  --color-good: #2b8a3e;
+  --color-good: #1f6f2e;          /* AA (4.5:1) as text on white, gray and its own tinted pill */
   --color-warn: #b7791f;
-  --color-bad: #c92a2a;
+  --color-bad: #b22424;           /* AA on white, gray and its own tinted pill */
 
   /* One color per service category (chips, card accents). */
-  --color-cat-cleaning: #0f8a7e;
+  /* Category colors are also used as TEXT (headings, labels): each passes WCAG AA
+     (4.5:1) on white cards and the light-gray page. Dark mode has its own, brighter set. */
+  --color-cat-cleaning: #0d796f;
   --color-cat-strategy: #7048e8;
-  --color-cat-analysis: #1c7ed6;
-  --color-cat-viz: #d6336c;
-  --color-cat-ml: #e8590c;
-  --color-cat-engineering: #2f9e44;
-  --color-cat-ai: #a07c1e;
+  --color-cat-analysis: #196fbc;
+  --color-cat-viz: #cb2962;
+  --color-cat-ml: #ba470a;
+  --color-cat-engineering: #257b35;
+  --color-cat-ai: #866819;
 
   /* Consultant mode (lavender): the header badge, "Working on" picker and banner. */
   /* Integrations: each tool's own primary color, for its name and badge in
@@ -90,6 +95,7 @@
     --color-brand: #c8ac44;
     --color-brand-strong: #dcc25e;
     --color-brand-soft: #2a2717;
+    --color-brand-ink: #c8ac44;
     --color-on-brand: #0e1117;
     --color-good: #69db7c;
     --color-warn: #ffd43b;
@@ -128,6 +134,7 @@
       --color-brand: #c8ac44;
       --color-brand-strong: #dcc25e;
       --color-brand-soft: #2a2717;
+      --color-brand-ink: #c8ac44;
       --color-on-brand: #0e1117;
       --color-good: #69db7c;
       --color-warn: #ffd43b;
@@ -192,4 +199,24 @@
   outline-offset: 4px;
   border-radius: 1rem;
   transition: outline-color 0.2s;
+}
+
+/* ── Accessibility (docs/ACCESSIBILITY.md) ─────────────────────────────────── */
+@layer base {
+  /* WCAG 1.4.1: a link inside a sentence or list item must stand out by more than
+     color, so it's underlined. Buttons and navigation links keep their look. */
+  p a, li a, dd a, label a { text-decoration-line: underline; text-underline-offset: 2px; }
+  /* WCAG 2.4.7: whatever has keyboard focus always shows a clear outline (mouse
+     clicks don't trigger it — that's what :focus-visible means). */
+  :focus-visible { outline: 2px solid var(--color-brand-ink); outline-offset: 2px; }
+}
+/* WCAG 2.3.3: people who set "reduce motion" on their computer (vestibular
+   disorders, migraines) get no animations or slides — changes appear at once. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

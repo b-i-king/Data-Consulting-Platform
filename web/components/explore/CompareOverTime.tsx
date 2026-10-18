@@ -142,7 +142,7 @@ export default function CompareOverTime(props: { input: CleaningInput; analysis:
           <p className="text-sm">
             <strong>{result.summary}</strong>
             {r !== null && r !== undefined && (
-              <span className={`ml-2 rounded-full px-2 py-0.5 font-mono text-xs ${Math.abs(r) >= 0.4 ? "bg-brand-soft text-brand" : "bg-surface-2 text-ink-muted"}`}>
+              <span className={`ml-2 rounded-full px-2 py-0.5 font-mono text-xs ${Math.abs(r) >= 0.4 ? "bg-brand-soft text-brand-ink" : "bg-surface-2 text-ink-muted"}`}>
                 r = {r >= 0 ? "+" : ""}{r.toFixed(2)}
               </span>
             )}
