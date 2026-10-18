@@ -13,6 +13,7 @@ WHAT THIS FILE DOES
   handle_webhook(payload, signature)       -> Stripe tells us what happened; we update
                                               dim.subscriptions (db/schema.sql)
   live_plan_services(account)              -> services unlocked by live subscriptions
+  set_tester(account, on)                  -> an admin makes someone a tester (no charge)
 
 THE AI RULE
 -----------
@@ -33,23 +34,26 @@ HOW THE PIECES FIT
    (STRIPE_WEBHOOK_SECRET) so nobody can fake "paid", then save the result.
    The webhook is the ONLY thing that turns a paid plan on or off.
 
-PLACEHOLDER MODE (no STRIPE_SECRET_KEY)
----------------------------------------
+PLACEHOLDER MODE (no STRIPE_SECRET_KEY) — and TESTERS
+-----------------------------------------------------
 For testing without Stripe: choosing a plan switches it on at once with no
 charge, and "cancel" switches it off.
 The site says "test mode" so nobody thinks they paid.
+A TESTER (dim.accounts.is_tester, set in the Admin panel) always gets this
+mode, even when Stripe is live — so people can try the paid tools for free
+while real clients pay (`charges_real_money`).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store, pricing
+from api.services import account_store, offers, pricing, stripe_catalog
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +77,26 @@ def stripe_enabled() -> bool:
         False
     """
     return bool(get_settings().stripe_secret_key)
+
+
+def charges_real_money(account: dict) -> bool:
+    """
+    Tell whether THIS account pays through Stripe: Stripe is on and they aren't a tester.
+
+    Testers (accounts.is_tester, set by an admin) get test mode even when
+    Stripe is live: packages switch on at once and nothing is charged.
+
+    Args:
+        account: dict, the plan holder's accounts row.
+
+    Returns:
+        bool: True when checkout goes to Stripe for this account.
+
+    Example:
+        >>> charges_real_money({"is_tester": True})   # even with STRIPE_SECRET_KEY set
+        False
+    """
+    return stripe_enabled() and not account.get("is_tester")
 
 
 def _stripe():
@@ -216,7 +240,7 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
     Subscribe to a package of tools, billed monthly or yearly.
 
       * No live subscription -> Stripe Checkout with one line per billable tool
-        (test mode: switched on at once).
+        (test mode, or a tester: switched on at once, nothing charged).
       * Already subscribed   -> the subscription's tools (and interval) are
         changed in place; Stripe prorates the difference on the next invoice.
 
@@ -228,11 +252,17 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
         plan_ids: list[str], the Subscription ids picked.
         interval: str, "month" or "year".
 
+    A FIRST package gets one offer (api/services/offers.py): a free trial when
+    they qualify (Stripe's trial_period_days; in test mode the package starts as
+    "trialing"), otherwise the seasonal sale running today (a Stripe coupon off
+    the first payment). Changing an existing package gets neither.
+
     Returns:
-        dict: {"url", "activated", "updated", "test_mode"} — "url" is the Stripe
-            Checkout page to send the client to (None when nothing needs paying
-            there), "activated" is True when the plan switched on at once (test
-            mode), "updated" is True when an existing subscription was changed.
+        dict: {"url", "activated", "updated", "test_mode", "trial_days", "sale"} —
+            "url" is the Stripe Checkout page to send the client to (None when
+            nothing needs paying there), "activated" is True when the plan
+            switched on at once (test mode), "updated" is True when an existing
+            subscription was changed; "trial_days" / "sale" = the offer applied.
 
     Raises:
         HTTPException: 400 for an admin (ADMIN_FREE: everything is free for
@@ -257,40 +287,64 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
             and current["billing_interval"] == interval:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="That's already your package.")
 
-    if not stripe_enabled():
+    offer = (await offers.offer_for(account, billable) if not current
+             else {"applies": None, "trial_days": 0, "sale": None})
+    trial = offer["trial_days"] if offer["applies"] == "trial" else 0
+    sale = offer["sale"] if offer["applies"] == "sale" else None
+
+    if not charges_real_money(account):   # test mode, or a tester: on at once, no charge
         await account_store.upsert_subscription(
-            account_id=str(account["id"]), billing_interval=interval, status="active",
-            items=[{"plan_id": p} for p in picked], subscription_id=str(current["id"]) if current else None)
-        return {"url": None, "activated": True, "updated": bool(current), "test_mode": True}
+            account_id=str(account["id"]), billing_interval=interval, status="trialing" if trial else "active",
+            items=[{"plan_id": p} for p in picked], subscription_id=str(current["id"]) if current else None,
+            current_period_end=datetime.now(timezone.utc) + timedelta(days=trial) if trial else None)
+        if trial:
+            await account_store.mark_trial_used(str(account["id"]))
+        return {"url": None, "activated": True, "updated": bool(current), "test_mode": True,
+                "trial_days": trial, "sale": sale}
 
     stripe = _stripe()
+    # Tools picked but not charged yet (AI before launch) never reach Stripe, so
+    # they ride along in the subscription's metadata and come back with the webhook.
+    meta = {"account_id": str(account["id"]), "free_plans": ",".join(p for p in picked if p not in billable)}
     if current and current.get("stripe_subscription_id"):
-        # Change the existing subscription: remove items no longer wanted (or all
-        # of them when the interval changes), add the new ones.
+        # Change the existing subscription IN PLACE (one subscription, one receipt):
+        # remove Stripe items no longer wanted (all of them when the interval changes),
+        # add the new ones. Switching to All tools = every tool removed, the bundle added.
         keep = {i["plan_id"]: i for i in current["items"]} if current["billing_interval"] == interval else {}
         changes = [{"id": i["stripe_subscription_item_id"], "deleted": True}
                    for pid, i in {x["plan_id"]: x for x in current["items"]}.items()
-                   if pid not in keep or pid not in billable]
+                   if i.get("stripe_subscription_item_id") and (pid not in keep or pid not in billable)]
         changes += [{"price": _price_id(pricing.lookup_key(pid, interval))} for pid in billable if pid not in keep]
-        sub = stripe.Subscription.modify(current["stripe_subscription_id"], items=changes,
-                                         proration_behavior="create_prorations",
-                                         metadata={"account_id": str(account["id"])})
+        sub = stripe.Subscription.modify(
+            current["stripe_subscription_id"], **({"items": changes} if changes else {}),
+            # Bill (or credit) the difference NOW: an annual client adding a tool in
+            # month 2 pays for the rest of that year today, not at next year's renewal.
+            proration_behavior="always_invoice",
+            # Changing the package undoes a "cancel at the end of the period".
+            cancel_at_period_end=False,
+            metadata=meta)
         await _save_subscription(_as_dict(sub))   # the webhook will confirm the same thing
-        return {"url": None, "activated": False, "updated": True, "test_mode": False}
+        return {"url": None, "activated": False, "updated": True, "test_mode": False, "trial_days": 0, "sale": None}
 
     site = get_settings().site_url.rstrip("/")
+    sub_data = {"metadata": meta}   # copied onto the subscription, so the webhook knows whose package it is
+    if trial:
+        sub_data["trial_period_days"] = trial                        # Stripe charges nothing until it ends
+    # Stripe takes EITHER a coupon OR the "add promotion code" box, not both.
+    discount = ({"discounts": [{"coupon": stripe_catalog.ensure_coupon(stripe, sale)}]} if sale
+                else {"allow_promotion_codes": True})
     session = stripe.checkout.Session.create(
         mode="subscription",
         customer=await _customer_id(account),
         line_items=[{"price": _price_id(pricing.lookup_key(pid, interval)), "quantity": 1} for pid in billable],
         client_reference_id=str(account["id"]),
-        # Copied onto the subscription, so the webhook knows whose package it is.
-        subscription_data={"metadata": {"account_id": str(account["id"])}},
-        allow_promotion_codes=True,
+        subscription_data=sub_data,
+        **discount,
         success_url=f"{site}/app?checkout=success",
         cancel_url=f"{site}/app?checkout=canceled",
     )
-    return {"url": session.url, "activated": False, "updated": False, "test_mode": False}
+    return {"url": session.url, "activated": False, "updated": False, "test_mode": False,
+            "trial_days": trial, "sale": sale}
 
 
 async def billing_portal(account: dict) -> dict:
@@ -304,13 +358,13 @@ async def billing_portal(account: dict) -> dict:
         dict: {"url": str}, the portal page; it returns to <SITE_URL>/app.
 
     Raises:
-        HTTPException: 400 in test mode (cancel from the workspace instead).
+        HTTPException: 400 in test mode or for a tester (cancel from the workspace instead).
 
     Example:
         >>> await billing_portal(account)
         {'url': 'https://billing.stripe.com/p/session/...'}
     """
-    if not stripe_enabled():
+    if not charges_real_money(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Test mode: cancel the plan from your workspace.")
     session = _stripe().billing_portal.Session.create(
         customer=await _customer_id(account), return_url=f"{get_settings().site_url.rstrip('/')}/app")
@@ -319,7 +373,7 @@ async def billing_portal(account: dict) -> dict:
 
 async def cancel_placeholder(account: dict) -> None:
     """
-    Switch the subscription off in test mode only (with Stripe, the portal does this).
+    Switch the subscription off in test mode, or for a tester (with Stripe, the portal does this).
 
     Every live subscription of the account is marked "canceled".
 
@@ -330,13 +384,13 @@ async def cancel_placeholder(account: dict) -> None:
         None.
 
     Raises:
-        HTTPException: 400 when Stripe is enabled (use "Manage billing"), or when
-            there is no live subscription to cancel.
+        HTTPException: 400 when this account pays through Stripe (use "Manage
+            billing"), or when there is no live subscription to cancel.
 
     Example:
         >>> await cancel_placeholder(account)   # test mode, after start_checkout
     """
-    if stripe_enabled():
+    if charges_real_money(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Use “Manage billing” to cancel.")
     live = await account_store.list_subscriptions(str(account["id"]))
     if not live:
@@ -473,11 +527,23 @@ async def _save_subscription(sub) -> None:
     if not items or interval is None:
         log.warning("Stripe subscription %s has no known tools; ignored.", sub.get("id"))
         return
+    # Tools picked but not charged yet (AI before launch) came along in the metadata.
+    for pid in (meta.get("free_plans") or "").split(","):
+        if pid in pricing.SUBSCRIPTIONS_BY_ID and all(i["plan_id"] != pid for i in items):
+            items.append({"plan_id": pid, "stripe_subscription_item_id": None})
+    if sub.get("status") == "trialing":
+        await account_store.mark_trial_used(account_id)   # one free trial per account
     await account_store.upsert_subscription(
         account_id=account_id, billing_interval=interval, status=sub.get("status"), items=items,
         stripe_subscription_id=sub.get("id"), stripe_customer_id=sub.get("customer"),
         cancel_at_period_end=bool(sub.get("cancel_at_period_end")), current_period_end=_period_end(sub),
     )
+    # Why they canceled (Stripe's customer portal asks, when "Collect cancellation reason" is on).
+    details = sub.get("cancellation_details") or {}
+    if details.get("feedback") or details.get("comment") or sub.get("canceled_at"):
+        when = sub.get("canceled_at")
+        await account_store.set_cancellation(sub.get("id"), details.get("feedback"), details.get("comment"),
+                                             datetime.fromtimestamp(when, tz=timezone.utc) if when else None)
 
 
 async def handle_webhook(payload: bytes, signature: str | None) -> str:
@@ -520,3 +586,49 @@ async def handle_webhook(payload: bytes, signature: str | None) -> str:
     if kind in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
         await _save_subscription(obj)
     return kind
+
+
+async def set_tester(account: dict, is_tester: bool) -> dict:
+    """
+    Make an account a tester (paid tools free, even with Stripe live), or a paying client again.
+
+    Rules:
+      * Only a plan holder (individual or team owner): colleagues share the
+        owner's plan, so the owner is the one to switch.
+      * Not an admin (admins already have everything free).
+      * Not while they pay through Stripe: cancel their paid package first, so
+        nobody keeps being charged for a plan we're also giving away.
+      * Switching a tester OFF ends any package they turned on for free (test
+        mode subscriptions with no Stripe id), so tools lock again until they pay.
+
+    Args:
+        account: dict, the accounts row.
+        is_tester: bool, True = tester.
+
+    Returns:
+        dict: the updated accounts row.
+
+    Raises:
+        HTTPException: 400 for a colleague or an admin; 409 while they have a
+            paid Stripe subscription.
+
+    Example:
+        >>> (await set_tester(ana, True))["is_tester"]
+        True
+    """
+    from api.services.entitlements import is_admin   # (entitlements imports billing)
+
+    if account.get("team_role") in ("developer", "member"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Colleagues share their business owner's plan — make the owner a tester instead.")
+    if is_admin(account):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ADMIN_FREE)
+    live = await account_store.list_subscriptions(str(account["id"]))
+    if is_tester and any(s.get("stripe_subscription_id") for s in live):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail="They're paying through Stripe right now. Cancel that package first, then make them a tester.")
+    if not is_tester:
+        for s in live:
+            if not s.get("stripe_subscription_id"):   # a free (tester / test mode) package
+                await account_store.set_subscription_status(str(s["id"]), "canceled")
+    return await account_store.set_tester(str(account["id"]), is_tester) or account

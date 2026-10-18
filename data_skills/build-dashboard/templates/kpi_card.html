@@ -1,0 +1,35 @@
+<!--
+  KPI card blocks (Canva: the cards in the KPI row, 1 to 4 per row). The whole row
+  uses ONE style, data.kpi_style (layout.py kpi_style), so it looks consistent:
+    tpl-kpi-number  the title and the big number (no earlier period to compare)
+    tpl-kpi         the title, the number, and the change vs. the previous range,
+                    colored good / neutral / bad by the metric's direction
+                    (percentages change in points: "+2.0 pts")
+    tpl-kpi-gauge   a half-circle dial 0–100% with the target band, "On target /
+                    Above / Below" and the change (only when every KPI is a percentage)
+  .kpi-bench is the industry benchmark, when there is one. The first card is the
+  hero (class "hero": the brand accent, like Canva's blue card).
+-->
+<template id="tpl-kpi-number">
+  <article class="kpi">
+    <div class="kpi-label"></div>
+    <div class="kpi-value"></div>
+    <div class="kpi-bench"></div>
+  </article>
+</template>
+<template id="tpl-kpi">
+  <article class="kpi">
+    <div class="kpi-label"></div>
+    <div class="kpi-value"></div>
+    <div class="kpi-delta"><span class="pill"></span><span class="vs"></span></div>
+    <div class="kpi-bench"></div>
+  </article>
+</template>
+<template id="tpl-kpi-gauge">
+  <article class="kpi">
+    <div class="kpi-label"></div>
+    <div class="kpi-gauge"></div>
+    <div class="kpi-delta center"><span class="pill status"></span><span class="pill"></span></div>
+    <div class="kpi-bench center"></div>
+  </article>
+</template>

@@ -21,9 +21,15 @@ Guests never need a token: the upload / clean / preview endpoints do not use
 WHY A JWT?
 ----------
 A JWT is a small, signed piece of text. Because it is signed with
-`JWT_SECRET_KEY`, the server can trust its contents (account id, email)
-without looking anything up in the database on every request. Same approach
-as the Video_Game_Stats_Tracker template (`api/core/deps.py`).
+`JWT_SECRET_KEY`, the server can trust its contents (account id, email). Same
+approach as the Video_Game_Stats_Tracker template (`api/core/deps.py`).
+
+SESSIONS (api/services/sessions.py)
+-----------------------------------
+Each token also carries "sid", the signed-in device's session, and every
+request checks that session is still live: signed out, idle 8 hours, bumped
+by a 4th device, or a password change all end it at once — a JWT alone can't
+be taken back. "mfa": True says the sign-in included the two-step code.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -40,7 +46,8 @@ from api.core.config import get_settings
 _bearer = HTTPBearer(auto_error=False)
 
 
-def create_access_token(account_id: str, email: str, account_type: str, role: str = "client") -> str:
+def create_access_token(account_id: str, email: str, account_type: str, role: str = "client",
+                        sid: str | None = None, mfa: bool = False) -> str:
     """
     Build and sign a token that identifies this account. `role` is "client" or "consultant".
 
@@ -74,6 +81,8 @@ def create_access_token(account_id: str, email: str, account_type: str, role: st
         "role": role,                    # "client" or "consultant" (re-checked on every request)
         "iat": now,                      # issued at
         "exp": now + timedelta(minutes=settings.access_token_expire_minutes),  # expires
+        "sid": sid,   # the device's session (checked on every request)
+        "mfa": mfa,   # signed in with the two-step code
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
@@ -101,11 +110,14 @@ def decode_access_token(token: str) -> dict:
     """
     settings = get_settings()
     try:
-        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        data = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Your session expired. Please sign in again.")
     except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid sign-in token.")
+    if data.get("purpose"):   # e.g. the 5-minute two-step ticket is not a login
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid sign-in token.")
+    return data
 
 
 async def get_current_account(
@@ -128,7 +140,8 @@ async def get_current_account(
 
     Raises:
         HTTPException: 401 with "Create a free account (or sign in)..." when no
-            token was sent, or the 401 errors from `decode_access_token`.
+            token was sent, the 401 errors from `decode_access_token`, or 401
+            when the device's session has ended (sessions.check).
 
     Example:
         In a router:
@@ -142,7 +155,11 @@ async def get_current_account(
             status.HTTP_401_UNAUTHORIZED,
             detail="Create a free account (or sign in) to download your cleaned data.",
         )
-    return decode_access_token(credentials.credentials)
+    from api.services import sessions   # imported here to avoid a circular import
+
+    token = decode_access_token(credentials.credentials)
+    await sessions.check(token)
+    return token
 
 
 async def get_acting_context(

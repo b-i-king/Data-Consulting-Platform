@@ -23,6 +23,8 @@ Stripe), a usage record per download (file name, row count, runtime, amount,
 and a one-way fingerprint of the result for fair use) for billing, each
 connector's refresh schedule, consultations (free and paid calls), storage
 consents and load-run summaries.
+After "Delete my account": nothing about the person, only an ANONYMOUS row in
+dim.account_deletions (type, role, age in days, paid or not, optional reason).
 Passwords: only a Supabase user id, or a one-way hash in local mode.
 NOT stored here: the client's uploaded data. Files are processed in memory
 only. (Clients who consent to managed storage have cleaned rows loaded into
@@ -33,7 +35,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from api.core import database
 
@@ -229,6 +231,15 @@ async def create_account(
         "consultant_id": consultant_id if wants_consultant else None,
         "interested_services": [],      # "Projects with a consultant" (interest only)
         "stripe_customer_id": None,     # set the first time they pay (billing.py)
+        "is_tester": False,             # an admin can make them a tester (try paid tools free)
+        "failed_logins": 0,             # wrong passwords in a row (login_guard.py)
+        "login_locked_until": None,
+        "mfa_secret": None, "mfa_enabled_at": None, "mfa_recovery_codes": [],   # two-step sign-in (mfa.py)
+        # Audit log on only once an admin APPROVES a HIPAA request (hipaa.py) — not just for picking NAICS 62.
+        "is_healthcare": False,
+        "hipaa_status": None, "hipaa_requested_at": None, "hipaa_organization": None, "hipaa_npi": None,
+        "hipaa_note": None, "hipaa_decided_at": None, "hipaa_decided_by": None, "hipaa_decision_note": None,
+        "updated_at": _now(),
         # Password (api/services/auth.py): Supabase user id OR local hash.
         "auth_user_id": auth_user_id,
         "password_hash": password_hash,
@@ -265,10 +276,11 @@ async def create_account(
                                          industry_other, wants_consultant, consultant_id,
                                          auth_user_id, password_hash, consultant_plan,
                                          is_admin, is_consultant, consultant_request,
-                                         consultant_requested_at, terms_accepted_at, terms_version)
+                                         consultant_requested_at, terms_accepted_at, terms_version,
+                                         is_healthcare)
                    VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, $13,
                            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-                           $24, $25, $26, $27, $28, $29, $30)""",
+                           $24, $25, $26, $27, $28, $29, $30, $31)""",
                 uuid.UUID(account_id), account_type, first_name, last_name, email,
                 company_name, team_role, status, account["last_login_at"],
                 industry_supersector, naics_sector, naics_subsector,
@@ -279,7 +291,7 @@ async def create_account(
                 uuid.UUID(auth_user_id) if auth_user_id else None, password_hash,
                 account["consultant_plan"], account["is_admin"], account["is_consultant"],
                 account["consultant_request"], account["consultant_requested_at"],
-                account["terms_accepted_at"], terms_version,
+                account["terms_accepted_at"], terms_version, account["is_healthcare"],
             )
             if team:
                 await conn.execute(
@@ -298,7 +310,8 @@ async def touch_last_login(account_id: str) -> None:
     """
     Record a sign-in time (useful for your consulting analysis: who is active?).
 
-    On the memory path an unknown account id is ignored.
+    A successful sign-in also clears the wrong-password count and any lock
+    (api/services/login_guard.py). On the memory path an unknown account id is ignored.
 
     Args:
         account_id: str, the account that just signed in.
@@ -311,11 +324,70 @@ async def touch_last_login(account_id: str) -> None:
     """
     if database.pool is None:
         if account_id in _accounts:
-            _accounts[account_id]["last_login_at"] = _now()
+            _accounts[account_id].update(last_login_at=_now(), failed_logins=0, login_locked_until=None)
         return
     await database.pool.execute(
-        "UPDATE dim.accounts SET last_login_at = now() WHERE id = $1", uuid.UUID(account_id)
+        "UPDATE dim.accounts SET last_login_at = now(), failed_logins = 0, login_locked_until = NULL WHERE id = $1",
+        uuid.UUID(account_id),
     )
+
+
+# ── Sign-in lockout (api/services/login_guard.py) ─────────────────────────────
+
+async def record_failed_login(account_id: str, max_attempts: int, lock_minutes: int) -> dict:
+    """
+    Count one wrong password; lock sign-in once the count reaches max_attempts.
+
+    Args:
+        account_id: str, the account.
+        max_attempts: int, wrong passwords in a row allowed (LOGIN_MAX_ATTEMPTS).
+        lock_minutes: int, how long the lock lasts (LOGIN_LOCK_MINUTES).
+
+    Returns:
+        dict: {"failed_logins": int, "login_locked_until": datetime | None}.
+
+    Example:
+        >>> await record_failed_login(ana_id, 3, 15)
+        {'failed_logins': 1, 'login_locked_until': None}
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id, {})
+        acc["failed_logins"] = (acc.get("failed_logins") or 0) + 1
+        acc["login_locked_until"] = (_now() + timedelta(minutes=lock_minutes)
+                                     if acc["failed_logins"] >= max_attempts else None)
+        return {"failed_logins": acc["failed_logins"], "login_locked_until": acc["login_locked_until"]}
+    # One statement, so two wrong tries at the same moment both count. In SET,
+    # "failed_logins" means the value BEFORE this update.
+    row = await database.pool.fetchrow(
+        """UPDATE dim.accounts SET failed_logins = failed_logins + 1,
+                  login_locked_until = CASE WHEN failed_logins + 1 >= $2
+                                            THEN now() + make_interval(mins => $3) END
+           WHERE id = $1 RETURNING failed_logins, login_locked_until""",
+        uuid.UUID(account_id), max_attempts, lock_minutes)
+    return dict(row) if row else {"failed_logins": 0, "login_locked_until": None}
+
+
+async def clear_failed_logins(account_id: str) -> None:
+    """
+    Start the wrong-password count over and lift any lock (lock ended, or password reset).
+
+    Args:
+        account_id: str, the account.
+
+    Returns:
+        None.
+
+    Example:
+        >>> await clear_failed_logins(ana_id)
+    """
+    if database.pool is None:
+        if account_id in _accounts:
+            _accounts[account_id].update(failed_logins=0, login_locked_until=None)
+        return
+    await database.pool.execute(
+        """UPDATE dim.accounts SET failed_logins = 0, login_locked_until = NULL
+           WHERE id = $1 AND (failed_logins <> 0 OR login_locked_until IS NOT NULL)""",
+        uuid.UUID(account_id))
 
 
 async def set_credentials(account_id: str, *, auth_user_id: str | None, password_hash: str | None) -> None:
@@ -360,7 +432,7 @@ async def list_team_members(team_id: str) -> list[dict]:
 
     Example:
         >>> [m["team_role"] for m in await list_team_members(team_id)]
-        ['owner', 'member']
+        ['owner', 'developer', 'member']
     """
     if database.pool is None:
         return [a for a in _accounts.values() if a["team_id"] == team_id]
@@ -612,7 +684,9 @@ async def ensure_consultant(account: dict, *, is_default: bool) -> dict:
         _consultants[cid] = {"id": cid, "account_id": str(account["id"]), "display_name": name,
                              "email": account["email"], "is_default": is_default, "active": True,
                              "capacity": DEFAULT_CAPACITY, "free_booking_url": None, "paid_booking_url": None,
-                             "calcom_webhook_secret": None, "created_at": _now()}
+                             "calcom_webhook_secret": None, "deactivated_at": None, "deactivated_by": None,
+                             "deactivation_reason": None, "reactivated_at": None, "reactivated_by": None,
+                             "created_at": _now(), "updated_at": _now()}
         return _consultants[cid]
     row = await database.pool.fetchrow(
         """INSERT INTO dim.consultants (account_id, display_name, email, is_default)
@@ -674,7 +748,7 @@ async def assign_waiting_clients(consultant_id: str, limit: int) -> int:
         return 0
     if database.pool is None:
         waiting = sorted((a for a in _accounts.values() if a.get("wants_consultant") and not a.get("consultant_id")
-                          and a.get("team_role") != "member"), key=lambda a: a["created_at"])[:limit]
+                          and a.get("team_role") not in ("developer", "member")), key=lambda a: a["created_at"])[:limit]
         for a in waiting:
             a["consultant_id"] = consultant_id
         return len(waiting)
@@ -682,7 +756,7 @@ async def assign_waiting_clients(consultant_id: str, limit: int) -> int:
         """UPDATE dim.accounts SET consultant_id = $1
            WHERE id IN (SELECT id FROM dim.accounts
                         WHERE wants_consultant AND consultant_id IS NULL
-                          AND coalesce(team_role, '') <> 'member'
+                          AND coalesce(team_role, '') NOT IN ('developer', 'member')
                         ORDER BY created_at LIMIT $2)""",
         uuid.UUID(consultant_id), limit,
     )
@@ -836,18 +910,23 @@ async def list_all_clients() -> list[dict]:
     """
     if database.pool is None:
         rows = [a for a in _accounts.values() if not a.get("is_consultant") and not a.get("is_admin")
-                and a.get("team_role") != "member"]
+                and a.get("team_role") not in ("developer", "member")]
         return sorted(rows, key=lambda a: (a.get("company_name") or a["first_name"]).lower())
     rows = await database.pool.fetch(
         """SELECT * FROM dim.accounts
-           WHERE NOT is_consultant AND NOT is_admin AND coalesce(team_role, '') <> 'member'
+           WHERE NOT is_consultant AND NOT is_admin AND coalesce(team_role, '') NOT IN ('developer', 'member')
            ORDER BY lower(coalesce(company_name, first_name))""")
     return [dict(r) for r in rows]
 
 
-async def delete_account(account_id: str) -> list[str]:
+async def delete_account(account_id: str, *, reason: str | None = None, had_paid_plan: bool = False,
+                         by_team_owner: bool = False) -> list[str]:
     """
     Delete an account and EVERYTHING that belongs to it ("Delete my account").
+
+    One ANONYMOUS row per account removed is written to dim.account_deletions
+    (deletion_record: account type, role, age in days, whether they paid, the
+    optional reason) in the same transaction — never who they were.
 
     A business team OWNER takes the whole team with them (every colleague's
     account too, since they share the owner's plan and data). The database
@@ -859,6 +938,11 @@ async def delete_account(account_id: str) -> list[str]:
 
     Args:
         account_id: str, the account to delete.
+        reason: str | None, the optional reason picked in the delete dialog (DELETION_REASONS).
+        had_paid_plan: bool, they had a live paid package (checked by the caller
+            BEFORE billing was canceled).
+        by_team_owner: bool, True when the owner removed this colleague
+            (api/services/teams.py remove) — recorded as removed_by "team_owner".
 
     Returns:
         list[str]: the account ids deleted (the owner first).
@@ -873,8 +957,14 @@ async def delete_account(account_id: str) -> list[str]:
     ids = [account_id]
     if acc.get("team_role") == "owner" and acc.get("team_id"):
         ids += [str(m["id"]) for m in await list_team_members(str(acc["team_id"])) if str(m["id"]) != account_id]
-    emails = [a["email"] for a in [await get_account(i) for i in ids] if a]
+    rows = [a for a in [await get_account(i) for i in ids] if a]
+    emails = [a["email"] for a in rows]
+    records = [deletion_record(a, is_consultant=await get_consultant_by_account(str(a["id"])) is not None,
+                               removed_by="self" if str(a["id"]) == account_id and not by_team_owner
+                               else "team_owner",
+                               had_paid_plan=had_paid_plan, reason=reason) for a in rows]
     if database.pool is None:
+        _deletions.extend({**r, "deleted_at": _now()} for r in records)
         cids = {c["id"] for c in _consultants.values() if c["account_id"] in ids}
         for a in _accounts.values():
             if a.get("consultant_id") in cids:
@@ -906,7 +996,236 @@ async def delete_account(account_id: str) -> list[str]:
             # Colleagues first (their team row points at the owner), then the owner.
             await conn.execute("DELETE FROM dim.accounts WHERE id = ANY($1) AND id <> $2", uids, uids[0])
             await conn.execute("DELETE FROM dim.accounts WHERE id = $1", uids[0])
+            await conn.executemany(
+                """INSERT INTO dim.account_deletions (account_type, role, removed_by, account_age_days,
+                                                    had_paid_plan, reason)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                [(r["account_type"], r["role"], r["removed_by"], r["account_age_days"], r["had_paid_plan"],
+                  r["reason"]) for r in records])
     return ids
+
+
+async def set_team_role(account_id: str, role: str) -> dict | None:
+    """
+    Change a colleague's team role: "developer" or "member" (api/services/teams.py checks who may).
+
+    Args:
+        account_id: str, the colleague's account id.
+        role: str, "developer" or "member".
+
+    Returns:
+        dict | None: the updated accounts row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_team_role(bo_id, "member"))["team_role"]
+        'member'
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(team_role=role, updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow("UPDATE dim.accounts SET team_role = $2 WHERE id = $1 RETURNING *",
+                                       uuid.UUID(account_id), role)
+    return dict(row) if row else None
+
+
+async def mark_trial_used(account_id: str) -> None:
+    """
+    Remember that this account has had its one free trial (accounts.trial_used_at; first time only).
+
+    Args:
+        account_id: str, the plan holder.
+
+    Returns:
+        None.
+
+    Example:
+        >>> await mark_trial_used(ana_id)
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc and not acc.get("trial_used_at"):
+            acc["trial_used_at"] = _now()
+        return
+    await database.pool.execute(
+        "UPDATE dim.accounts SET trial_used_at = now() WHERE id = $1 AND trial_used_at IS NULL", uuid.UUID(account_id))
+
+# ── Testers (dim.accounts.is_tester) and the admin's people list ─────────────
+
+async def set_tester(account_id: str, is_tester: bool) -> dict | None:
+    """
+    Make an account a tester (try paid tools free, even with Stripe live), or a normal client again.
+
+    Args:
+        account_id: str, the account (a plan holder: individual or team owner).
+        is_tester: bool, True = tester.
+
+    Returns:
+        dict | None: the updated accounts row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_tester(ana_id, True))["is_tester"]
+        True
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(is_tester=bool(is_tester), updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow("UPDATE dim.accounts SET is_tester = $2 WHERE id = $1 RETURNING *",
+                                       uuid.UUID(account_id), bool(is_tester))
+    return dict(row) if row else None
+
+
+async def search_accounts(q: str = "", limit: int = 25) -> list[dict]:
+    """
+    Plan holders (individuals, team owners, consultants) for the Admin panel, newest first.
+
+    Business colleagues are left out: they share their owner's plan, so the
+    tester switch is on the owner.
+
+    Args:
+        q: str, part of a name, email or company ("" = everyone).
+        limit: int, the most rows to return (1 to 100).
+
+    Returns:
+        list[dict]: accounts rows.
+
+    Example:
+        >>> [a["email"] for a in await search_accounts("bakery")]
+        ['ana@sunrisebakery.com']
+    """
+    limit = max(1, min(limit, 100))
+    needle = q.strip().lower()
+    if database.pool is None:
+        rows = [a for a in _accounts.values() if a.get("team_role") not in ("developer", "member")
+                and (not needle or needle in " ".join(str(a.get(k) or "") for k in
+                                                      ("first_name", "last_name", "email", "company_name")).lower())]
+        return sorted(rows, key=lambda a: a["created_at"], reverse=True)[:limit]
+    rows = await database.pool.fetch(
+        """SELECT * FROM dim.accounts
+           WHERE coalesce(team_role, '') NOT IN ('developer', 'member')
+             AND ($1 = '' OR lower(first_name || ' ' || last_name || ' ' || email || ' ' || coalesce(company_name, ''))
+                             LIKE '%' || $1 || '%')
+           ORDER BY created_at DESC LIMIT $2""",
+        needle, limit)
+    return [dict(r) for r in rows]
+
+
+# ── Consultant lifecycle: deactivate / reactivate (dim.consultants) ──────────
+
+async def set_consultant_active(consultant_id: str, active: bool, admin_id: str, reason: str | None = None) -> dict | None:
+    """
+    Switch a consultant off (deactivate) or back on (reactivate), stamping who and when.
+
+    Deactivating sets active = false, deactivated_at = now, deactivated_by and
+    the optional reason. Reactivating sets active = true, reactivated_at = now
+    and reactivated_by (the last deactivation stays on the row as history).
+    Moving their clients is done by api/services/consultants.py.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        active: bool, False = deactivate, True = reactivate.
+        admin_id: str, the admin's account id.
+        reason: str | None, a short note (deactivating only).
+
+    Returns:
+        dict | None: the updated consultants row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_consultant_active(cid, False, admin_id, "On leave"))["active"]
+        False
+    """
+    if database.pool is None:
+        row = _consultants.get(consultant_id)
+        if row:
+            if active:
+                row.update(active=True, reactivated_at=_now(), reactivated_by=admin_id, updated_at=_now())
+            else:
+                row.update(active=False, deactivated_at=_now(), deactivated_by=admin_id,
+                           deactivation_reason=reason, updated_at=_now())
+        return row
+    if active:
+        row = await database.pool.fetchrow(
+            """UPDATE dim.consultants SET active = true, reactivated_at = now(), reactivated_by = $2
+               WHERE id = $1 RETURNING *""", uuid.UUID(consultant_id), uuid.UUID(admin_id))
+    else:
+        row = await database.pool.fetchrow(
+            """UPDATE dim.consultants SET active = false, deactivated_at = now(), deactivated_by = $2,
+                      deactivation_reason = $3
+               WHERE id = $1 RETURNING *""", uuid.UUID(consultant_id), uuid.UUID(admin_id), reason)
+    return dict(row) if row else None
+
+
+# ── Account deletions (dim.account_deletions): THAT, never WHO ───────────────
+
+_deletions: list[dict] = []    # account_deletions rows (memory path)
+
+DELETION_REASONS = ("too_expensive", "missing_features", "not_needed", "switching_tools", "privacy", "other")
+
+
+def deletion_record(acc: dict, *, is_consultant: bool, removed_by: str, had_paid_plan: bool,
+                    reason: str | None) -> dict:
+    """
+    The ANONYMOUS row kept when an account is deleted: no id, name, email, company or place.
+
+    Args:
+        acc: dict, the accounts row about to be deleted.
+        is_consultant: bool, the account had a consultants row.
+        removed_by: str, "self" (they deleted it) or "team_owner" (deleted with their owner's account).
+        had_paid_plan: bool, a live (paid) package when they left.
+        reason: str | None, one of DELETION_REASONS (from the delete dialog), or None.
+
+    Returns:
+        dict: {"account_type", "role", "removed_by", "account_age_days", "had_paid_plan", "reason"}.
+
+    Example:
+        >>> deletion_record(ana, is_consultant=False, removed_by="self", had_paid_plan=True, reason="not_needed")
+        {'account_type': 'individual', 'role': 'client', 'removed_by': 'self', 'account_age_days': 41, ...}
+    """
+    role = ("consultant" if is_consultant else
+            "team_owner" if acc.get("team_role") == "owner" else
+            "team_member" if acc.get("team_role") in ("developer", "member") else "client")
+    created = acc.get("created_at")
+    age = max(0, (_now() - created).days) if isinstance(created, datetime) else None
+    return {"account_type": acc["account_type"], "role": role, "removed_by": removed_by,
+            "account_age_days": age, "had_paid_plan": bool(had_paid_plan),
+            "reason": reason if reason in DELETION_REASONS and removed_by == "self" else None}
+
+
+async def deletion_summary(days: int = 30) -> dict:
+    """
+    How many accounts were deleted, and why (the Admin panel's "Account deletions" card).
+
+    Args:
+        days: int, the window for "recent" (default the last 30 days).
+
+    Returns:
+        dict: {"total", "recent", "recent_days", "by_reason": {reason|"none": n},
+        "by_month": [{"month": "2026-10", "count": n}, ...] (last 6 months, newest first)}.
+
+    Example:
+        >>> (await deletion_summary())["total"]
+        3
+    """
+    if database.pool is None:
+        rows = list(_deletions)
+    else:
+        rows = [dict(r) for r in await database.pool.fetch(
+            "SELECT deleted_at, reason FROM dim.account_deletions WHERE deleted_at > now() - interval '400 days'")]
+    since = _now().timestamp() - days * 86400
+    by_reason: dict[str, int] = {}
+    by_month: dict[str, int] = {}
+    for r in rows:
+        by_reason[r.get("reason") or "none"] = by_reason.get(r.get("reason") or "none", 0) + 1
+        month = r["deleted_at"].strftime("%Y-%m")
+        by_month[month] = by_month.get(month, 0) + 1
+    total = len(rows) if database.pool is None else await database.pool.fetchval(
+        "SELECT count(*) FROM dim.account_deletions")
+    return {"total": int(total), "recent": sum(1 for r in rows if r["deleted_at"].timestamp() > since),
+            "recent_days": days, "by_reason": by_reason,
+            "by_month": [{"month": m, "count": by_month[m]} for m in sorted(by_month, reverse=True)[:6]]}
 
 
 # ── Roles: admins and consultant requests ──────────────────────────────────────
@@ -1994,3 +2313,303 @@ async def frequent_questions(account_id: str, limit: int = 8) -> list[dict]:
            GROUP BY lower(regexp_replace(question, '\\s+', ' ', 'g'))
            ORDER BY times DESC, max(asked_at) DESC LIMIT $2""", uuid.UUID(account_id), limit)
     return [dict(r) for r in rows]
+
+
+# ── Signed-in devices (dim.sessions, api/services/sessions.py) ─────────────────
+
+_sessions: dict[str, dict] = {}   # session id -> dim.sessions row (memory path)
+
+
+async def create_session(account_id: str, device_id: str | None, device: str) -> str:
+    """
+    Open a session for one device; returns its id (it goes into the login token as "sid").
+
+    Args:
+        account_id: str, the account.
+        device_id: str | None, the browser's random device id.
+        device: str, the short label ("Chrome on Windows").
+
+    Returns:
+        str: the new session id.
+    """
+    if database.pool is None:
+        sid = str(uuid.uuid4())
+        _sessions[sid] = {"id": sid, "account_id": account_id, "device_id": device_id, "device": device,
+                          "created_at": _now(), "last_seen_at": _now(), "revoked_at": None, "revoked_reason": None}
+        return sid
+    return str(await database.pool.fetchval(
+        "INSERT INTO dim.sessions (account_id, device_id, device) VALUES ($1, $2, $3) RETURNING id",
+        uuid.UUID(account_id), device_id, device))
+
+
+async def get_session(session_id: str) -> dict | None:
+    """One session row, or None (unknown or malformed id)."""
+    if database.pool is None:
+        return _sessions.get(session_id)
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        return None
+    row = await database.pool.fetchrow("SELECT * FROM dim.sessions WHERE id = $1", sid)
+    return dict(row) if row else None
+
+
+async def list_sessions(account_id: str) -> list[dict]:
+    """Every session of an account (signed out ones too), oldest first."""
+    if database.pool is None:
+        return sorted((s for s in _sessions.values() if s["account_id"] == account_id), key=lambda s: s["created_at"])
+    rows = await database.pool.fetch("SELECT * FROM dim.sessions WHERE account_id = $1 ORDER BY created_at",
+                                     uuid.UUID(account_id))
+    return [dict(r) for r in rows]
+
+
+async def touch_session(session_id: str, label: str | None = None) -> None:
+    """Mark a session as just used (and refresh its device label when given)."""
+    if database.pool is None:
+        if session_id in _sessions:
+            _sessions[session_id]["last_seen_at"] = _now()
+            if label:
+                _sessions[session_id]["device"] = label
+        return
+    await database.pool.execute(
+        "UPDATE dim.sessions SET last_seen_at = now(), device = coalesce($2, device) WHERE id = $1",
+        uuid.UUID(session_id), label)
+
+
+async def revoke_session(session_id: str, reason: str) -> None:
+    """Sign a session out (reason: signed_out, device_limit, password_reset, everywhere, admin, idle)."""
+    if database.pool is None:
+        if session_id in _sessions and _sessions[session_id]["revoked_at"] is None:
+            _sessions[session_id].update(revoked_at=_now(), revoked_reason=reason)
+        return
+    await database.pool.execute(
+        "UPDATE dim.sessions SET revoked_at = now(), revoked_reason = $2 WHERE id = $1 AND revoked_at IS NULL",
+        uuid.UUID(session_id), reason)
+
+
+# ── Two-step sign-in (api/services/mfa.py) and the healthcare flag ─────────────
+
+async def set_mfa(account_id: str, *, secret: str | None, enabled: bool, recovery_hashes: list[str] | None) -> dict | None:
+    """
+    Save two-step sign-in: the ENCRYPTED authenticator key, whether it's on, and the backup-code hashes.
+
+    Args:
+        account_id: str, the account.
+        secret: str | None, the encrypted key ("enc1:..."); None clears it.
+        enabled: bool, True once the person proved their app works.
+        recovery_hashes: list[str] | None, sha256 hashes of unused backup codes (None = keep).
+
+    Returns:
+        dict | None: the updated accounts row.
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(mfa_secret=secret, mfa_enabled_at=_now() if enabled else None)
+            if recovery_hashes is not None:
+                acc["mfa_recovery_codes"] = list(recovery_hashes)
+        return acc
+    row = await database.pool.fetchrow(
+        """UPDATE dim.accounts SET mfa_secret = $2, mfa_enabled_at = CASE WHEN $3 THEN coalesce(mfa_enabled_at, now()) END,
+                  mfa_recovery_codes = coalesce($4::jsonb, mfa_recovery_codes)
+           WHERE id = $1 RETURNING *""",
+        uuid.UUID(account_id), secret, enabled, json.dumps(recovery_hashes) if recovery_hashes is not None else None)
+    return dict(row) if row else None
+
+
+async def use_recovery_code(account_id: str, code_hash: str) -> bool:
+    """
+    Spend one backup code (each works once). True if it was there.
+
+    Args:
+        account_id: str, the account.
+        code_hash: str, sha256 of the code typed.
+
+    Returns:
+        bool: True when the code was valid (and is now used up).
+    """
+    if database.pool is None:
+        acc = _accounts.get(account_id) or {}
+        codes = list(acc.get("mfa_recovery_codes") or [])
+        if code_hash not in codes:
+            return False
+        codes.remove(code_hash)
+        acc["mfa_recovery_codes"] = codes
+        return True
+    done = await database.pool.execute(
+        """UPDATE dim.accounts SET mfa_recovery_codes = mfa_recovery_codes - $2
+           WHERE id = $1 AND mfa_recovery_codes ? $2""", uuid.UUID(account_id), code_hash)
+    return done.endswith(" 1")
+
+
+async def set_healthcare(account_id: str, is_healthcare: bool) -> dict | None:
+    """Mark a plan holder as a healthcare client (their data access is audited) or not."""
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(is_healthcare=bool(is_healthcare), updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow("UPDATE dim.accounts SET is_healthcare = $2 WHERE id = $1 RETURNING *",
+                                       uuid.UUID(account_id), bool(is_healthcare))
+    return dict(row) if row else None
+
+
+# ── Audit log (dim.audit_log, healthcare clients only — api/services/audit.py) ──
+
+_audit: list[dict] = []   # audit_log rows (memory path)
+
+
+async def add_audit(account_id: str, actor_account_id: str | None, actor_role: str, action: str, detail: dict) -> None:
+    """Write one audit row (the caller decides whether this account is audited)."""
+    if database.pool is None:
+        _audit.append({"id": len(_audit) + 1, "at": _now(), "account_id": account_id,
+                       "actor_account_id": actor_account_id, "actor_role": actor_role, "action": action,
+                       "detail": dict(detail)})
+        return
+    await database.pool.execute(
+        """INSERT INTO dim.audit_log (account_id, actor_account_id, actor_role, action, detail)
+           VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        uuid.UUID(account_id), uuid.UUID(actor_account_id) if actor_account_id else None, actor_role, action,
+        json.dumps(detail, default=str))
+
+
+async def list_audit(account_id: str, limit: int = 200) -> list[dict]:
+    """An account's audit rows, newest first, with who did each (name and email)."""
+    limit = max(1, min(limit, 5000))
+    if database.pool is None:
+        rows = sorted((r for r in _audit if r["account_id"] == account_id), key=lambda r: r["id"], reverse=True)[:limit]
+        out = []
+        for r in rows:
+            actor = _accounts.get(r["actor_account_id"] or "")
+            out.append({**r, "actor_name": f"{actor['first_name']} {actor['last_name']}" if actor else None,
+                        "actor_email": actor["email"] if actor else None})
+        return out
+    rows = await database.pool.fetch(
+        """SELECT l.*, a.first_name || ' ' || a.last_name AS actor_name, a.email AS actor_email
+           FROM dim.audit_log l LEFT JOIN dim.accounts a ON a.id = l.actor_account_id
+           WHERE l.account_id = $1 ORDER BY l.at DESC, l.id DESC LIMIT $2""", uuid.UUID(account_id), limit)
+    return [{**dict(r), "detail": _json_dict(r["detail"])} for r in rows]
+
+
+def _json_dict(value) -> dict:
+    """A JSONB value as a dict (asyncpg returns JSON text)."""
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
+# ── HIPAA requests (api/services/hipaa.py) ───────────────────────────────────
+
+_HIPAA_FIELDS = ("hipaa_status", "hipaa_requested_at", "hipaa_organization", "hipaa_npi", "hipaa_note",
+                 "hipaa_decided_at", "hipaa_decided_by", "hipaa_decision_note")
+
+
+async def set_hipaa(account_id: str, *, status: str, organization: str | None, npi: str | None,
+                    note: str | None) -> dict | None:
+    """Open (or update) a HIPAA request: status 'pending', the details, now as the request time."""
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(hipaa_status=status, hipaa_requested_at=_now(), hipaa_organization=organization,
+                       hipaa_npi=npi, hipaa_note=note, hipaa_decided_at=None, hipaa_decided_by=None,
+                       hipaa_decision_note=None, updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow(
+        """UPDATE dim.accounts SET hipaa_status = $2, hipaa_requested_at = now(), hipaa_organization = $3,
+                  hipaa_npi = $4, hipaa_note = $5, hipaa_decided_at = NULL, hipaa_decided_by = NULL,
+                  hipaa_decision_note = NULL
+           WHERE id = $1 RETURNING *""", uuid.UUID(account_id), status, organization, npi, note)
+    return dict(row) if row else None
+
+
+async def clear_hipaa(account_id: str) -> dict | None:
+    """Withdraw a request: every HIPAA field back to empty (and the audit log off)."""
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update({f: None for f in _HIPAA_FIELDS}, is_healthcare=False, updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow(
+        "UPDATE dim.accounts SET " + ", ".join(f"{f} = NULL" for f in _HIPAA_FIELDS)
+        + ", is_healthcare = false WHERE id = $1 RETURNING *", uuid.UUID(account_id))
+    return dict(row) if row else None
+
+
+async def decide_hipaa(account_id: str, approve: bool, admin_id: str, note: str | None) -> dict | None:
+    """Save an admin's HIPAA decision; approval switches the audit log on (is_healthcare)."""
+    decision = "approved" if approve else "denied"
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc:
+            acc.update(hipaa_status=decision, hipaa_decided_at=_now(), hipaa_decided_by=admin_id,
+                       hipaa_decision_note=note, is_healthcare=approve, updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow(
+        """UPDATE dim.accounts SET hipaa_status = $2, hipaa_decided_at = now(), hipaa_decided_by = $3,
+                  hipaa_decision_note = $4, is_healthcare = $5
+           WHERE id = $1 RETURNING *""", uuid.UUID(account_id), decision, uuid.UUID(admin_id), note, approve)
+    return dict(row) if row else None
+
+
+async def list_hipaa_requests() -> list[dict]:
+    """Every account with a HIPAA request: waiting first (oldest first), then the newest decisions."""
+    if database.pool is None:
+        rows = [a for a in _accounts.values() if a.get("hipaa_status")]
+    else:
+        rows = [dict(r) for r in await database.pool.fetch("SELECT * FROM dim.accounts WHERE hipaa_status IS NOT NULL")]
+    waiting = sorted((a for a in rows if a["hipaa_status"] == "pending"), key=lambda a: a["hipaa_requested_at"])
+    decided = sorted((a for a in rows if a["hipaa_status"] != "pending"),
+                     key=lambda a: a.get("hipaa_decided_at") or a["hipaa_requested_at"], reverse=True)
+    return waiting + decided
+
+
+# ── Why clients cancel (dim.subscriptions.cancel_feedback, from Stripe) ──────
+
+async def set_cancellation(stripe_subscription_id: str, feedback: str | None, comment: str | None,
+                           canceled_at: datetime | None) -> None:
+    """
+    Save why (and when) a Stripe subscription was canceled, from its cancellation_details.
+
+    Args:
+        stripe_subscription_id: str, "sub_...".
+        feedback: str | None, Stripe's reason code ("too_expensive", ...).
+        comment: str | None, what the client typed (kept to 500 characters).
+        canceled_at: datetime | None, when they canceled.
+    """
+    comment = (comment or "").strip()[:500] or None
+    if database.pool is None:
+        for s in _subscriptions.values():
+            if s.get("stripe_subscription_id") == stripe_subscription_id:
+                s.update(cancel_feedback=feedback, cancel_comment=comment, canceled_at=canceled_at)
+        return
+    await database.pool.execute(
+        """UPDATE dim.subscriptions SET cancel_feedback = $2, cancel_comment = $3, canceled_at = coalesce($4, canceled_at)
+           WHERE stripe_subscription_id = $1""", stripe_subscription_id, feedback, comment, canceled_at)
+
+
+async def cancellation_summary(days: int = 365) -> dict:
+    """
+    Why clients cancel (Admin panel): counts by Stripe's reason, and the latest comments (no names).
+
+    Returns:
+        dict: {"total", "by_reason": {reason | "none": n}, "comments": [{"at", "reason", "comment"}, ...] (newest 5)}.
+    """
+    if database.pool is None:
+        rows = [s for s in _subscriptions.values() if s.get("canceled_at") or s.get("cancel_feedback")]
+    else:
+        rows = [dict(r) for r in await database.pool.fetch(
+            """SELECT cancel_feedback, cancel_comment, canceled_at FROM dim.subscriptions
+               WHERE (canceled_at IS NOT NULL OR cancel_feedback IS NOT NULL)
+                 AND coalesce(canceled_at, updated_at) > now() - make_interval(days => $1)""", days)]
+    by_reason: dict[str, int] = {}
+    for r in rows:
+        key = r.get("cancel_feedback") or "none"
+        by_reason[key] = by_reason.get(key, 0) + 1
+    with_comment = sorted((r for r in rows if r.get("cancel_comment")),
+                          key=lambda r: r.get("canceled_at") or _now(), reverse=True)[:5]
+    return {"total": len(rows), "by_reason": by_reason,
+            "comments": [{"at": r["canceled_at"].isoformat() if r.get("canceled_at") else None,
+                          "reason": r.get("cancel_feedback"), "comment": r["cancel_comment"]} for r in with_comment]}

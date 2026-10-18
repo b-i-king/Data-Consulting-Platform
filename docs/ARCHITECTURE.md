@@ -195,6 +195,22 @@ flow never writes to it. The design change, and its safeguards:
    rule as a file load; only what changed since the last run is fetched, and
    every call is counted against the tool's free-plan limits
    (`api/services/sync.py`). The free quick look stays live and unstored.
+12. **Deleted accounts leave an anonymous count (October 2026).** "Delete
+   my account" still removes every row about the person. In the same
+   transaction one row per account removed goes to `dim.account_deletions`:
+   account type, role, whether they removed it themselves or with their
+   business owner, account age in whole days, whether they had a paid
+   package, and the optional reason picked from a fixed list. It has no id,
+   name, email, company, location or free text, so it can't be tied back to
+   anyone; it only tells the business how many people leave and why
+   (Admin → Account deletions). Not client data.
+13. **Security for sensitive data (October 2026).** Stored emails and
+   phone numbers are encrypted (`api/services/pii.py`); names stay readable
+   for reports. For HEALTHCARE clients only, `dim.audit_log` records who
+   touched their data and when — the actor's account and role, the action,
+   names and counts, never the data — deleted with the account. The API's
+   database login can't skip Row Level Security (`dcp_api`). Details:
+   [SECURITY.md](SECURITY.md).
 
 ### 2. Guest first, account only at download
 
@@ -284,7 +300,7 @@ their workspace.
 
 | Caller | Can open |
 |---|---|
-| A client | Only their own account (and their team's shared plan) |
+| A client | Only their own account (and their team's shared plan). On a business team: the **owner** does everything, a **developer** changes data but not billing or people, a **member** only views (`api/services/teams.py`, enforced on every change) |
 | A consultant | Their own account, and clients whose `accounts.consultant_id` is them (for a business, the team owner's) |
 | Anyone else | 403 — never another consultant's client |
 

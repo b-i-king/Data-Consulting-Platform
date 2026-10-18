@@ -1,0 +1,15 @@
+<!--
+  Container block (Canva: the rounded boxes below the KPI row). Any size: page.html
+  places it in a row with a span of the 6-column grid (full 6, half 3, two-thirds 4,
+  third 2 — templates/layouts.json) and draws one visual inside:
+    line  a trend over time, this range vs. the previous one
+    hbar  categories, names on the left and each value at the end of its bar
+-->
+<template id="tpl-container">
+  <section class="box">
+    <h2 class="box-title"></h2>
+    <div class="box-legend"></div>
+    <div class="box-body"></div>
+    <p class="box-note"></p>
+  </section>
+</template>

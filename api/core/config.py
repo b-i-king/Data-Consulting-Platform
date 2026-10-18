@@ -146,6 +146,40 @@ class Settings(BaseSettings):
     # everyone, PREMIUM with the AI package. Admins have no limit; a consultant
     # uses the allowance of the client they're working on.
     ai_free_monthly: int = Field(default=20, alias="AI_FREE_MONTHLY")
+    # Sign-in lockout (api/services/login_guard.py): wrong passwords in a row
+    # before sign-in is locked, and for how many minutes. A password reset unlocks at once.
+    login_max_attempts: int = Field(default=3, alias="LOGIN_MAX_ATTEMPTS")
+    login_lock_minutes: int = Field(default=15, alias="LOGIN_LOCK_MINUTES")
+    # The most people on one business team, the owner included (api/services/teams.py).
+    # Past it: "talk to us about Enterprise".
+    team_max_people: int = Field(default=5, alias="TEAM_MAX_PEOPLE")
+    # Signed-in devices (api/services/sessions.py): at most this many per person,
+    # and signed out after this many hours without use.
+    session_max_devices: int = Field(default=3, alias="SESSION_MAX_DEVICES")
+    session_idle_hours: int = Field(default=8, alias="SESSION_IDLE_HOURS")
+    # Two-step sign-in (api/services/mfa.py) is REQUIRED for admins and consultants
+    # before they can open the Admin panel or any client. false only for local tests.
+    mfa_required_for_staff: bool = Field(default=True, alias="MFA_REQUIRED_FOR_STAFF")
+    # Requests per minute from one IP address (api/core/rate_limit.py): every
+    # request, and the sign-in / password endpoints (much lower). 0 = off.
+    rate_limit_per_minute: int = Field(default=300, alias="RATE_LIMIT_PER_MINUTE")
+    auth_rate_limit_per_minute: int = Field(default=10, alias="AUTH_RATE_LIMIT_PER_MINUTE")
+    # Proxies between the visitor and the API that add to X-Forwarded-For
+    # (Render: 1). The visitor's IP is that many entries from the right; 0 = use the
+    # connection's own address (local development).
+    trusted_proxy_hops: int = Field(default=0, alias="TRUSTED_PROXY_HOPS")
+    # Encrypts emails and phone numbers in stored client data, and two-step sign-in
+    # keys (api/core/crypto.py). A long random value; KEEP IT SAFE — if it's lost,
+    # that data can't be read. Empty = derived from JWT_SECRET_KEY.
+    data_encryption_key: str = Field(default="", alias="DATA_ENCRYPTION_KEY")
+    # Error monitoring (api/core/monitoring.py): a Sentry project's DSN. Empty = off.
+    # Personal data is stripped from every report before it leaves the server.
+    sentry_dsn: str = Field(default="", alias="SENTRY_DSN")
+    # scripts/setup_database.py only — set them in your computer's .env, NEVER on Render:
+    # the owner login that may create tables, and the password it gives the API's
+    # least-privilege login dcp_api (db/schema.sql). Render's DATABASE_URL then uses dcp_api.
+    admin_database_url: str = Field(default="", alias="ADMIN_DATABASE_URL")
+    api_database_password: str = Field(default="", alias="API_DATABASE_PASSWORD")
     ai_premium_monthly: int = Field(default=200, alias="AI_PREMIUM_MONTHLY")
     # OPTIONAL: with a Google Gemini key (aistudio.google.com -> Get API key), a
     # Gemini model turns each question into a calculation plan (only the

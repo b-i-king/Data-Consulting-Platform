@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Data Deletion" };
 
 export default function DataDeletionPage() {
   return (
-    <LegalPage title="Data Deletion" updated="10/15/2026">
+    <LegalPage title="Data Deletion" updated="10/17/2026">
       <Section title="Files You Upload">
         <p>
           Nothing to delete: uploaded files are processed in memory and never kept, unless you chose managed storage.
@@ -41,6 +41,10 @@ export default function DataDeletionPage() {
       </Section>
 
       <Section title="Close Your Account">
+        <p>
+          Signed in, go to <Strong>Settings → Delete my account</Strong> and type your email to confirm: everything is
+          deleted at once. Or ask us:
+        </p>
         <List ordered>
           <li>
             Email <Email subject="Data Deletion Request" /> with the subject line{" "}
@@ -71,6 +75,11 @@ export default function DataDeletionPage() {
           <li>
             <Strong>Records held by other services</Strong> — Stripe (payments) and Cal.com (bookings) keep their own
             records under their own policies.
+          </li>
+          <li>
+            <Strong>An anonymous count</Strong> that an account was deleted: its type, how long it was open, whether it
+            had a paid package, and the reason you picked (if any). It has no name, email, business or location, so it
+            can&apos;t be tied back to you.
           </li>
         </List>
       </Section>

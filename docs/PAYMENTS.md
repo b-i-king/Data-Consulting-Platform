@@ -26,6 +26,86 @@ our server. The webhook is the only thing that turns a plan on or off.
 - **Delete my account** (`DELETE /api/accounts/me`) calls
   `billing.cancel_everything` first: each live Stripe subscription is canceled
   at once and the Stripe customer deleted, so the card is never charged again.
+  Only an anonymous count is kept (`dim.account_deletions`), including whether
+  they had a paid package and the reason they picked, if any.
+
+## Testers
+
+`dim.accounts.is_tester` (Admin → Testers, `POST /api/admin/accounts/{id}/tester`)
+lets someone test without paying while real clients pay.
+`billing.charges_real_money(account)` = Stripe is on **and** the account isn't a
+tester; checkout, "Cancel" and "Manage billing" use it instead of
+`stripe_enabled()`, so a tester gets test mode: the package switches on at once
+(a subscription row with no Stripe id) and "Cancel" switches it off. Downloads are
+free for them (`entitlements.downloads_included`). The workspace says
+"Tester account" instead of "Test mode" (`billing.tester` in
+`GET /api/accounts/services`). Rules (`billing.set_tester`): plan holders only
+(a business's colleagues follow the owner), not admins (already free), and not
+while they have a live Stripe subscription (409 — cancel it first). Turning it
+off cancels their free package.
+
+## Stripe's customer portal ("Manage billing")
+
+Turn on (Stripe → Settings → Billing → Customer portal): **cancel subscriptions**
+(with **Collect cancellation reason**), **update payment methods**, invoice history.
+Leave **switch plans OFF**: package changes (adding tools, All tools, monthly ↔
+annual) happen on the site, where the rules live (AI needs Data Engineering,
+the bundle replaces the tools, free tools, trials) — the portal knows none of them.
+The webhook saves why a client canceled (`cancellation_details`: Stripe's reason
+code, their comment, when) on `dim.subscriptions` (`cancel_feedback`,
+`cancel_comment`, `canceled_at`); Admin → "Why clients cancel" counts them.
+
+## Changing a package mid-cycle
+
+A client has ONE subscription — one receipt with a line per tool, all monthly or
+all annual (Stripe's rule; mixing would mean two subscriptions and two bills).
+Changing it never starts a second checkout; `billing.start_checkout` edits that
+subscription in place (`tests/test_package_changes.py` covers each case):
+
+| Change | What Stripe gets |
+|---|---|
+| Add a tool | one new item at the tool's price for the current interval |
+| Drop a tool | that tool's item removed |
+| Switch to All tools | every tool's item removed, the bundle's added (and back the same way) |
+| Monthly ↔ annual | every item swapped for the other interval's price |
+| Same package again | nothing (409 "That's already your package") |
+
+- `proration_behavior="always_invoice"`: the difference is billed (or credited)
+  **right away**, so an annual client adding a tool in month 2 pays for the rest of
+  that year now, not at next year's renewal.
+- `cancel_at_period_end=False`: changing the package undoes a scheduled cancel.
+- Tools that aren't charged yet (AI before launch) never go to Stripe; they ride
+  in the subscription's metadata (`free_plans`) and come back with the webhook.
+
+## Trials and seasonal sales
+
+`api/services/offers.py` decides a first package's offer; `billing.start_checkout`
+passes it to Stripe Checkout:
+
+- **Trial** → `subscription_data.trial_period_days` (the longest trial among the
+  tools picked). Stripe sends the subscription as `trialing`; the webhook marks
+  `dim.accounts.trial_used_at`, so the account never gets a second trial. In test
+  mode the package starts as `trialing` at once.
+- **Sale** (no trial) → `discounts: [{"coupon": "dcp_sale_<id>_<percent>"}]`.
+  `stripe_catalog.ensure_coupon` makes that coupon the first time (percent off,
+  `duration: "once"` = the first invoice). Stripe allows a coupon OR the
+  promotion-code box, so during a sale the box is hidden; otherwise
+  `allow_promotion_codes` stays on.
+- Changing an existing package gets neither.
+
+## Changing a price
+
+Admin → Prices (`PUT /api/admin/prices/{plan}`, `api/services/price_store.py`).
+Stripe is updated first: `stripe_catalog.sync_plan` creates a new Stripe price
+with the same lookup key (`transfer_lookup_key`) and archives the old one, so
+checkout (`billing._price_id`, which looks up by key) charges the new amount at
+once. Existing subscribers keep their old price (Stripe keeps billing an archived
+price) until you move them in the Stripe dashboard. If Stripe returns an error,
+the price is not saved (502), so the site and Stripe never disagree. Then
+`dim.plan_prices` is saved and the running API uses the new price.
+`scripts/sync_stripe.py` reads `dim.plan_prices` too: run it once when you
+first connect Stripe, and after editing the table by hand.
+
 
 ## Test mode (today)
 

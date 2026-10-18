@@ -38,7 +38,7 @@ from fastapi.responses import RedirectResponse, Response
 from api.core.config import get_settings
 from api.core.security import get_acting_context
 from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn, WaveTokenIn
-from api.services import account_store, business_tools, cloud_sources, connections, entitlements, oauth, sync
+from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, hipaa, oauth, sync, teams
 from api.services.pricing import refresh_catalog
 
 router = APIRouter(prefix="/connections")
@@ -137,11 +137,14 @@ async def set_refresh(connector: str, body: RefreshIn, ctx: Annotated[dict, Depe
 
 
 async def _holder_only(ctx: dict) -> str:
-    """The plan holder's id; 403 for a team colleague (only the owner, or their consultant, connects data)."""
-    holder = await entitlements.plan_holder_id(ctx["account"])
-    if holder != str(ctx["account"]["id"]):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only the team owner can connect data sources.")
-    return holder
+    """
+    The plan holder's id, for a change to the team's connections.
+
+    The owner, a DEVELOPER on the team, or the client's consultant may connect,
+    sync and disconnect; a view-only MEMBER gets 403 (api/services/teams.py).
+    """
+    teams.require_editor(ctx)
+    return await entitlements.plan_holder_id(ctx["account"])
 
 
 async def _supabase_source(ctx: dict) -> dict:
@@ -392,6 +395,7 @@ async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_cont
     if connector in ("xero", "quickbooks", "wave") and not await _slot_free(connector, holder):
         raise _full(connector)
     consultant = str(ctx["consultant"]["id"]) if ctx["acting"] else None
+    await audit.record(ctx, "connect", {"tool": connector})   # healthcare clients only
     return {"url": oauth.authorize_url(connector, holder, consultant, return_to)}
 
 
@@ -471,6 +475,7 @@ async def live_dataset(connector: str, id: str, ctx: Annotated[dict, Depends(get
                                                   meter=meter)
     finally:
         await _save_meter(row, meter)
+    await audit.record(ctx, "view_live", {"tool": connector, "dataset": id})   # healthcare clients only
     return _csv_response(r, f"{r['name']}.csv")
 
 
@@ -539,6 +544,7 @@ async def sync_now(connector: str, body: SyncIn, ctx: Annotated[dict, Depends(ge
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     holder_id = await _holder_only(ctx)
     holder = await account_store.get_account(holder_id)
+    hipaa.require_storage_allowed(holder or {})   # a HIPAA request waiting for an admin: nothing is stored yet
     if connections.REQUIRED_SERVICE not in await entitlements.active_services(holder):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             detail="Storing your records on a schedule needs Data Engineering in your package.")
@@ -557,6 +563,7 @@ async def sync_now(connector: str, body: SyncIn, ctx: Annotated[dict, Depends(ge
                                 detail=f"Your schedule allows the next sync after {ready_at:%m/%d/%Y %I:%M %p} UTC.")
     result = await sync.run(holder, connector, consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None,
                             started_by=str(ctx["consultant"]["account_id"]) if ctx["acting"] else str(ctx["account"]["id"]))
+    await audit.record(ctx, "sync", {"tool": connector, "records": result.get("records")})
     return {"sync": result, "connectors": connections.connector_list(await account_store.list_connections(holder_id))}
 
 
@@ -591,4 +598,5 @@ async def disconnect(connector: str, ctx: Annotated[dict, Depends(get_acting_con
         except HTTPException:
             pass   # already revoked on their side: just delete ours
     await account_store.delete_integration(holder, connector)
+    await audit.record(ctx, "disconnect", {"tool": connector})
     return {"connectors": connections.connector_list(await account_store.list_connections(holder))}

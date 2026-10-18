@@ -1,0 +1,211 @@
+{
+  "_about": "Industry KPI recipes for build-dashboard (human-readable copy: INDUSTRY_METRICS.md). Keys are NAICS sectors. Each metric: id, label, direction (higher|lower is better), format (number|percent|currency|days), benchmark, target ([low, high] healthy band in the metric's units, for the gauge KPI card), kind, and the columns it needs as name HINTS (a hint matches a column whose name contains all its words, e.g. 'food_cost' matches 'Food Cost USD'). Kinds: sum / mean (column), ratio (numerator groups / denominator groups, x100 for percent; 'minus' groups are subtracted from the numerator), rate (share of rows whose column is in values, or truthy), days_between (mean days from start to end), per_distinct (numerator groups / distinct count of a column), net (numerator groups minus 'minus' groups). kind null = documented only.",
+  "11": {"name": "Agriculture, Forestry, Fishing and Hunting", "metrics": [
+    {"id": "yield_per_acre", "label": "Yield per acre", "direction": "higher", "format": "number", "kind": "ratio",
+     "numerator": [["yield", "bushels", "harvest", "production", "head_count"]], "denominator": [["acres", "acreage", "head"]]},
+    {"id": "cost_per_unit", "label": "Cost per unit produced", "direction": "lower", "format": "currency", "kind": "ratio",
+     "numerator": [["production_cost", "cost", "expense"]], "denominator": [["bushels", "yield", "units", "production"]],
+     "benchmark": "Per-unit cost shows efficiency better than per-acre figures"},
+    {"id": "opex_ratio", "label": "Operating expense ratio", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["operating_expense", "expense", "cost"]], "denominator": [["gross_revenue", "revenue", "sales"]],
+     "benchmark": "What it costs to make $1 of gross revenue"},
+    {"id": "net_return_per_acre", "label": "Net return per acre", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["revenue", "sales"]], "minus": [["cost", "expense"]], "denominator": [["acres", "acreage"]]}
+  ]},
+  "21": {"name": "Mining, Quarrying, and Oil and Gas Extraction", "metrics": [
+    {"id": "production_volume", "label": "Production volume", "direction": "higher", "format": "number", "kind": "sum",
+     "column": ["production", "ounces", "boe", "tons", "barrels"]},
+    {"id": "unit_cost", "label": "Cost per unit (AISC / lifting cost)", "direction": "lower", "format": "currency", "kind": "ratio",
+     "numerator": [["aisc", "lifting_cost", "cost"]], "denominator": [["ounces", "boe", "production", "tons", "barrels"]]},
+    {"id": "recovery_rate", "label": "Recovery rate", "direction": "higher", "format": "percent", "kind": "mean",
+     "column": ["recovery_rate", "recovery"]},
+    {"id": "reserve_replacement", "label": "Reserve replacement ratio", "direction": "higher", "format": "percent", "kind": null}
+  ]},
+  "22": {"name": "Utilities", "metrics": [
+    {"id": "saidi", "label": "SAIDI (outage minutes per customer)", "direction": "lower", "format": "number", "kind": "per_distinct",
+     "numerator": [["outage_minutes", "interruption_minutes", "customer_minutes"]], "distinct": ["customer_id", "account_number", "meter_id"]},
+    {"id": "saifi", "label": "SAIFI (outages per customer)", "direction": "lower", "format": "number", "kind": "per_distinct",
+     "numerator": [["outages", "interruptions"]], "distinct": ["customer_id", "account_number", "meter_id"]},
+    {"id": "caidi", "label": "CAIDI (average restoration minutes)", "direction": "lower", "format": "number", "kind": "mean",
+     "column": ["restoration_minutes", "restore_time", "outage_duration", "duration_minutes"]},
+    {"id": "om_cost_per_customer", "label": "O&M cost per customer", "direction": "lower", "format": "currency", "kind": "per_distinct",
+     "numerator": [["o_m_cost", "om_cost", "maintenance_cost", "operating_cost"]], "distinct": ["customer_id", "account_number", "meter_id"]}
+  ]},
+  "23": {"name": "Construction", "metrics": [
+    {"id": "gross_margin_pct", "label": "Gross profit margin", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["contract_revenue", "revenue", "billed", "amount"]], "minus": [["job_cost", "cost"]],
+     "denominator": [["contract_revenue", "revenue", "billed", "amount"]]},
+    {"id": "backlog_months", "label": "Backlog (months)", "direction": "higher", "format": "number", "kind": null,
+     "benchmark": "6–12 months is healthy for most general contractors"},
+    {"id": "cost_variance_pct", "label": "Cost variance vs. budget", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["actual_cost", "actual"]], "minus": [["budget", "estimated_cost", "estimate"]], "denominator": [["budget", "estimated_cost", "estimate"]]},
+    {"id": "trir", "label": "TRIR (recordable incidents per 200,000 hours)", "direction": "lower", "format": "number", "kind": "ratio",
+     "numerator": [["recordable_incidents", "incidents", "injuries"]], "denominator": [["hours_worked", "labor_hours", "hours"]], "scale": 200000}
+  ]},
+  "31-33": {"name": "Manufacturing", "metrics": [
+    {"id": "oee", "label": "OEE", "direction": "higher", "format": "percent", "kind": "mean", "column": ["oee"],
+     "benchmark": "World-class is 85%; most plants run at 60–75%", "target": [85, 100]},
+    {"id": "first_pass_yield", "label": "First pass yield", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["good_units", "passed", "first_pass"]], "denominator": [["total_units", "units_produced", "produced", "units"]]},
+    {"id": "on_time_delivery", "label": "On-time delivery rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["on_time", "delivered_on_time", "on_time_delivery"]},
+    {"id": "cost_per_unit", "label": "Manufacturing cost per unit", "direction": "lower", "format": "currency", "kind": "ratio",
+     "numerator": [["manufacturing_cost", "production_cost", "cost"]], "denominator": [["units_produced", "units", "quantity"]]}
+  ]},
+  "42": {"name": "Wholesale Trade", "metrics": [
+    {"id": "gross_margin_pct", "label": "Gross margin", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["sales", "revenue", "amount"]], "minus": [["cogs", "cost_of_goods", "cost"]], "denominator": [["sales", "revenue", "amount"]]},
+    {"id": "inventory_turnover", "label": "Inventory turnover", "direction": "higher", "format": "number", "kind": null},
+    {"id": "fill_rate", "label": "Order fill rate", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["quantity_shipped", "shipped", "filled"]], "denominator": [["quantity_ordered", "ordered"]]},
+    {"id": "dso", "label": "Days sales outstanding", "direction": "lower", "format": "days", "kind": "days_between",
+     "start": ["invoice_date", "invoiced"], "end": ["paid_date", "payment_date", "date_paid"]}
+  ]},
+  "44-45": {"name": "Retail Trade", "metrics": [
+    {"id": "same_store_growth", "label": "Same-store sales growth", "direction": "higher", "format": "percent", "kind": null,
+     "benchmark": "Stores open at least a year; new and closed stores left out"},
+    {"id": "sales_per_sqft", "label": "Sales per square foot", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["sales", "revenue", "amount"]], "denominator": [["square_feet", "sq_ft", "sqft"]]},
+    {"id": "gross_margin_pct", "label": "Gross margin", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["sales", "revenue", "amount"]], "minus": [["cogs", "cost_of_goods", "unit_cost", "cost"]], "denominator": [["sales", "revenue", "amount"]]},
+    {"id": "gmroi", "label": "GMROI", "direction": "higher", "format": "number", "kind": null}
+  ]},
+  "48-49": {"name": "Transportation and Warehousing", "metrics": [
+    {"id": "operating_ratio", "label": "Operating ratio", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["operating_expense", "expense", "cost"]], "denominator": [["revenue", "freight_revenue", "sales"]],
+     "benchmark": "Operating expenses ÷ revenue; lower keeps more of the revenue"},
+    {"id": "revenue_per_mile", "label": "Revenue per mile", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["revenue", "freight_revenue", "amount"]], "denominator": [["miles", "loaded_miles", "distance"]]},
+    {"id": "cost_per_mile", "label": "Cost per mile", "direction": "lower", "format": "currency", "kind": "ratio",
+     "numerator": [["cost", "expense"]], "denominator": [["miles", "distance"]]},
+    {"id": "on_time_pct", "label": "On-time delivery", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["on_time", "delivered_on_time"], "benchmark": "95%+ keeps shippers loyal", "target": [95, 100]},
+    {"id": "deadhead_pct", "label": "Deadhead miles", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["empty_miles", "deadhead_miles", "deadhead"]], "denominator": [["total_miles", "miles"]]}
+  ]},
+  "51": {"name": "Information", "metrics": [
+    {"id": "arr_growth", "label": "ARR growth", "direction": "higher", "format": "percent", "kind": null},
+    {"id": "nrr", "label": "Net revenue retention", "direction": "higher", "format": "percent", "kind": null,
+     "benchmark": "Top SaaS: 120%+ enterprise, 110%+ SMB"},
+    {"id": "churn_rate", "label": "Churn rate", "direction": "lower", "format": "percent", "kind": "rate",
+     "column": ["churned", "churn", "canceled", "cancelled"]},
+    {"id": "cac_payback", "label": "CAC payback (months)", "direction": "lower", "format": "number", "kind": null,
+     "benchmark": "Under 12 months SMB, under 18 enterprise"}
+  ]},
+  "52": {"name": "Finance and Insurance", "metrics": [
+    {"id": "loss_ratio", "label": "Loss ratio", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["losses", "claims_paid", "incurred_losses"]], "denominator": [["premiums", "earned_premium", "premium"]]},
+    {"id": "combined_ratio", "label": "Combined ratio", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["losses", "claims_paid", "incurred_losses"], ["underwriting_expense", "expenses", "expense"]],
+     "denominator": [["premiums", "earned_premium", "premium"]], "benchmark": "Below 100% is an underwriting profit", "target": [0, 100]},
+    {"id": "efficiency_ratio", "label": "Efficiency ratio", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["noninterest_expense", "operating_expense"]], "denominator": [["revenue", "total_revenue"]]},
+    {"id": "net_interest_margin", "label": "Net interest margin", "direction": "higher", "format": "percent", "kind": null}
+  ]},
+  "53": {"name": "Real Estate and Rental and Leasing", "metrics": [
+    {"id": "occupancy_rate", "label": "Occupancy rate", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["occupied_units", "occupied"]], "denominator": [["total_units", "units_available", "units"]]},
+    {"id": "noi", "label": "Net operating income", "direction": "higher", "format": "currency", "kind": "net",
+     "numerator": [["rental_income", "rent", "revenue", "income"]], "minus": [["operating_expense", "expense"]]},
+    {"id": "dscr", "label": "DSCR", "direction": "higher", "format": "number", "kind": "ratio",
+     "numerator": [["noi", "net_operating_income"]], "denominator": [["debt_service", "mortgage_payment"]]},
+    {"id": "cap_rate", "label": "Cap rate", "direction": "higher", "format": "percent", "kind": null}
+  ]},
+  "54": {"name": "Professional, Scientific, and Technical Services", "metrics": [
+    {"id": "billable_utilization", "label": "Billable utilization", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["billable_hours", "billable"]], "denominator": [["total_hours", "hours_worked", "hours"]],
+     "benchmark": "75–85% is healthy for most firms", "target": [75, 85]},
+    {"id": "realization_rate", "label": "Realization rate", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["billed_amount", "collected", "billed"]], "denominator": [["standard_value", "standard_amount", "worked_value"]],
+     "benchmark": "Below 85% is a red flag", "target": [85, 100]},
+    {"id": "revenue_per_employee", "label": "Revenue per employee", "direction": "higher", "format": "currency", "kind": "per_distinct",
+     "numerator": [["revenue", "fees", "amount"]], "distinct": ["employee", "staff", "consultant", "attorney"]},
+    {"id": "project_margin", "label": "Project gross margin", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["revenue", "fees", "amount"]], "minus": [["project_cost", "cost"]], "denominator": [["revenue", "fees", "amount"]]}
+  ]},
+  "55": {"name": "Management of Companies and Enterprises", "metrics": [
+    {"id": "ebitda_margin", "label": "EBITDA margin", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["ebitda"]], "denominator": [["revenue", "sales"]]},
+    {"id": "overhead_pct", "label": "Corporate overhead % of revenue", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["overhead", "corporate_cost"]], "denominator": [["revenue", "sales"]]},
+    {"id": "fcf_conversion", "label": "Free cash flow conversion", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["free_cash_flow", "fcf"]], "denominator": [["net_income", "ebitda"]]},
+    {"id": "roic", "label": "ROIC by business unit", "direction": "higher", "format": "percent", "kind": null}
+  ]},
+  "56": {"name": "Administrative and Support and Waste Management", "metrics": [
+    {"id": "fill_rate", "label": "Fill rate", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["positions_filled", "filled"]], "denominator": [["openings", "positions", "requisitions"]]},
+    {"id": "time_to_fill", "label": "Time to fill", "direction": "lower", "format": "days", "kind": "days_between",
+     "start": ["opened_date", "open_date", "requested_date"], "end": ["filled_date", "start_date", "placed_date"]},
+    {"id": "margin_per_hour", "label": "Gross margin per hour", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["bill_amount", "billed", "revenue"]], "minus": [["pay_amount", "pay", "wages"]], "denominator": [["hours"]]},
+    {"id": "tons_per_route", "label": "Tons per route", "direction": "higher", "format": "number", "kind": "per_distinct",
+     "numerator": [["tons", "tonnage", "weight"]], "distinct": ["route"]}
+  ]},
+  "61": {"name": "Educational Services", "metrics": [
+    {"id": "enrollment", "label": "Enrollment", "direction": "higher", "format": "number", "kind": "per_distinct",
+     "numerator": [], "distinct": ["student_id", "student", "learner"]},
+    {"id": "retention_rate", "label": "Retention rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["retained", "returning", "persisted"]},
+    {"id": "graduation_rate", "label": "Graduation rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["graduated", "completed", "completion"]},
+    {"id": "cost_per_student", "label": "Cost per student", "direction": "lower", "format": "currency", "kind": "per_distinct",
+     "numerator": [["cost", "expense", "spend"]], "distinct": ["student_id", "student", "learner"]}
+  ]},
+  "62": {"name": "Health Care and Social Assistance", "metrics": [
+    {"id": "avg_length_of_stay", "label": "Average length of stay", "direction": "lower", "format": "days", "kind": "days_between",
+     "start": ["admit_date", "admission_date", "admitted"], "end": ["discharge_date", "discharged"]},
+    {"id": "readmission_rate", "label": "30-day readmission rate", "direction": "lower", "format": "percent", "kind": "rate",
+     "column": ["readmitted", "readmission", "readmit"]},
+    {"id": "bed_occupancy", "label": "Bed occupancy rate", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["occupied_beds", "patient_days"]], "denominator": [["available_beds", "bed_days", "beds"]]},
+    {"id": "days_in_ar", "label": "Days in A/R", "direction": "lower", "format": "days", "kind": "days_between",
+     "start": ["service_date", "claim_date", "date_of_service", "billed_date"], "end": ["paid_date", "payment_date", "remit_date"]},
+    {"id": "claim_denial_rate", "label": "Claim denial rate", "direction": "lower", "format": "percent", "kind": "rate",
+     "column": ["claim_status", "status"], "values": ["denied", "rejected", "declined"]}
+  ]},
+  "71": {"name": "Arts, Entertainment, and Recreation", "metrics": [
+    {"id": "attendance", "label": "Attendance", "direction": "higher", "format": "number", "kind": "sum",
+     "column": ["attendance", "visitors", "attendees", "tickets_sold", "guests"]},
+    {"id": "per_capita_spend", "label": "Spend per visitor", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["revenue", "sales", "amount"]], "denominator": [["attendance", "visitors", "attendees", "guests"]]},
+    {"id": "capacity_utilization", "label": "Capacity utilization", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["seats_sold", "booked", "used"]], "denominator": [["capacity", "seats_available", "slots"]]},
+    {"id": "renewal_rate", "label": "Membership renewal rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["renewed", "renewal"]}
+  ]},
+  "72": {"name": "Accommodation and Food Services", "metrics": [
+    {"id": "occupancy", "label": "Occupancy", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["rooms_sold", "room_nights", "occupied_rooms"]], "denominator": [["rooms_available", "available_rooms"]]},
+    {"id": "adr", "label": "ADR (average daily rate)", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["room_revenue"]], "denominator": [["rooms_sold", "room_nights", "occupied_rooms"]]},
+    {"id": "revpar", "label": "RevPAR", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["room_revenue"]], "denominator": [["rooms_available", "available_rooms"]]},
+    {"id": "prime_cost_pct", "label": "Prime cost %", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["food_cost", "cogs", "cost_of_goods"], ["labor_cost", "payroll", "wages"]], "denominator": [["sales", "revenue", "amount"]],
+     "benchmark": "Food + labor; about 60–65% of sales is a sensible target", "target": [60, 65]},
+    {"id": "table_turnover", "label": "Table turnover", "direction": "higher", "format": "number", "kind": "mean",
+     "column": ["table_turns", "table_turnover", "turns"]}
+  ]},
+  "81": {"name": "Other Services (except Public Administration)", "metrics": [
+    {"id": "revenue_per_hour", "label": "Revenue per technician hour", "direction": "higher", "format": "currency", "kind": "ratio",
+     "numerator": [["revenue", "sales", "amount"]], "denominator": [["labor_hours", "technician_hours", "service_hours", "hours"]]},
+    {"id": "first_time_fix", "label": "First-time fix rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["first_time_fix", "fixed_first_visit", "ftf"]},
+    {"id": "rebooking_rate", "label": "Rebooking rate", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["rebooked", "rebooking", "booked_next"]},
+    {"id": "program_expense_ratio", "label": "Program expense ratio", "direction": "higher", "format": "percent", "kind": "ratio",
+     "numerator": [["program_expense", "program_cost"]], "denominator": [["total_expense", "expenses"]]}
+  ]},
+  "92": {"name": "Public Administration", "metrics": [
+    {"id": "budget_variance", "label": "Budget variance", "direction": "lower", "format": "percent", "kind": "ratio",
+     "numerator": [["actual", "spent", "expenditure"]], "minus": [["budget", "appropriated", "appropriation"]],
+     "denominator": [["budget", "appropriated", "appropriation"]]},
+    {"id": "cost_per_service", "label": "Cost per service delivered", "direction": "lower", "format": "currency", "kind": "ratio",
+     "numerator": [["cost", "expense", "amount"]], "denominator": [["__rows__"]]},
+    {"id": "sla_compliance", "label": "Service-level compliance", "direction": "higher", "format": "percent", "kind": "rate",
+     "column": ["met_sla", "within_sla", "on_time", "sla_met"]},
+    {"id": "satisfaction", "label": "Resident satisfaction", "direction": "higher", "format": "number", "kind": "mean",
+     "column": ["satisfaction", "csat", "rating", "score"]}
+  ]}
+}

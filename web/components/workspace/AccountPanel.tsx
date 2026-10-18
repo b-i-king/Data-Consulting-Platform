@@ -1,6 +1,9 @@
 // Settings -> Account: everything about YOU and the business you're working in.
 //
 //   Your profile        name, email, business, role (and your consultant)
+//   Your team           business accounts: people, roles, 5 at most (TeamPanel.tsx)
+//   Two-step sign-in, Your devices, Activity log (healthcare)  — SecurityPanel.tsx
+//   Health information (HIPAA)  business owners: ask an admin to confirm (HipaaCard.tsx)
 //   Password            "Reset password": we email you a link (Supabase Auth)
 //   About your business what you do, your goals and the questions you ask
 //                       most — dashboards are built around it (for a
@@ -18,6 +21,12 @@ import type { Account, BusinessContext, WarehouseCounts } from "@/lib/types";
 import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 import { AskToConsult, DeleteAccount, UpdateLatestUpload } from "./SettingsPanel";
+import HipaaCard from "./HipaaCard";
+import { ActivityLogCard, DevicesCard, TwoStepCard } from "./SecurityPanel";
+import TeamPanel from "./TeamPanel";
+
+// How a team role reads next to the business name.
+const TEAM_ROLE: Record<string, string> = { owner: "owner", developer: "developer", member: "member, view only" };
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-brand";
 
@@ -30,6 +39,9 @@ export default function AccountPanel(props: {
   stored: WarehouseCounts | null;
   canStore: boolean;
   canChange: boolean; // plan holder (or their consultant)
+  bookingUrl: string; // "Talk to us about Enterprise" when the team is full
+  onToken: (token: string) => void; // a fresh token after turning on two-step sign-in
+  onRefreshAccount: () => void; // reload the account (two-step sign-in changed)
   onStoredChanged: (counts: WarehouseCounts) => void;
   onSignOut: () => void;
   onDeleted: () => void;
@@ -47,7 +59,7 @@ export default function AccountPanel(props: {
           {a.company_name && (
             <>
               <dt className="text-ink-muted">Business</dt>
-              <dd>{a.company_name}{a.team_role ? ` (${a.team_role})` : ""}</dd>
+              <dd>{a.company_name}{a.team_role ? ` (${TEAM_ROLE[a.team_role] ?? a.team_role})` : ""}</dd>
             </>
           )}
           <dt className="text-ink-muted">Role</dt>
@@ -69,6 +81,19 @@ export default function AccountPanel(props: {
           </Button>
         </div>
       </Card>
+
+      {!props.acting && (
+        <>
+          <TwoStepCard token={props.token} account={a} onToken={props.onToken} onChanged={props.onRefreshAccount} />
+          <DevicesCard token={props.token} />
+        </>
+      )}
+      {!props.acting && a.account_type === "business" && props.canChange && (
+        <HipaaCard token={props.token} onChanged={props.onRefreshAccount} />
+      )}
+      {!props.acting && a.is_healthcare && props.canChange && <ActivityLogCard token={props.token} />}
+
+      {!props.acting && a.team_id && <TeamPanel token={props.token} bookingUrl={props.bookingUrl} />}
 
       {(props.canChange || props.acting) && <BusinessContextCard token={props.token} name={props.workspaceName} />}
 

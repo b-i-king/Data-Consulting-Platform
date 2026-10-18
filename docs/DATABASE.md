@@ -43,6 +43,10 @@ erDiagram
     accounts ||--o{ dashboard_tabs : "their own dashboard tabs"
     accounts ||--o{ question_log : "questions asked of the data"
     accounts ||--o{ ai_usage : "AI questions per day (the allowance)"
+    accounts |o--o{ plan_prices : "last changed by (an admin)"
+    accounts |o--o{ seasonal_sales : "last changed by (an admin)"
+    accounts ||--o{ sessions : "signed-in devices (3 at most)"
+    accounts ||--o{ audit_log : "healthcare: who touched the data"
     consultants |o--o{ data_connections : "set up on the client's behalf"
     accounts ||--o{ account_data : "fact: stored data"
     consultants |o--o{ account_data : "loaded by"
@@ -56,7 +60,7 @@ erDiagram
         text email UK
         text company_name
         uuid team_id FK
-        text team_role "owner | member"
+        text team_role "owner | developer | member (view only)"
         uuid auth_user_id UK "Supabase Auth user"
         text password_hash "local mode only"
         text naics_sector
@@ -71,8 +75,37 @@ erDiagram
         timestamptz terms_accepted_at
         text_array interested_services "interest only"
         text stripe_customer_id UK
+        bool is_tester "paid tools free (set by an admin)"
+        timestamptz trial_used_at "their one free trial"
         timestamptz created_at
+        timestamptz updated_at "trigger: any change but sign-in"
         timestamptz last_login_at
+        int failed_logins "wrong passwords in a row"
+        timestamptz login_locked_until "after 3 (login_guard.py)"
+        text mfa_secret "two-step key, ENCRYPTED"
+        timestamptz mfa_enabled_at
+        jsonb mfa_recovery_codes "hashes of backup codes"
+        text hipaa_status "pending | approved | denied"
+        text hipaa_npi "checked; the admin looks it up"
+        bool is_healthcare "HIPAA approved: audit log on"
+    }
+    sessions {
+        uuid id PK
+        uuid account_id FK
+        text device_id "the browser's random id"
+        text device "Chrome on Windows"
+        timestamptz last_seen_at
+        timestamptz revoked_at
+        text revoked_reason
+    }
+    audit_log {
+        bigint id PK
+        timestamptz at
+        uuid account_id FK "whose data"
+        uuid actor_account_id FK "who"
+        text actor_role
+        text action "sign_in, export, load, ..."
+        jsonb detail "names and counts only"
     }
     consultants {
         uuid id PK
@@ -85,6 +118,41 @@ erDiagram
         text free_booking_url "their free 30-min Cal.com link"
         text paid_booking_url "their paid session link"
         text calcom_webhook_secret "signs their own webhook"
+        timestamptz deactivated_at "an admin switched them off"
+        uuid deactivated_by "the admin"
+        text deactivation_reason
+        timestamptz reactivated_at
+        uuid reactivated_by "the admin"
+        timestamptz created_at
+        timestamptz updated_at "trigger"
+    }
+    plan_prices {
+        text plan_id PK "pricing.SUBSCRIPTIONS id"
+        numeric monthly_usd
+        numeric annual_usd
+        int trial_days "free trial on a first package (0 = none)"
+        timestamptz updated_at
+        uuid updated_by FK "the admin (NULL = seed)"
+    }
+    seasonal_sales {
+        text id PK "new_year | after_taxes | year_end"
+        text name
+        text starts_on "MM-DD, every year"
+        text ends_on "MM-DD, included"
+        int percent_off "off the first payment"
+        bool active
+        timestamptz updated_at
+        uuid updated_by FK "the admin"
+    }
+    account_deletions {
+        bigint id PK
+        timestamptz deleted_at
+        text account_type "individual | business"
+        text role "client | team_owner | team_member | consultant"
+        text removed_by "self | team_owner"
+        int account_age_days
+        bool had_paid_plan
+        text reason "fixed list, optional"
     }
     teams {
         uuid id PK
@@ -208,10 +276,15 @@ erDiagram
 
 | Table | One row per | Written by | Notes |
 |---|---|---|---|
-| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. |
-| `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. |
+| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `team_role` = `owner` (the team's admin: billing, people, roles), `developer` (uploads, connects and loads data, edits dashboards) or `member` (**view only**); a team holds `TEAM_MAX_PEOPLE` (5) people, owner included, and one person is on one team (`api/services/teams.py`). `trial_used_at` = when their one free trial started (`api/services/offers.py`). `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. `is_tester` = an admin made them a **tester** (Admin → Testers): packages switch on with no charge even when Stripe is live, and downloads are free (`billing.charges_real_money`). `updated_at` = last time anything about the account changed (the `dim.touch_updated_at` trigger; a sign-in alone doesn't count). `mfa_secret` (encrypted) / `mfa_enabled_at` / `mfa_recovery_codes` (hashes) = two-step sign-in (`api/services/mfa.py`). `hipaa_status` (`pending` / `approved` / `denied`) with `hipaa_requested_at`, `hipaa_organization`, `hipaa_npi`, `hipaa_note`, `hipaa_decided_at` / `_by`, `hipaa_decision_note` = a request to store health information, confirmed by an admin (`api/services/hipaa.py`; a NAICS 62 sign-up asks automatically; storing is paused while pending). `is_healthcare` = HIPAA approved: their data access is audited. `failed_logins` / `login_locked_until` = the sign-in lockout: wrong passwords in a row, and when the lock ends after `LOGIN_MAX_ATTEMPTS` (3) of them, for `LOGIN_LOCK_MINUTES` (15). A successful sign-in or a password reset clears both (`api/services/login_guard.py`). |
+| `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `active` = false when an admin **deactivated** them (Admin → Consultants): they can't be picked or open clients and sign in as a client; their clients moved to a consultant with room (`consultants.deactivate`). `deactivated_at` / `_by` / `deactivation_reason` and `reactivated_at` / `_by` keep the latest of each. `updated_at` is set by the `dim.touch_updated_at` trigger. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. |
 | `dim.teams` | business | business signup | `accounts.team_id` links members. |
-| `dim.subscriptions` | client subscription (a package of tools, or All tools) | **Stripe webhook** (`api/services/billing.py`); in test mode, checkout switches it on at once | The tools are the `items` list (`plan_id` from `pricing.py`, plus Stripe's item id). One billing interval for all of them. `active`, `trialing`, `past_due` keep it on. The tools on sale and their prices live in `pricing.py` and in Stripe, so there is no plans table. |
+| `dim.subscriptions` | client subscription (a package of tools, or All tools) | **Stripe webhook** (`api/services/billing.py`); in test mode (or for a tester), checkout switches it on at once | The tools are the `items` list (`plan_id` from `pricing.py`, plus Stripe's item id). One billing interval for all of them. `active`, `trialing`, `past_due` keep it on. The tools on sale are in `pricing.py`; their prices in `dim.plan_prices`. `cancel_feedback` / `cancel_comment` / `canceled_at` = why and when they canceled in Stripe's portal (Stripe's reason codes). |
+| `dim.plan_prices` | tool or bundle on sale | the `db/schema.sql` seed, then **Admin → Prices** (`api/services/price_store.py`) | **The one place a price is changed.** Saving updates Stripe first (a new Stripe price under the same lookup key; subscribers keep theirs), then this row, then the running site. The API reads the table at startup; after editing it by hand in Supabase, run `python scripts/sync_stripe.py` and restart the API. No row = the default in `pricing.py`. `trial_days` = a free trial on a first package with this tool (0 = none; Stripe runs it). |
+| `dim.sessions` | signed-in device | every sign-in (`api/services/sessions.py`) | The login token carries its id; a request is refused once it's signed out (by the person, a 4th device, a password reset, an admin, or 8 idle hours). Only a short device label — no IP address or full browser string. |
+| `dim.audit_log` | access to a **healthcare** client's data | `api/services/audit.py`, only when `accounts.is_healthcare` (HIPAA approved) | Who (account and role), what (`sign_in`, `view_stored`, `export`, `load`, `delete_stored`, `download`, `connect`, `sync`, `disconnect`, `view_live`, `ai_question`), when, and names / counts — never the data. Deleted with the account. |
+| `dim.seasonal_sales` | yearly discount window | the `db/schema.sql` seed (switched off), then **Admin → Seasonal sales** (`api/services/offers.py`) | Month-day windows (`'11-24'` to `'12-31'`, may wrap the new year) that repeat every year with no edits; `percent_off` comes off a new client's first payment (first month, or first year). The API makes the Stripe coupon itself (`dcp_sale_<id>_<percent>`). A free trial, when someone qualifies, is used instead. |
+| `dim.account_deletions` | account deleted | "Delete my account" (`account_store.delete_account`, same transaction) | **Anonymous**: account type, role, how it was removed (themselves, or with their business owner), age in whole days, whether they had a paid package, and the optional reason picked from a fixed list. No id, name, email, company or place. Shown as counts in Admin → Account deletions. |
 | `dim.consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | Consulting is booked **and paid** on Cal.com. The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to the paid link (the client's consultant's own, else `PAID_BOOKING_URL`). `consultant_id` = whose Cal.com webhook it came through, so each consultant's sessions can be counted and paid (NULL = the shared webhook). Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |
 | `dim.usage_events` | cleaned-file download | download endpoint | Metadata only — never the data. `consultant_id` set when a consultant downloaded for the client. `data_fingerprint` is a one-way hash used for fair use ([PAYMENTS.md](PAYMENTS.md#fair-use)). |
 | `dim.storage_consents` | client's "store my data" | first load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. "Delete stored data" sets `withdrawn_at`. |
@@ -220,6 +293,7 @@ erDiagram
 | `dim.dashboard_tabs` | one of the client's own dashboard tabs | `POST/PUT/DELETE /api/dashboards/tabs` | A name + saved questions, answered again on the open data each time (`api/services/dashboards.py`). |
 | `dim.api_usage` | API calls the whole app made to one tool in one month | every QuickBooks / Xero read (`CallMeter` in `api/services/business_tools.py`) | Not tied to an account. QuickBooks' free tier allows 500,000 read calls a month for the whole app and blocks every client past it, so the app stops at 90%. |
 | `dim.ai_usage` | AI questions one client (plan holder) asked on one day | each question to the AI assistant (`POST /api/ai/ask`) | The monthly allowance is this month's sum: free 20, premium (AI package) 200 (`AI_FREE_MONTHLY` / `AI_PREMIUM_MONTHLY`); admins have no limit; a consultant's questions count toward the client they work on. Counts only (the text is in `dim.question_log`). |
+| (trigger) `dim.touch_updated_at` | — | `db/schema.sql` | Before any UPDATE of `dim.accounts` or `dim.consultants`, sets `updated_at = now()` when something other than `last_login_at` or the lockout columns changed. |
 | `dim.question_log` | one question asked of the data | `POST /api/questions` (after "Ask your data") | The text only. Questions asked again and again are suggested as dashboard tabs. Only the newest 500 per account are kept (`QUESTION_LOG_KEEP` in `account_store.py`), so it never grows without end. |
 | `fact.account_data` | **one metric** of one record (or one record with no numbers) | the load (`api/services/warehouse_store.py`) | Every client's stored data in one shape. Explained in [DATA_MODEL.md](DATA_MODEL.md). |
 | `fact.field_map` | source field ("in QuickBooks, `TxnDate` means `transaction_date`") | `db/schema.sql` seed (same pairs as `unified.py`) | Shared by every client: lines names up and says which fields are metrics. |
@@ -228,7 +302,11 @@ erDiagram
 ARCHITECTURE.md → Consultants): a client sees their own rows; a consultant sees
 the clients whose `consultant_id` is theirs. Row Level Security is switched on
 for every table with no public policies, so Supabase's browser API can't read
-anything; the API connects with the database password. `fact.account_data`
+anything. The API signs in as **`dcp_api`** (role `dcp_app`, made by
+`scripts/setup_database.py`): it can read and write rows of `dim` (an `api_all`
+policy for that role only) but can't skip RLS, so in `fact` it sees one account
+at a time; it can't change tables either. Emails and phone numbers in `fact`
+are encrypted ([SECURITY.md](SECURITY.md)). `fact.account_data`
 also has a policy: a login that doesn't bypass RLS sees only the account named
 in `app.account_id` (tested), and the API filters every query by account too.
 

@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from api.core.security import get_current_account
 from api.models.accounts import ConsultantSettingsIn, SignupIn
 from api.routers.accounts import create_client_account
-from api.services import account_store, consultants
+from api.services import account_store, consultants, mfa
 from api.services.entitlements import is_admin
 
 router = APIRouter(prefix="/consultant")
@@ -63,9 +63,10 @@ async def _me(token: dict) -> dict:
         consultant = await _me(token)
         consultant["display_name"]   # e.g. "Dana"
     """
-    consultant = await account_store.get_consultant_by_account(token["sub"])
+    consultant = await consultants.active_consultant(token["sub"])   # deactivated = not a consultant
     if consultant is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="This is for consultants only.")
+    mfa.require_for_staff(token, consultant)   # consultant pages need the two-step sign-in
     return consultant
 
 

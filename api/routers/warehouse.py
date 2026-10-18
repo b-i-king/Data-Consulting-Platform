@@ -45,7 +45,7 @@ from fastapi.responses import StreamingResponse
 from api.core import database
 from api.core.security import get_acting_context
 from api.models.accounts import DeleteStoredIn
-from api.services import account_store, combine, dedupe, entitlements, warehouse_store
+from api.services import account_store, audit, combine, dedupe, entitlements, hipaa, teams, warehouse_store
 from api.services.entitlements import plan_holder
 
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
@@ -206,6 +206,7 @@ async def preview_load(
     """
     await _require_service(ctx)
     holder = await plan_holder(ctx["account"])
+    hipaa.require_storage_allowed(holder)   # a HIPAA request waiting for an admin: nothing is stored yet
     target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
                        choices, event_type, combine_spec, target)
@@ -264,10 +265,12 @@ async def accept_and_load(
         -> 200 {"result": {"rows_loaded": 54630, ...}, "load_run": {"status": "succeeded", ...}, ...}
     """
     await _require_service(ctx)
+    teams.require_editor(ctx)   # a view-only member can't store data
     if database.pool is None and not _memory_ok():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Connect a database first (DATABASE_URL) — there is nowhere to store the data yet.")
     holder = await plan_holder(ctx["account"])
+    hipaa.require_storage_allowed(holder)   # a HIPAA request waiting for an admin: nothing is stored yet
     holder_id = str(holder["id"])
     if await account_store.active_storage_consent(holder_id) is None:
         if not consent:
@@ -307,6 +310,8 @@ async def accept_and_load(
         "rows_updated": result["rows_updated"], "rows_skipped": result["rows_already_stored"],
         "finished_at": datetime.now(timezone.utc),
     })
+    await audit.record(ctx, "load", {"source": run.get("source_name"), "rows": result["rows_loaded"],
+                                     "updated": result["rows_updated"]})   # healthcare clients only
     return {"load_run": _run_out(run), "result": result, "summary": await warehouse_store.summary(holder)}
 
 
@@ -347,6 +352,7 @@ async def warehouse_summary(ctx: Annotated[dict, Depends(get_acting_context)]):
         -> 200 {"warehouse": {"rows": 54630, "sources": [{"source_name": "sales.csv", ...}]}, "loads": [...], ...}
     """
     holder = await plan_holder(ctx["account"])
+    await audit.record(ctx, "view_stored", {})   # healthcare clients only
     return {"warehouse": await warehouse_store.summary(holder),
             "loads": [_run_out(r) for r in await account_store.list_load_runs(str(holder["id"]))],
             "storage": await _storage_status(holder)}
@@ -385,6 +391,7 @@ async def export_stored(ctx: Annotated[dict, Depends(get_acting_context)], sourc
     kind = re.sub(r"\.[A-Za-z0-9]+$", "", source) if source else "all"      # "sales.csv" -> "sales"
     filename = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{name}_{kind}_stored").strip("_").lower() + ".csv"
     body = df.to_csv(index=False).encode("utf-8-sig")
+    await audit.record(ctx, "export", {"source": source or "all", "rows": len(df)})   # healthcare clients only
     return StreamingResponse(io.BytesIO(body), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -423,4 +430,5 @@ async def delete_stored(body: DeleteStoredIn, ctx: Annotated[dict, Depends(get_a
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only your team's owner can delete the stored data.")
     deleted = await warehouse_store.delete(holder)
     withdrawn = await account_store.withdraw_storage_consent(str(holder["id"]))
+    await audit.record(ctx, "delete_stored", {"rows": deleted.get("rows") if isinstance(deleted, dict) else None})
     return {"deleted": deleted, "consents_withdrawn": withdrawn, "summary": await warehouse_store.summary(holder)}

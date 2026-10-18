@@ -1,58 +1,71 @@
-// Copilot Money-style dashboard for one cleaned table, built around KPIs.
+// The dashboard for one cleaned table, laid out like the Canva design (a newspaper's "above the fold"):
 //
-// The build-dashboard skill (data_skills/build-dashboard/skill.py) decides:
-//   * KPIs   — the 3–4 most common transaction TYPES (e.g. In-store, Online
-//              pickup, Delivery, Catering), each with its own card + line chart
-//   * Overview — total value and number of transactions, charted over time
-//   * Filters  — in one container, rows of up to 3 kept even (filterRows; max 9):
-//                customer / demographic columns (customer type, age group,
-//                store...). Picking one asks the server again for just those rows.
+//   title + subtitle, and the FILTER button: a panel opens next to it with the
+//            customer / place filters (hidden until you want them, so the
+//            dashboard stays clean)
+//   KPI ROW  1–4 headline cards, the first one the hero (gold), all in ONE style
+//            (KpiCard.tsx: number, change or gauge — the skill picks it). Each
+//            change is colored by the metric's direction: green good, gray about
+//            the same, red bad — a cost going DOWN is green; percentages change
+//            in points.
+//   ROWS     containers, mixed and matched for this data (build-dashboard's
+//            layout.py): trends as line charts first, categories as horizontal
+//            bar charts next, then complementary visuals — any number of rows.
+//   time bar the date range and comparison, floating at the bottom (TimeBar.tsx)
 //
-// Every date range × comparison comes back in one response, so the time bar
-// is instant. The time bar (TimeBar.tsx) is two panels floating at the bottom
-// of the screen while the dashboard is in view (CSS `sticky`), like Copilot Money:
-//   Ranges:       Last 4 weeks · Last 3 months · Last year · Month to date · Year to date · All time
-//   Comparisons:  Day over day · Week over week · Month over month
+// The skill decides WHAT to show (data_skills/build-dashboard/skill.py): the
+// main total, the INDUSTRY KPIs the data supports (industry_metrics.json — the
+// client's industry is sent as `industry`), transactions and the average per
+// transaction; with no industry match, the generic ones. Every range ×
+// comparison comes back in one response, so the time bar is instant.
 
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runSkill, saveText } from "@/lib/api";
-import type { CleaningInput, DashboardData, PeriodRow } from "@/lib/types";
-import BarChart from "@/components/charts/BarChart";
+import type { CleaningInput, DashboardData, DashboardVisual, PeriodRow } from "@/lib/types";
+import HBarChart from "@/components/charts/HBarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
+import KpiCard, { ChangePill } from "./KpiCard";
 import TimeBar from "./TimeBar";
-import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import { Button, ErrorBox } from "@/components/wizard/ui";
 import Tour, { type TourStep } from "@/components/ui/Tour";
 
 // The first-time guide for the dashboard (components/ui/Tour.tsx).
 const DASHBOARD_TOUR: TourStep[] = [
   { title: "Your dashboard builds itself",
-    body: "It reads the date column and the numbers in your table: totals over time, compared with the period before." },
-  { target: "dash-filters", title: "Filters",
-    body: "Narrow everything down to one customer type, store, place or product — every chart updates." },
+    body: "It reads the dates and numbers in your table — and your industry — and picks the KPIs and charts that fit." },
+  { target: "dash-filter", title: "Filter",
+    body: "Narrow everything to one customer type, store or place. The panel opens next to the button." },
   { target: "dash-kpis", title: "Key metrics",
-    body: "One card per main measure, with the change from the last period (green up, red down) and its line chart." },
+    body: "The headline numbers, with the change from the previous period: green is good, gray about the same, red needs a look." },
   { title: "Time range, at the bottom",
-    body: "The bar fixed at the bottom of the screen picks the range (week, month, year…) and what to compare with (week over week, year over year)." },
+    body: "The bar at the bottom of the screen picks the range (week, month, year…) and what to compare with." },
 ];
 
-const fmt = (v: number | null | undefined) =>
-  v == null ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0 });
-const pct = (v: number | null | undefined) => (v == null ? "n/a" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const PERIOD: Record<string, string> = { dod: "day", wow: "week", mom: "month" };
+// Column spans of the 6-column grid (templates/layouts.json), written out so Tailwind keeps them.
+const SPAN: Record<number, string> = { 2: "lg:col-span-2", 3: "lg:col-span-3", 4: "lg:col-span-4", 6: "lg:col-span-6" };
+const KPI_COLS: Record<number, string> = { 1: "lg:grid-cols-1", 2: "lg:grid-cols-2", 3: "lg:grid-cols-3", 4: "lg:grid-cols-4" };
 
-function Delta({ value }: { value: number | null | undefined }) {
-  if (value == null) return <span className="text-xs text-ink-muted">no previous period</span>;
-  const up = value >= 0;
-  return (
-    <span className="text-xs text-ink-muted">
-      <span className={`font-semibold ${up ? "text-good" : "text-bad"}`}>
-        {up ? "▲" : "▼"} {pct(value)}
-      </span>{" "}
-      vs. previous
-    </span>
-  );
+/**
+ * Lay out filters in rows of at most 3, as even as possible (rows differ by at
+ * most one): 4 -> 2+2, 5 -> 3+2, 6 -> 3+3, 7 -> 3+2+2, 8 -> 3+3+2, 9 -> 3+3+3.
+ * The dashboard skill offers at most 9 filters (MAX_FILTERS in skill.py).
+ */
+export function filterRows<T>(items: T[]): T[][] {
+  const rows = Math.ceil(items.length / 3);
+  if (!rows) return [];
+  const small = Math.floor(items.length / rows);
+  const big = items.length % rows;
+  const out: T[][] = [];
+  let at = 0;
+  for (let r = 0; r < rows; r++) {
+    const size = small + (r < big ? 1 : 0);
+    out.push(items.slice(at, at + size));
+    at += size;
+  }
+  return out;
 }
 
 /** "This period" vs. "Previous period" line chart for one metric. */
@@ -61,6 +74,7 @@ function PeriodChart(props: {
   cmp: string;
   label: string;
   prev: { start: string; end: string } | null;
+  format: (v: number | null | undefined) => string;
   height?: number;
 }) {
   const { rows, cmp } = props;
@@ -72,8 +86,7 @@ function PeriodChart(props: {
       x={rows.map((r) => r.period)}
       series={[
         { name: "This period", values: rows.map((r) => r.value), color: "var(--color-chart-current)" },
-        // The comparison line is the PREVIOUS RANGE lined up point by point
-        // (e.g. the 4 weeks before), like Copilot Money's "vs. last month".
+        // The comparison line is the PREVIOUS RANGE lined up point by point.
         ...(props.prev
           ? [{
               name: `Previous period (${usDate(props.prev.start)} – ${usDate(props.prev.end)})`,
@@ -88,52 +101,44 @@ function PeriodChart(props: {
         const lines = [];
         if (r.prior_period) lines.push(`Lined up with ${usDate(r.prior_period)}`);
         if (r.pct_change != null)
-          lines.push(`${r.pct_change >= 0 ? "▲" : "▼"} ${pct(r.pct_change)} vs. previous ${PERIOD[cmp]} (${fmt(r.previous)})`);
+          lines.push(`${r.pct_change >= 0 ? "▲" : "▼"} ${(Math.abs(r.pct_change) * 100).toFixed(1)}% vs. previous ${PERIOD[cmp]} (${props.format(r.previous)})`);
         return lines.length ? lines.join("\n") : null;
       }}
     />
   );
 }
 
-/**
- * Lay out filters in rows of at most 3, as even as possible (rows differ by at
- * most one): 4 -> 2+2, 5 -> 3+2, 6 -> 3+3, 7 -> 3+2+2, 8 -> 3+3+2, 9 -> 3+3+3.
- * The dashboard skill offers at most 9 filters (MAX_FILTERS in skill.py).
- */
-export function filterRows<T>(items: T[]): T[][] {
-  const rows = Math.ceil(items.length / 3);
-  if (!rows) return [];
-  const small = Math.floor(items.length / rows);   // every row has at least this many
-  const big = items.length % rows;                 // ...and this many rows get one more
-  const out: T[][] = [];
-  let at = 0;
-  for (let r = 0; r < rows; r++) {
-    const size = small + (r < big ? 1 : 0);
-    out.push(items.slice(at, at + size));
-    at += size;
-  }
-  return out;
-}
-
-/** Column classes per row size (written out so Tailwind keeps them); one column on phones. */
-const ROW_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "sm:grid-cols-2", 3: "sm:grid-cols-3" };
-
-export default function Dashboard({ input, groupId }: { input: CleaningInput; groupId: number }) {
+export default function Dashboard(props: {
+  input: CleaningInput;
+  groupId: number;
+  /** NAICS sector from sign-up ("72"): industry KPIs when the data has them. */
+  industry?: string | null;
+  businessName?: string | null;
+  viewerName?: string | null;
+  title?: string;
+}) {
+  const { input, groupId, industry, businessName, viewerName } = props;
+  const title = props.title ?? "Dashboard";
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [filterOpen, setFilterOpen] = useState(false);
   const [range, setRange] = useState("last_3_months");
   const [cmp, setCmp] = useState("wow");
-  const [overview, setOverview] = useState("__rows__");
-  const [showTable, setShowTable] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const loadedOnce = useRef(false);
+  const filterRef = useRef<HTMLDivElement>(null);
 
   // Only non-empty filters are sent: {"customer_type": "Wholesale"}.
   const activeFilters = useMemo(
     () => Object.fromEntries(Object.entries(filters).filter(([, v]) => v)),
     [filters],
+  );
+  const skillParams = useMemo(
+    () => ({ filters: activeFilters, industry: industry ?? null, business_name: businessName ?? null,
+             viewer_name: viewerName ?? null, title }),
+    [activeFilters, industry, businessName, viewerName, title],
   );
 
   useEffect(() => {
@@ -141,17 +146,15 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
     setLoading(true);
     setError(null);
     // include_html: false keeps the response small; the HTML file is built on Download.
-    runSkill("build-dashboard", input, { filters: activeFilters, include_html: false }, groupId)
+    runSkill("build-dashboard", input, { ...skillParams, include_html: false }, groupId)
       .then((r) => {
         if (cancelled) return;
         const d = r.data as unknown as DashboardData;
         if (!loadedOnce.current) {
           // First load: start on the skill's suggested range and comparison.
-          // (Later loads are filter changes — keep what the user picked.)
           loadedOnce.current = true;
           setRange(d.default_range);
           setCmp(d.default_comparison);
-          setOverview(d.overview[d.overview.length - 1]);
         }
         setData(d);
       })
@@ -160,12 +163,25 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
     return () => {
       cancelled = true;
     };
-  }, [input, groupId, activeFilters]);
+  }, [input, groupId, skillParams]);
+
+  // The filter panel closes on a click outside it, or Esc.
+  useEffect(() => {
+    if (!filterOpen) return;
+    const onDown = (e: MouseEvent) => !filterRef.current?.contains(e.target as Node) && setFilterOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFilterOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [filterOpen]);
 
   async function downloadHtml() {
     setDownloading(true);
     try {
-      const r = await runSkill("build-dashboard", input, { filters: activeFilters, include_html: true }, groupId);
+      const r = await runSkill("build-dashboard", input, { ...skillParams, include_html: true }, groupId);
       saveText("dashboard.html", r.artifacts.html_dashboard ?? "", "text/html");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
@@ -176,14 +192,24 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
 
   if (!data) return error ? <ErrorBox message={error} /> : <p className="py-8 text-sm text-ink-muted">Building your dashboard…</p>;
 
+  // Numbers in US formats, by the metric's format (currency, percent, days, number).
+  const fmt = (m: string) => (v: number | null | undefined) => {
+    if (v == null || Number.isNaN(v)) return "—";
+    const f = data.metric_formats?.[m] ?? "number";
+    const digits = Math.abs(v) < 100 ? 2 : 0;
+    if (f === "currency") return v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits });
+    if (f === "percent") return `${v.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
+    if (f === "days") return `${v.toLocaleString("en-US", { maximumFractionDigits: 1 })} days`;
+    return v.toLocaleString("en-US", { maximumFractionDigits: digits });
+  };
+  const dir = (m: string) => data.metric_directions?.[m] ?? "higher";
+
   // Only ranges the data supports are offered (e.g. "All time" needs > 1 year).
-  // With none, the dashboard shows everything ("all") and hides the range panel.
   const rangeOptions = Object.fromEntries(
     Object.entries(data.range_labels).filter(([k]) => data.available_ranges.includes(k)),
   ) as Record<string, string>;
   const activeRange = data.ranges[range] && (data.available_ranges.includes(range) || !data.available_ranges.length) ? range : data.default_range;
   const R = data.ranges[activeRange];
-  // Comparisons calculated for this range (each needs at least two periods).
   const cmpOptions = Object.fromEntries(
     Object.entries(data.comparison_labels).filter(([k]) => R.series[k]),
   ) as Record<string, string>;
@@ -192,192 +218,142 @@ export default function Dashboard({ input, groupId }: { input: CleaningInput; gr
   const hasCharts = cmpKeys.length > 0;   // false with only a day or so of data
   const w = R.window;
   const prev = w.prev_start ? { start: w.prev_start, end: w.prev_end! } : null;
-  const ovMetric = data.overview.includes(overview) ? overview : data.overview[0];
-  const rows: PeriodRow[] = R.series[activeCmp]?.[ovMetric] ?? [];
-  const partial = rows.length > 1 && rows[rows.length - 1].partial;
-  const breakdown = data.breakdown[activeRange] ?? [];
+  const L = data.layout;
+  const filterCount = Object.keys(activeFilters).length;
+
+  // One container (a plain function, not a component, so nothing is re-created on each render).
+  function container(v: DashboardVisual, span: number) {
+    const rows: PeriodRow[] = R.series[activeCmp]?.[v.metric] ?? [];
+    return (
+      <section key={`${v.kind}-${v.metric}-${v.dimension ?? ""}`} className={`col-span-full min-w-0 rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] ${SPAN[span] ?? ""}`}>
+        <h3 className="mb-2 font-mono text-sm font-semibold">{v.title}</h3>
+        {v.kind === "line" ? (
+          hasCharts ? (
+            <>
+              <PeriodChart rows={rows} cmp={activeCmp} prev={prev} format={fmt(v.metric)} height={span >= 4 ? 260 : 200}
+                label={`${v.title}, ${data!.comparison_labels[activeCmp]}, ${data!.range_labels[activeRange]}`} />
+              {rows.length > 1 && rows[rows.length - 1].partial && (
+                <p className="mt-2 text-xs text-ink-muted">The last period is still in progress, so it&apos;s drawn faded.</p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-ink-muted">Charts over time appear once the data covers at least two days.</p>
+          )
+        ) : (
+          <HBarChart
+            label={v.title}
+            format={(x) => fmt(v.metric)(x)}
+            rows={(data!.breakdowns?.[v.dimension ?? ""]?.[activeRange] ?? []).map((b) => ({
+              category: b.category, value: b.current, pill: <ChangePill pct={b.pct_change} direction={dir(v.metric)} />,
+            }))}
+          />
+        )}
+      </section>
+    );
+  }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <Tour id="dashboard" steps={DASHBOARD_TOUR} />
-      {/* Filters: WHO the numbers are about (customer type, demographics, place),
-          in one container, in rows of up to 3 kept as even as possible. */}
-      {data.filter_columns.length > 0 && (
-        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]" data-tour="dash-filters">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">Filters</h3>
-            {Object.keys(activeFilters).length > 0 && (
-              <button type="button" className="text-xs text-brand hover:underline" onClick={() => setFilters({})}>
-                Clear filters
-              </button>
-            )}
-          </div>
-          {filterRows(data.filter_columns).map((row, i) => (
-            <div key={i} className={`grid gap-3 ${ROW_COLS[row.length]}`}>
-              {row.map((c) => (
-                <label key={c} className="min-w-0 space-y-1 text-sm">
-                  <span className="block text-xs text-ink-muted">{data.filter_labels[c]}</span>
-                  <select
-                    value={filters[c] ?? ""}
-                    onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
-                    className="w-full rounded-xl border border-line bg-surface px-3 py-1.5 text-sm"
-                  >
-                    <option value="">All</option>
-                    {data.filter_options[c].map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
-          ))}
+
+      {/* Title and subtitle on the left; the Filter button on the right (its panel opens beside it). */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="font-mono text-2xl font-bold sm:text-3xl">{title}</h2>
+          <p className="mt-1 text-sm text-ink-muted">
+            {data.subtitle ?? "How your business is doing over time"} · {data.range_labels[activeRange]}: {usDate(w.start)} –{" "}
+            {usDate(w.end)}
+            {Object.keys(data.filters).length ? ` · ${data.rows.toLocaleString("en-US")} matching rows` : ""}
+          </p>
         </div>
-      )}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-2">
           {loading && <span className="text-xs text-ink-muted">Updating…</span>}
           <Button variant="secondary" onClick={downloadHtml} disabled={downloading}>
-            {downloading ? "Preparing…" : "Download dashboard (HTML)"}
+            {downloading ? "Preparing…" : "Download (HTML)"}
           </Button>
+          {data.filter_columns.length > 0 && (
+            <div className="relative" ref={filterRef} data-tour="dash-filter">
+              <button
+                type="button"
+                onClick={() => setFilterOpen((o) => !o)}
+                aria-expanded={filterOpen}
+                aria-controls="dash-filter-panel"
+                className="inline-flex items-center gap-2 rounded-full border border-brand bg-brand-soft py-1.5 pl-1.5 pr-4 text-sm font-semibold hover:bg-brand/20"
+              >
+                <span aria-hidden className="grid h-6 w-6 place-items-center rounded-full bg-brand text-on-brand">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h18l-7 9v6l-4 2v-8z" /></svg>
+                </span>
+                Filter{filterCount ? ` (${filterCount})` : ""}
+              </button>
+              {filterOpen && (
+                <div id="dash-filter-panel" role="dialog" aria-label="Filters"
+                  className="absolute right-0 top-[calc(100%+8px)] z-30 w-[min(36rem,calc(100vw-2rem))] space-y-3 rounded-2xl border border-line bg-surface p-4 shadow-[var(--shadow-card)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Filter the dashboard</h3>
+                    {filterCount > 0 && (
+                      <button type="button" className="text-xs text-brand hover:underline" onClick={() => setFilters({})}>
+                        Clear filters
+                      </button>
+                    )}
+                  </div>
+                  {filterRows(data.filter_columns).map((row, i) => (
+                    <div key={i} className={`grid gap-3 ${row.length > 1 ? "sm:grid-cols-2" : ""} ${row.length > 2 ? "lg:grid-cols-3" : ""}`}>
+                      {row.map((c) => (
+                        <label key={c} className="min-w-0 space-y-1 text-sm">
+                          <span className="block text-xs text-ink-muted">{data.filter_labels[c]}</span>
+                          <select
+                            value={filters[c] ?? ""}
+                            onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
+                            className="w-full rounded-xl border border-line bg-surface px-3 py-1.5 text-sm"
+                          >
+                            <option value="">All</option>
+                            {data.filter_options[c].map((v) => (
+                              <option key={v} value={v}>{v}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
       <ErrorBox message={error} />
 
-      <p className="text-sm text-ink-muted">
-        {data.range_labels[activeRange]}: {usDate(w.start)} – {usDate(w.end)}
-        {prev && ` · compared with ${usDate(prev.start)} – ${usDate(prev.end)}`} · data as of {usDate(data.as_of)} ·{" "}
-        {data.rows.toLocaleString("en-US")} {Object.keys(data.filters).length ? "matching rows" : "rows"}
-      </p>
-
-      {/* Overview: total value and transactions; click a card to chart it. */}
-      <div className={`grid gap-3 ${data.overview.length > 1 ? "grid-cols-2" : "grid-cols-1 sm:max-w-xs"}`}>
-        {data.overview.map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => setOverview(m)}
-            aria-pressed={ovMetric === m}
-            className={`rounded-2xl border bg-surface p-4 text-left shadow-[var(--shadow-card)] ${
-              ovMetric === m ? "border-brand" : "border-line hover:border-brand"
-            }`}
-          >
-            <div className="text-xs uppercase tracking-wide text-ink-muted">{data.metric_labels[m]}</div>
-            <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{fmt(R.kpis[m].current)}</div>
-            <Delta value={R.kpis[m].pct_change} />
-          </button>
-        ))}
+      {/* ABOVE THE FOLD: the KPI row (1–4 cards; one card shares its row with a trend). */}
+      <div data-tour="dash-kpis" className={`grid grid-cols-1 gap-3 ${L.kpi_side ? "lg:grid-cols-6" : `sm:grid-cols-2 ${KPI_COLS[L.kpi_row.length] ?? ""}`}`}>
+        {L.kpi_row.map((m, i) => {
+          const k = R.kpis[m];
+          return (
+            <KpiCard key={m} style={data.kpi_style ?? "change"} hero={i === 0} label={data.metric_labels[m]}
+              value={fmt(m)(k?.current)} current={k?.current} pct={k?.pct_change} change={k?.change}
+              format={data.metric_formats?.[m] ?? "number"} direction={dir(m)} benchmark={data.metric_benchmarks?.[m]}
+              target={data.metric_targets?.[m] ?? null} className={L.kpi_side ? "lg:col-span-2" : ""}
+              versus={`vs. previous ${data.range_labels[activeRange].toLowerCase()}`} />
+          );
+        })}
+        {L.kpi_side && container(L.kpi_side, 4)}
       </div>
 
-      {!hasCharts && (
-        <p className="rounded-2xl border border-dashed border-line p-4 text-sm text-ink-muted">
-          Charts over time appear once the data covers at least two days. More date ranges unlock as the data
-          grows: a week, then 4 weeks, 3 months and a year.
+      {/* Container rows, mixed and matched for this data (layout.py). */}
+      {L.rows.map((row, i) => (
+        <div key={i} className="grid grid-cols-1 gap-3 lg:grid-cols-6">
+          {row.items.map((v, j) => container(v, row.spans[j]))}
+        </div>
+      ))}
+
+      {data.industry?.name && (
+        <p className="text-xs text-ink-muted">
+          {data.industry.generic
+            ? `No ${data.industry.name} KPIs could be computed from this table's columns, so the dashboard shows the essentials.`
+            : `Industry KPIs for ${data.industry.name}.`}
         </p>
       )}
 
-      {hasCharts && (
-      <Card>
-        <h3 className="mb-2 font-semibold">
-          {data.metric_labels[ovMetric]} over time — {data.comparison_labels[activeCmp]}
-        </h3>
-        <PeriodChart
-          rows={rows}
-          cmp={activeCmp}
-          prev={prev}
-          label={`${data.metric_labels[ovMetric]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[activeRange]}`}
-        />
-        {partial && (
-          <p className="mt-2 text-xs text-ink-muted">
-            The last period is still in progress, so it&apos;s drawn faded. For a like-for-like comparison use Month to date
-            or Year to date.
-          </p>
-        )}
-        <div className="mt-3">
-          <Button variant="secondary" onClick={() => setShowTable((s) => !s)}>
-            {showTable ? "Hide" : "Show"} values by period
-          </Button>
-        </div>
-        {showTable && (
-          <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-line">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surface-2 text-xs uppercase tracking-wide text-ink-muted">
-                <tr>
-                  {["Period", "Value", `Previous ${PERIOD[activeCmp]}`, "Change", "% change", "Previous range"].map((h) => (
-                    <th key={h} className="px-3 py-2 text-right first:text-left">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line font-mono tabular-nums">
-                {[...rows].reverse().map((r) => (
-                  <tr key={r.period}>
-                    <td className="px-3 py-1.5 text-left">
-                      {usDate(r.period)}
-                      {r.partial ? " (partial)" : ""}
-                    </td>
-                    <td className="px-3 py-1.5 text-right">{fmt(r.value)}</td>
-                    <td className="px-3 py-1.5 text-right">{fmt(r.previous)}</td>
-                    <td className="px-3 py-1.5 text-right">{fmt(r.change)}</td>
-                    <td className="px-3 py-1.5 text-right">{pct(r.pct_change)}</td>
-                    <td className="px-3 py-1.5 text-right">{fmt(r.prior_range)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-)}
-
-      {/* One card + line chart per KPI (the most common transaction types). */}
-      {data.kpis.length > 0 && (
-        <div data-tour="dash-kpis">
-          <h3 className="mb-2 font-semibold">
-            {data.kpi_column_label ? `Top ${data.kpi_column_label.toLowerCase()}s` : "Key metrics"}
-            {data.kpi_column_label && <span className="font-normal text-ink-muted"> · {data.value_label.toLowerCase()}</span>}
-          </h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {data.kpis.map((m) => (
-              <Card key={m}>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div className="text-xs uppercase tracking-wide text-ink-muted">{data.metric_labels[m]}</div>
-                  <Delta value={R.kpis[m].pct_change} />
-                </div>
-                <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{fmt(R.kpis[m].current)}</div>
-                {hasCharts && (
-                <PeriodChart
-                  rows={R.series[activeCmp]?.[m] ?? []}
-                  cmp={activeCmp}
-                  prev={prev}
-                  height={200}
-                  label={`${data.metric_labels[m]}, ${data.comparison_labels[activeCmp]}, ${data.range_labels[activeRange]}`}
-                />
-                )}
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {breakdown.length > 0 && data.dimension_column && (
-        <Card>
-          <h3 className="mb-3 font-semibold">
-            {data.metric_labels[data.breakdown_metric]} by {data.dimension_column} · {data.range_labels[activeRange].toLowerCase()}
-          </h3>
-          <BarChart
-            categories={breakdown.map((b) => b.category)}
-            values={breakdown.map((b) => b.current)}
-            extra={(i) => (breakdown[i].pct_change == null ? null : `${breakdown[i].pct_change! >= 0 ? "▲" : "▼"} ${pct(breakdown[i].pct_change)}`)}
-          />
-        </Card>
-      )}
-
-      {/* Time bar: two floating panels fixed at the bottom of the screen while the
-          dashboard is in view; short labels (4W, MTD, WoW…) when space is tight. */}
+      {/* Time bar: two floating panels fixed at the bottom of the screen while the dashboard is in view. */}
       <TimeBar
         ranges={rangeOptions}
         rangeShort={data.range_short_labels}

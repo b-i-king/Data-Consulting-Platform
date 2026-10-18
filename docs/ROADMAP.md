@@ -45,7 +45,9 @@ Still to do:
 4. Email the person when an admin approves or denies their consultant request
    (today they see it in Settings, and their workspace switches on its next load).
 5. Google and Apple sign-in (Supabase Auth providers) — no table changes needed.
-6. Sign-in rate limiting on our side (Supabase rate-limits its own endpoints).
+6. ✅ Sign-in lockout: 3 wrong passwords in a row lock sign-in for 15 minutes, each try says how many
+   are left, and a password reset unlocks at once (`api/services/login_guard.py`). Later: a per-IP
+   limit too (needs care behind Render's proxy, so one shared IP doesn't lock everyone out).
 
 ### 2. Payments — ✅ built, in test mode
 Stripe subscriptions (each plan has a monthly and an annual price), Checkout,

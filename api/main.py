@@ -9,8 +9,11 @@ HOW TO RUN LOCALLY
 
 WHAT HAPPENS HERE
 -----------------
-1. `lifespan` opens the database pool on startup and closes it on shutdown.
-2. CORS middleware allows the Next.js website (ALLOWED_ORIGINS) to call us.
+1. `lifespan` opens the database pool on startup (and loads the live tool
+   prices from dim.plan_prices) and closes the pool on shutdown.
+2. Middleware: per-IP request limits (core/rate_limit.py), CORS (only the
+   website at ALLOWED_ORIGINS may call us) and gzip. Error monitoring with
+   personal data stripped starts first (core/monitoring.py, SENTRY_DSN).
 3. Each router (a group of related endpoints) is attached under `/api`.
 
 Structure mirrors the Video_Game_Stats_Tracker template:
@@ -27,12 +30,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.core import database
+from api.core import database, monitoring, rate_limit
 from api.core.config import get_settings
 from api.routers import (accounts, admin, ai, billing, compare, connections, consultants, consultations, dashboards, entities,
                          files, intake, skills, warehouse)
-from api.services import auth
+from api.services import auth, price_store
 
 logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
 
@@ -66,9 +70,12 @@ async def lifespan(_app: FastAPI):
     if settings.origins_list == ["http://localhost:3000"] and os.environ.get("RENDER"):
         logger.warning("ALLOWED_ORIGINS is still localhost — set it to your Vercel URL or the site can't reach the API.")
     await database.init_pool()   # startup
+    await price_store.load()     # tool prices from dim.plan_prices (Admin -> Prices)
     yield
     await database.close_pool()  # shutdown
 
+
+monitoring.init()   # error reports with personal data stripped (only when SENTRY_DSN is set)
 
 app = FastAPI(
     title="Data Consulting Platform API",
@@ -77,6 +84,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Per-IP request limits (api/core/rate_limit.py). Added BEFORE CORS so CORS
+# wraps it: a 429 still carries the CORS headers and the website can show it.
+app.add_middleware(BaseHTTPMiddleware, dispatch=rate_limit.middleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().origins_list,
@@ -84,7 +95,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD", "X-Rows", "X-Truncated"],
+    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD", "X-Rows", "X-Truncated", "Retry-After"],
 )
 
 # Compress responses over 1 KB. The data preview (JSON) and CSV downloads

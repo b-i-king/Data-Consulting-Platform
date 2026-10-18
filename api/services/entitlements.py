@@ -38,6 +38,12 @@ api/services/billing.py) unlocks its plan's services ("All tools" = all of
 them). A plan that includes Data Cleaning also makes downloads free
 (`downloads_included`).
 
+TESTERS
+-------
+A tester (accounts.is_tester, set by an admin) still picks a package like a
+client, so they see the real flow, but it switches on without payment
+(billing.charges_real_money) and their downloads are free.
+
 WHAT UNLOCKS A TOOL (and what doesn't)
 -------------------------------------
 Only these unlock tools: a live subscription (a package of tools, or All
@@ -203,7 +209,7 @@ async def interests(account: dict) -> list[str]:
 
 async def downloads_included(account: dict) -> bool:
     """
-    Tell whether downloads are free: an admin, or a live plan that includes Data Cleaning.
+    Tell whether downloads are free: an admin, a tester, or a live plan that includes Data Cleaning.
 
     The plan holder's live subscriptions are checked (a Data Cleaning tool or the
     All tools bundle both count). Without one, downloads are charged by runtime.
@@ -219,6 +225,8 @@ async def downloads_included(account: dict) -> bool:
         True
     """
     if is_admin(account):
+        return True
+    if (await plan_holder(account)).get("is_tester"):   # a tester's colleagues test for free too
         return True
     return ALWAYS_INCLUDED in (await billing.live_plan_services(await plan_holder_id(account)))[0]
 

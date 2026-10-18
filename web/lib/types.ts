@@ -162,10 +162,115 @@ export interface ConsultantRequest {
   decided_at: string | null;
 }
 
-/** The Admin panel: the requests, plus every consultant's load. */
+/** Admin panel: one consultant, active or not, with their lifecycle dates (ISO date-times). */
+export interface TeamConsultant extends ConsultantLoad {
+  email: string;
+  active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  /** Last time an admin switched them off (kept after reactivating, as history). */
+  deactivated_at: string | null;
+  deactivation_reason: string | null;
+  reactivated_at: string | null;
+}
+
+/** Why someone deleted their account (the optional pick in the delete dialog). */
+export type DeletionReason = "too_expensive" | "missing_features" | "not_needed" | "switching_tools" | "privacy" | "other";
+
+/** Admin panel: how many accounts were deleted, and why — counts only, never who. */
+export interface DeletionSummary {
+  total: number;
+  /** Deleted in the last `recent_days` days. */
+  recent: number;
+  recent_days: number;
+  /** reason (or "none") -> count. */
+  by_reason: Record<string, number>;
+  /** Last 6 months, newest first ("2026-10"). */
+  by_month: { month: string; count: number }[];
+}
+
+/** The Admin panel: the requests, every active consultant's load, the whole team, and deletions. */
 export interface AdminPanelData {
   requests: ConsultantRequest[];
   consultants: ConsultantLoad[];
+  team: TeamConsultant[];
+  deletions: DeletionSummary;
+  /** After deactivating / reactivating: what happened ("Kim is deactivated. 2 clients moved."). */
+  notice?: string;
+  /** HIPAA requests waiting for a decision. */
+  hipaa_waiting?: number;
+  /** Why clients canceled their package (last 12 months), from Stripe's portal. */
+  cancellations?: { total: number; by_reason: Record<string, number>; comments: { at: string | null; reason: string | null; comment: string }[] };
+}
+
+/** Admin -> Testers: one plan holder (GET /api/admin/accounts). Dates are ISO date-times. */
+export interface AdminPerson {
+  id: string;
+  name: string;
+  email: string;
+  company_name: string | null;
+  account_type: "individual" | "business";
+  role: "admin" | "consultant" | "client";
+  /** Tries the paid tools free (packages switch on with no charge, even with Stripe live). */
+  is_tester: boolean;
+  /** Healthcare client: data access is audited. */
+  is_healthcare: boolean;
+  mfa_enabled: boolean;
+  /** Has a live package (paid, or free for a tester). */
+  has_plan: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  last_login_at: string | null;
+}
+
+/** Admin -> Prices: one plan's live and default prices (GET /api/admin/prices). */
+export interface PlanPriceRow {
+  id: string;
+  name: string;
+  kind: "tool" | "bundle";
+  monthly_usd: number;
+  annual_usd: number;
+  default_monthly_usd: number;
+  default_annual_usd: number;
+  /** Free trial on a first package, in days (0 = none). */
+  trial_days: number;
+  /** False = not charged yet (AI before launch). */
+  billable: boolean;
+  /** When and by whom it was last changed here; null = still the starting price. */
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+/** GET /api/admin/prices. stripe: Stripe is on (a change also updates Stripe). */
+export interface AdminPrices {
+  prices: PlanPriceRow[];
+  stripe: boolean;
+}
+
+/** Admin -> Seasonal sales: one yearly window (repeats every year). */
+export interface SeasonalSale {
+  id: string;
+  name: string;
+  /** "MM-DD" */
+  starts_on: string;
+  /** "MM-DD", included (may be before starts_on: wraps the new year). */
+  ends_on: string;
+  percent_off: number;
+  active: boolean;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+/** GET/PUT /api/admin/sales. running = the sale on today, if any. */
+export interface AdminSales {
+  sales: SeasonalSale[];
+  running: RunningSale | null;
+}
+
+/** PUT /api/admin/prices/{plan}: the refreshed list, and what changed in Stripe. */
+export interface PriceChangeResult {
+  prices: PlanPriceRow[];
+  stripe: { enabled: boolean; changes: string[] };
 }
 
 /**
@@ -193,6 +298,29 @@ export interface Subscription {
   includes: string[];
   /** Services the plan unlocks. */
   service_ids: string[];
+  /** Free trial a FIRST package with this tool gets, in days (0 = none). Set in Admin -> Prices. */
+  trial_days: number;
+}
+
+/** A seasonal sale running today (dim.seasonal_sales): percent off a first package's first payment. */
+export interface RunningSale {
+  id: string;
+  name: string;
+  percent_off: number;
+  /** "MM-DD" (repeats every year). */
+  ends_on: string;
+  /** This season's last day, ISO "YYYY-MM-DD". */
+  ends: string;
+}
+
+/** What a first package gets right now (api/services/offers.py): a trial, else the sale. */
+export interface FirstPackageOffer {
+  /** The longest trial among the tools (0 when not eligible). */
+  trial_days: number;
+  /** False once they've had a trial or any package (one trial per account). */
+  trial_eligible: boolean;
+  sale: RunningSale | null;
+  applies: "trial" | "sale" | null;
 }
 
 export type BillingInterval = "month" | "year";
@@ -231,6 +359,10 @@ export interface CheckoutResult {
   /** An existing subscription's tools were changed in place. */
   updated: boolean;
   test_mode: boolean;
+  /** The free trial it started with (0 = none). */
+  trial_days: number;
+  /** The seasonal sale applied to the first payment, if any. */
+  sale: RunningSale | null;
 }
 
 // ── /api/files/analyze ────────────────────────────────────────────────────────
@@ -694,7 +826,55 @@ export interface DashboardData {
       series: Record<string, Record<string, PeriodRow[]>>;
     }
   >;
-  breakdown: Record<string, { category: string; current: number; previous: number | null; pct_change: number | null }[]>;
+  breakdown: Record<string, BreakdownRow[]>;
+  /** Line under the title. */
+  subtitle?: string;
+  /** Above the fold: the KPI row (1–4 cards), then container rows (data_skills/build-dashboard/layout.py). */
+  layout: DashboardLayout;
+  /** Each category column's top values per range: breakdowns[column][range]. */
+  breakdowns: Record<string, Record<string, BreakdownRow[]>>;
+  /** How to show each metric's numbers. */
+  metric_formats: Record<string, "number" | "currency" | "percent" | "days">;
+  /** "lower" = a drop is good news (costs, days in A/R); colors changes green / gray / red. */
+  metric_directions: Record<string, "higher" | "lower">;
+  /** Industry benchmarks shown on the KPI card ("60–65% of sales is a sensible target"). */
+  metric_benchmarks: Record<string, string>;
+  /** Healthy [low, high] band per metric (the gauge card marks it), e.g. prime cost [60, 65]. */
+  metric_targets?: Record<string, [number, number]>;
+  /** ONE KPI card style for the whole row (layout.py kpi_style). */
+  kpi_style?: "number" | "change" | "gauge";
+  /** The industry KPIs found in this data (industry_metrics.json); generic = none found. */
+  industry: { sector: string | null; name: string | null; metrics: string[]; generic: boolean };
+}
+
+export interface BreakdownRow {
+  category: string;
+  current: number;
+  previous: number | null;
+  pct_change: number | null;
+}
+
+/** One visual in a container: a trend (line) or categories (horizontal bars). */
+export interface DashboardVisual {
+  kind: "line" | "hbar";
+  metric: string;
+  /** hbar: the category column. */
+  dimension?: string;
+  title: string;
+}
+
+/** A container row: a pattern from templates/layouts.json, its widths (of 6 columns) and its visuals. */
+export interface DashboardRow {
+  pattern: "full" | "half_half" | "two_thirds_third" | "third_two_thirds" | "thirds";
+  spans: number[];
+  items: DashboardVisual[];
+}
+
+export interface DashboardLayout {
+  kpi_row: string[];
+  /** With a single KPI: the trend that shares its row (Canva page 7). */
+  kpi_side: DashboardVisual | null;
+  rows: DashboardRow[];
 }
 
 // ── /api/quote ────────────────────────────────────────────────────────────────
@@ -719,7 +899,8 @@ export interface Account {
   email: string;
   company_name: string | null;
   team_id: string | null;
-  team_role: string | null;
+  /** Business teams: "owner" (admin), "developer" (changes data) or "member" (view only); null for individuals. */
+  team_role: TeamRole | null;
   status: string;
   industry_supersector: Supersector | null;
   naics_sector: string | null;
@@ -733,6 +914,14 @@ export interface Account {
   role: "client" | "consultant";
   /** Admins (ADMIN_EMAILS) see the Admin panel and approve consultants. */
   is_admin: boolean;
+  /** Two-step sign-in is on. */
+  mfa_enabled?: boolean;
+  /** Admins and consultants must turn it on before staff pages work. */
+  mfa_required?: boolean;
+  /** HIPAA approved: data access is written to the activity log. */
+  is_healthcare?: boolean;
+  /** HIPAA request: null (never asked), "pending" (an admin is checking), "approved", "denied". */
+  hipaa_status?: "pending" | "approved" | "denied" | null;
   /** "I'd like to work as a consultant": waiting, approved or denied (null = never asked). */
   consultant_request: "pending" | "approved" | "denied" | null;
   wants_consultant: boolean;
@@ -774,13 +963,78 @@ export interface Location {
 }
 
 export interface AuthResponse {
-  /** null when Supabase must confirm the email first (needs_confirmation). */
+  /** null when Supabase must confirm the email first, or the two-step code is needed. */
   access_token: string | null;
   token_type: "bearer";
-  account: Account;
+  /** null while the two-step code is still needed. */
+  account: Account | null;
   /** True: no token yet — the person must open the emailed link, then sign in. */
   needs_confirmation?: boolean;
   message?: string | null;
+  /** True: the password was right; send mfa_ticket + the authenticator code (signinMfa). */
+  mfa_required?: boolean;
+  mfa_ticket?: string | null;
+  /** Devices signed out to make room (3 at most), e.g. ["Chrome on Windows"]. */
+  signed_out_devices?: string[];
+}
+
+/** GET /api/accounts/sessions — one signed-in device. Times are ISO. */
+export interface DeviceSession {
+  id: string;
+  /** "Chrome on Windows" */
+  device: string;
+  signed_in_at: string;
+  last_used_at: string;
+  /** The device you're using now. */
+  this_device: boolean;
+}
+
+export interface DeviceSessions {
+  sessions: DeviceSession[];
+  max_devices: number;
+  idle_hours: number;
+}
+
+/** POST /api/accounts/mfa/setup — the key to type into an authenticator app. */
+export interface MfaSetup {
+  secret: string;
+  otpauth_url: string;
+}
+
+/** GET/POST /api/accounts/hipaa — a business's request to store health information. */
+export interface HipaaStatus {
+  status: "pending" | "approved" | "denied" | null;
+  label: string;
+  organization: string | null;
+  npi: string | null;
+  note: string | null;
+  requested_at: string | null;
+  decided_at: string | null;
+  /** The admin's note (why). */
+  decision_note: string | null;
+  /** The NPI in the public NPPES registry (for the admin). */
+  lookup_url: string | null;
+  /** True while waiting: storing data is paused. */
+  storing_paused: boolean;
+}
+
+/** Admin -> HIPAA requests: one business (waiting first). */
+export interface HipaaRequest extends HipaaStatus {
+  account_id: string;
+  name: string;
+  email: string;
+  company_name: string | null;
+  naics_sector: string | null;
+}
+
+/** GET /api/accounts/audit — a healthcare client's activity log (never the data itself). */
+export interface AuditEntry {
+  at: string;
+  action: string;
+  actor_name: string | null;
+  actor_email: string | null;
+  actor_role: string;
+  detail: Record<string, string | number | boolean | null>;
 }
 
 export interface TeamMemberInput {
@@ -818,12 +1072,35 @@ export interface SignupInput {
   password?: string;
 }
 
+/** A business team role (api/services/teams.py). */
+export type TeamRole = "owner" | "developer" | "member";
+
+/** GET /api/accounts/team — the people on the business team and how full it is. */
+export interface TeamInfo {
+  team_id: string;
+  name: string | null;
+  members: Account[];
+  /** used = people on the team (owner included); limit = TEAM_MAX_PEOPLE (5). */
+  seats: { used: number; limit: number };
+  /** role -> label ("Member (view only)"). */
+  roles: Record<TeamRole, string>;
+  /** The caller is the owner: may add, remove and change roles. */
+  can_manage: boolean;
+}
+
 /** GET /api/accounts/services — the plan behind the workspace's left pane. */
 export interface MyServices {
   /** Service ids the account can use (Data Cleaning is always included). */
   active: string[];
   /** Individuals and team owners can add services; team members can't. */
   can_add: boolean;
+  /** False for a view-only team member: they see everything but change nothing. */
+  can_edit: boolean;
+  team_role: TeamRole | null;
+  /** What a first package gets right now (a trial, else the seasonal sale). */
+  offer: FirstPackageOffer;
+  /** The plan holder's HIPAA request (storing is paused while it's waiting). */
+  hipaa: HipaaStatus;
   services: (Service & { active: boolean })[];
   /** Projects they'd like a consultant's help with (interest only; unlocks nothing). */
   interests: string[];
@@ -834,8 +1111,8 @@ export interface MyServices {
   /** Live subscriptions, and the plans on sale. */
   subscriptions: LiveSubscription[];
   plans: Subscription[];
-  /** stripe=false: test mode — choosing a plan turns it on with no charge. */
-  billing: { stripe: boolean };
+  /** stripe=false: test mode — choosing a plan turns it on with no charge. tester: an admin made this account a tester. */
+  billing: { stripe: boolean; tester?: boolean };
   /** A live plan includes Data Cleaning: downloads cost nothing extra. */
   downloads_included: boolean;
   /** False until the account has stored data: the AI tool can't be added before that. */
@@ -1264,6 +1541,8 @@ export interface DashboardsInfo {
   context: BusinessContext;
   /** The NAICS sector name, e.g. "Retail Trade" (null when not given). */
   industry: string | null;
+  /** The NAICS sector code, e.g. "44-45": the Overview's industry KPIs (industry_metrics.json). */
+  naics_sector?: string | null;
   company: string | null;
   frequent: { question: string; times: number }[];
   max_tabs: number;

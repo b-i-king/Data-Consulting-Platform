@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from api.core.security import get_acting_context
 from api.models.accounts import CheckoutIn, PriceIn
-from api.services import billing, entitlements, pricing
+from api.services import billing, entitlements, offers, pricing
 from api.services.pricing import subscription_catalog
 
 router = APIRouter(prefix="/billing")
@@ -61,16 +61,17 @@ async def plans():
     GET /api/billing/plans — the tools and the bundle, with monthly and annual prices.
 
     Public (no sign-in). `stripe` False means test mode: choosing a plan turns
-    it on with no charge.
+    it on with no charge. `sale` is the seasonal sale running today (a percent
+    off a first package's first payment), or None; each plan has "trial_days".
 
     Returns:
-        dict: {"plans": [...subscription plans...], "stripe": bool}.
+        dict: {"plans": [...subscription plans...], "stripe": bool, "sale": dict | None}.
 
     Example:
         GET /api/billing/plans
         -> 200 {"plans": [{"id": "all_tools", ...}, {"id": "data_cleaning", ...}], "stripe": false}
     """
-    return {"plans": subscription_catalog(), "stripe": billing.stripe_enabled()}
+    return {"plans": subscription_catalog(), "stripe": billing.stripe_enabled(), "sale": await offers.current_sale()}
 
 
 @router.post("/price")

@@ -58,7 +58,7 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from api.core import database
-from api.services import unified
+from api.services import pii, unified
 from api.services.entity_matching import normalize_email, normalize_name, normalize_phone
 
 AUTO_SCORE = 92     # same as entity_matching: at or above, the same entity
@@ -111,7 +111,7 @@ def _mention_key(entity_type: str, attrs: dict) -> tuple[str, str | None, str | 
 async def _load(aid: str) -> tuple[list[dict], list[dict]]:
     """Every entity and link of one account (a small business has hundreds, not millions)."""
     if database.pool is None:
-        return ([dict(e) for e in _entities.values() if e["account_id"] == aid],
+        return ([{**e, "details": pii.reveal(e["details"])} for e in _entities.values() if e["account_id"] == aid],
                 [dict(link) for link in _links.values() if link["account_id"] == aid])
     async with database.pool.acquire() as conn, conn.transaction():
         await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
@@ -121,7 +121,7 @@ async def _load(aid: str) -> tuple[list[dict], list[dict]]:
     out = []
     for e in ents:
         row = dict(e)
-        row["details"] = json.loads(row["details"] or "{}")
+        row["details"] = pii.reveal(json.loads(row["details"] or "{}"))   # emails / phones decrypted (pii.py)
         out.append(row)
     return out, [dict(r) for r in links]
 
@@ -137,7 +137,8 @@ async def _save(aid: str, new_entities: list[dict], new_links: list[dict], detai
         for e in new_entities:
             _ids["entity"] += 1
             real[e["entity_id"]] = _ids["entity"]
-            _entities[_ids["entity"]] = {**e, "entity_id": _ids["entity"], "account_id": aid}
+            _entities[_ids["entity"]] = {**e, "entity_id": _ids["entity"], "account_id": aid,
+                                         "details": pii.protect(e["details"])}
         for link in new_links:
             _ids["link"] += 1
             fixed = {**link, "account_id": aid, "entity_id": real.get(link["entity_id"], link["entity_id"]),
@@ -147,7 +148,7 @@ async def _save(aid: str, new_entities: list[dict], new_links: list[dict], detai
         for eid, details in detail_updates.items():
             eid = real.get(eid, eid)
             if eid in _entities:
-                _entities[eid]["details"] = {**details, **_entities[eid]["details"]}
+                _entities[eid]["details"] = {**pii.protect(details), **_entities[eid]["details"]}
         return
     async with database.pool.acquire() as conn, conn.transaction():
         await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
@@ -156,7 +157,7 @@ async def _save(aid: str, new_entities: list[dict], new_links: list[dict], detai
             real[e["entity_id"]] = await conn.fetchval(
                 """INSERT INTO fact.entities (account_id, entity_type, display_name, details)
                    VALUES ($1, $2, $3, $4::jsonb) RETURNING entity_id""",
-                uuid.UUID(aid), e["entity_type"], e["display_name"], json.dumps(e["details"], default=str))
+                uuid.UUID(aid), e["entity_type"], e["display_name"], json.dumps(pii.protect(e["details"]), default=str))
         for link in new_links:
             link["link_id"] = await conn.fetchval(
                 """INSERT INTO fact.entity_sources (account_id, entity_id, entity_type, source_system, source_key,
@@ -175,7 +176,7 @@ async def _save(aid: str, new_entities: list[dict], new_links: list[dict], detai
                 # The existing details win: a new source only fills what was missing.
                 "UPDATE fact.entities SET details = $2::jsonb || details, updated_at = now() "
                 "WHERE entity_id = $1 AND account_id = $3",
-                real.get(eid, eid), json.dumps(details, default=str), uuid.UUID(aid))
+                real.get(eid, eid), json.dumps(pii.protect(details), default=str), uuid.UUID(aid))
 
 
 # ── Matching ─────────────────────────────────────────────────────────────────
@@ -412,7 +413,7 @@ async def decide(aid: str, link_id: int, same: bool) -> bool:
         row = _links[link_id]
         if same:
             row.update(entity_id=target, match_method="confirmed", match_score=100)
-            _entities[target]["details"] = {**old_details, **_entities[target]["details"]}
+            _entities[target]["details"] = {**pii.protect(old_details), **_entities[target]["details"]}
             if orphan:
                 _entities.pop(old, None)
         row["suggested_entity_id"] = None
@@ -425,7 +426,7 @@ async def decide(aid: str, link_id: int, same: bool) -> bool:
                           suggested_entity_id = NULL WHERE link_id = $1 AND account_id = $3""",
                 link_id, target, uuid.UUID(aid))
             await conn.execute("UPDATE fact.entities SET details = $2::jsonb || details WHERE entity_id = $1",
-                               target, json.dumps(old_details, default=str))
+                               target, json.dumps(pii.protect(old_details), default=str))
             if orphan:
                 await conn.execute("DELETE FROM fact.entities WHERE entity_id = $1 AND account_id = $2", old, uuid.UUID(aid))
         else:

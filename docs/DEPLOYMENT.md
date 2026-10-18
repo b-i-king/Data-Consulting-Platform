@@ -48,7 +48,24 @@ doesn't match the site's address exactly. Render's logs warn at startup when
 2. SQL Editor → run `db/schema.sql` (or run
    `python scripts/setup_database.py` from your computer with `DATABASE_URL` in `.env`).
 3. Copy the **Transaction pooler** connection string (port 6543).
-4. Passwords: Authentication → Sign In / Providers → Email on. Copy the Project
+4. **The API's own, limited login** ([SECURITY.md](SECURITY.md#the-database)):
+   1. Find your **project ref**: the 20-letter id in your Supabase address
+      (`supabase.com/dashboard/project/<project ref>`), also under Project Settings →
+      General → Project ID, and in the pooler string's user name (`postgres.<project ref>`).
+   2. On your computer, in `.env` (never on Render):
+      `ADMIN_DATABASE_URL=` the Transaction pooler string as Supabase shows it (user
+      `postgres.<project ref>`, your database password), and
+      `API_DATABASE_PASSWORD=` a new long password, **letters and numbers only** (so it
+      needs no escaping inside a URL).
+   3. Run `python scripts/setup_database.py`: it updates the tables and creates the login
+      `dcp_api` with that password.
+   4. On Render, `DATABASE_URL` = the same pooler string with two changes: the user
+      `postgres.<project ref>` becomes `dcp_api.<project ref>`, and the password becomes
+      the `API_DATABASE_PASSWORD` value. Example:
+      `postgresql://dcp_api.abcdefghijklmnopqrst:NewPass123@aws-0-us-east-1.pooler.supabase.com:6543/postgres`
+   Render then has ONE database setting (`DATABASE_URL`, as `dcp_api`); the two above
+   stay on your computer.
+5. Passwords: Authentication → Sign In / Providers → Email on. Copy the Project
    URL and anon / publishable key into Render as `SUPABASE_URL` / `SUPABASE_KEY`.
    Step by step, including Cal.com: [RUN_THROUGH.md](RUN_THROUGH.md).
 
@@ -87,7 +104,10 @@ the create page):
 | `ALLOWED_ORIGINS` | your Vercel URL, e.g. `https://your-site.vercel.app` (comma-separate several; a trailing `/` is ignored) |
 | `ALLOWED_ORIGIN_REGEX` | optional, e.g. `https://your-site-.*\.vercel\.app` for Vercel preview links |
 | `MAX_UPLOAD_MB` | `15` on the Free / 512 MB plan; raise on bigger plans |
-| `DATABASE_URL` | Supabase pooler connection string — **leave it out for the free test** (accounts are kept in memory) |
+| `DATABASE_URL` | Supabase pooler connection string **as `dcp_api`** (section 1, step 4) — **leave it out for the free test** (accounts are kept in memory) |
+| `DATA_ENCRYPTION_KEY` | a long random string (like `JWT_SECRET_KEY`, but a different one): encrypts stored emails / phone numbers and two-step keys. **Back it up** — if it's lost, that data can't be read |
+| `TRUSTED_PROXY_HOPS` | `1` on Render (the default there): how the per-IP limits find the visitor's address |
+| `SENTRY_DSN` | optional: error monitoring with personal data stripped (sentry.io → a FastAPI project → Client Keys) |
 | `BOOKING_URL` | optional: your Calendly / Cal.com link |
 | `PRICE_PER_RUNTIME_MINUTE_USD` | optional: your rate (default `0.50`) |
 | `CONSULTING_RATE_PER_HOUR_USD` | optional: consulting after the free 30 minutes (default `80`) |
@@ -143,6 +163,11 @@ after each restart (accounts live in memory).
 
 ## Checklist before real clients
 
+- [ ] Security ([SECURITY.md](SECURITY.md)): `DATABASE_URL` uses `dcp_api` (not `postgres`),
+      `DATA_ENCRYPTION_KEY` is set and backed up, and you've turned on two-step sign-in
+      (Settings → Account) — the Admin panel needs it. Optional: `SENTRY_DSN`. In GitHub,
+      turn on Settings → Code security → Dependabot alerts.
+
 - [ ] Passwords: set `SUPABASE_URL` / `SUPABASE_KEY`, turn Supabase "Confirm email"
       on with your own SMTP, and add `https://<your site>/reset-password` to
       Supabase → Authentication → URL Configuration → **Redirect URLs** (for
@@ -157,6 +182,9 @@ after each restart (accounts live in memory).
       **Turn on billing** for that Google Cloud project before real clients use it (the free tier
       may use prompts to improve Google's products). Without a key the built-in parser answers at
       no cost. Allowances: `AI_FREE_MONTHLY` (20), `AI_PREMIUM_MONTHLY` (200).
+- [ ] Sign-in lockout (optional, defaults are fine): `LOGIN_MAX_ATTEMPTS` (3 wrong passwords in a
+      row) and `LOGIN_LOCK_MINUTES` (15). Each wrong password says how many tries are left; a password
+      reset unlocks at once (`api/services/login_guard.py`).
 - [ ] Stored sync schedule: Render → New → **Cron Job**, same repo and environment variables as the
       API, command `python scripts/run_syncs.py`, schedule `0 * * * *` (hourly; `*/15 * * * *` if you
       sell "live"). Without it, syncs only run when a client clicks "Sync now".

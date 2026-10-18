@@ -923,11 +923,28 @@ function renderTablePage(data, page, pageSize = 50) {
 - Request "dark mode" or "presentation mode" for different styling
 - You can request a specific color scheme to match your brand
 
-## On this platform: KPIs from transaction types
+## On this platform: building blocks, industry KPIs, transaction types
 
 The platform's dashboard (`skill.py`, shown in **Explore your data → Dashboard**)
 follows the workflow above with these choices — see `docs/DASHBOARDS.md` for every
 calculation:
+
+0. **Layout from building blocks, not one template** (`layout.py`,
+   `templates/layouts.json`, from the Canva design): a KPI row of 1–4 cards above
+   the fold (the main total as the gold hero card, then the industry KPIs, then
+   transactions and average per transaction), then container rows mixed and
+   matched from five patterns (full, half + half, ⅔ + ⅓, ⅓ + ⅔, thirds). Visual
+   priority: KPI cards, then trends as line charts, then categories as horizontal
+   bar charts (name left, value at the end of the bar), then complementary
+   visuals. Filters hide behind a Filter button. Changes are green / gray / red by
+   each metric's direction (costs going down are green).
+0. **Industry KPIs** (`industry.py`, `industry_metrics.json`, readable copy
+   `INDUSTRY_METRICS.md`): the client's NAICS sector (`industry`) picks recipes;
+   the ones whose columns are in the table become KPIs. None → generic.
+   The downloadable HTML is `templates/page.html` + `kpi_card.html` + `container.html`.
+0. **One KPI card style per dashboard** (`layout.kpi_style`): number, change, or
+   gauge (0–100% dials with the target band, when there are 2+ percentage KPIs
+   and a target). Percentages change in points ("▲ 2.0 pts").
 
 1. **KPIs are the most common transaction types**, not hand-picked metrics. A
    "type" column (`event_type` / `transaction_type` in the platform warehouse,
@@ -946,6 +963,24 @@ calculation:
    short labels (1W, 4W, 3M, 1Y, MTD, YTD; DoD, WoW, MoM) when the full ones don't
    fit. Only ranges and comparisons the data can support are offered: a week of
    data gets Last week + day over day; "All time" needs more than a year.
+
+## Industry KPIs
+
+Recipe kinds in `industry_metrics.json` (columns are found by name hints: a hint
+matches a column whose name has all its words, e.g. `food_cost` → "Food Cost (USD)"):
+
+| Kind | Value | Example |
+|---|---|---|
+| `sum` / `mean` | a column added up / averaged | attendance; table turns |
+| `ratio` | (numerator columns − `minus` columns) ÷ denominator columns, per period (× 100 for %) | prime cost % = (food + labor) ÷ sales |
+| `rate` | share of rows whose column is one of `values` (or a yes / true / 1 flag) | claim denial rate |
+| `days_between` | average days from a start date to an end date | days in A/R, length of stay |
+| `per_distinct` | numerator ÷ number of distinct people / things (no numerator = the count) | revenue per employee; enrollment |
+| `net` | numerator − `minus` | net operating income |
+| `null` | documented only (needs data a transaction table rarely has) | GMROI |
+
+Each metric also has `direction` (`higher` / `lower` is better), `format`
+(`number`, `currency`, `percent`, `days`) and an optional `benchmark`.
 
 ## Run it (platform implementation)
 
@@ -973,4 +1008,9 @@ Input: one table.
 | `comparison` | choice (auto, dod, wow, mom) | auto | Default comparison |
 | `as_of` | str | auto | End date for ranges, YYYY-MM-DD (default: latest date in the data) |
 | `title` | str | Dashboard | Dashboard title |
+| `subtitle` | str | auto | Line under the title (default: what the dashboard covers) |
+| `industry` | str | auto | NAICS sector for industry KPIs, e.g. 72 or 44-45 (the site sends the client's industry; empty = generic KPIs only) |
+| `business_name` | str | auto | Business name for the header of the downloaded HTML |
+| `viewer_name` | str | auto | Name for the downloaded HTML's greeting ("Hello! Ana") |
+| `kpi_style` | choice (auto, number, change, gauge) | auto | KPI card style for the whole row: auto, number (just the number), change (number + change vs. before) or gauge (0–100% dials for the percentage KPIs only) |
 | `include_html` | bool | yes | Also build the downloadable HTML dashboard (the web app asks for it only when you click Download) |

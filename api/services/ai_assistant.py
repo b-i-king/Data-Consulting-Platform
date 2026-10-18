@@ -49,7 +49,7 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store, entitlements
+from api.services import account_store, entitlements, pii
 
 AI_SERVICE = "ai"                 # pricing.py: the AI package
 NAME = "Beacon"                   # the assistant's name, in messages
@@ -145,7 +145,9 @@ def schema_summary(df: pd.DataFrame) -> list[dict]:
     for col in df.columns:
         s = df[col]
         info: dict = {"column": str(col)}
-        if pd.api.types.is_numeric_dtype(s):
+        if pii.is_contact_field(col):
+            info["type"] = "text"   # emails / phone numbers: only the name, never a value (api/services/pii.py)
+        elif pd.api.types.is_numeric_dtype(s):
             info.update(type="number", min=float(s.min()) if s.notna().any() else None,
                         max=float(s.max()) if s.notna().any() else None)
         elif pd.api.types.is_datetime64_any_dtype(s):

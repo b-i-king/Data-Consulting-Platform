@@ -56,7 +56,7 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from api.core import database
-from api.services import account_store, entities, unified
+from api.services import account_store, entities, pii, unified
 from api.services.warehouse_loader import EVENT_TYPES, LoadPlan
 
 # ── In-memory fallback (development only) ────────────────────────────────────
@@ -179,7 +179,9 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
                     col("event_date"), col("field_name"), col("source_field"), col("metric_type"),
                     col("metric_subtype"), col("metric_unit"),
                     col("metric_value", lambda v: None if v is None else Decimal(repr(float(v)))),
-                    col("attributes", unified.attributes_json), col("row_hash"), col("mapped", bool),
+                    # Emails and phone numbers are encrypted before they're written (pii.py).
+                    col("attributes", lambda a: unified.attributes_json(pii.protect(a))), col("row_hash"),
+                    col("mapped", bool),
                     col("source_modified_at"),
                 )
     except Exception as exc:
@@ -204,6 +206,7 @@ def _load_in_memory(aid: str, plan: LoadPlan) -> dict:
         return {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": 0}
     decision = unified.plan_upsert(plan.rows, existing)
     new = pd.concat([decision["insert"], decision["update"][plan.rows.columns]], ignore_index=True)
+    new["attributes"] = new["attributes"].map(pii.protect)   # emails / phones encrypted, like the database
     merged = new if existing is None else pd.concat([existing, new], ignore_index=True)
     # The newest copy of each key wins (an update replaces the stored row).
     _stored[key] = merged.drop_duplicates(subset=unified.KEY_COLUMNS, keep="last").reset_index(drop=True)
@@ -319,7 +322,8 @@ async def _stored_rows(aid: str, source_name: str | None) -> dict[tuple[str, str
         dict: (source_system, source_name) -> rows (UNIFIED_COLUMNS, attributes as dicts).
     """
     if database.pool is None:
-        return {(system, name): df for (a, system, name), df in _stored.items()
+        return {(system, name): df.assign(attributes=df["attributes"].map(pii.reveal))
+                for (a, system, name), df in _stored.items()
                 if a == aid and (source_name is None or name == source_name)}
     try:
         async with database.pool.acquire() as conn:
@@ -340,7 +344,7 @@ async def _stored_rows(aid: str, source_name: str | None) -> dict[tuple[str, str
     out: dict[tuple[str, str], list[dict]] = {}
     for r in records:
         row = dict(r)
-        row["attributes"] = json.loads(row["attributes"] or "{}")
+        row["attributes"] = pii.reveal(json.loads(row["attributes"] or "{}"))   # emails / phones decrypted
         out.setdefault((row.pop("source_system"), row.pop("source_name")), []).append(row)
     return {k: pd.DataFrame(v, columns=unified.UNIFIED_COLUMNS) for k, v in out.items()}
 
@@ -469,7 +473,7 @@ async def relink_stored(holder: dict) -> dict:
             continue
         totals["rows_relinked"] += int(changed.sum())
         if database.pool is None:
-            _stored[(aid, system, name)] = linked.reset_index(drop=True)
+            _stored[(aid, system, name)] = linked.assign(attributes=linked["attributes"].map(pii.protect)).reset_index(drop=True)
             continue
         part = linked[changed.values]
         async with database.pool.acquire() as conn, conn.transaction():
@@ -481,6 +485,6 @@ async def relink_stored(holder: dict) -> dict:
                    WHERE a.account_id = $1 AND a.source_system = $2 AND a.source_name = $3
                      AND a.record_id = t.rid AND a.line_number = t.ln AND a.field_name = t.fn""",
                 uuid.UUID(aid), system, name, part["record_id"].tolist(), [int(v) for v in part["line_number"]],
-                part["field_name"].tolist(), [unified.attributes_json(a) for a in part["attributes"]],
+                part["field_name"].tolist(), [unified.attributes_json(pii.protect(a)) for a in part["attributes"]],
                 part["row_hash"].tolist())
     return totals

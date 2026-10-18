@@ -1,5 +1,6 @@
 """
-Create (or update) the Stripe products and prices from api/services/pricing.py.
+Create (or update) the Stripe products and prices: the tools in
+api/services/pricing.py, at the prices in dim.plan_prices (the database).
 
 WHAT IT DOES
 ------------
@@ -11,13 +12,17 @@ A client's subscription holds one item per tool they pick ("build your own
 package"); the bundle is a single item. (Consulting time is paid on Cal.com,
 not through Stripe, so there is no consulting price here.)
 
-Stripe prices can't be edited once created. When you change a price in
-pricing.py, this script creates a NEW price, moves the lookup key to it
-(`transfer_lookup_key`), and archives the old one — existing subscribers keep
-their old price until you migrate them in the Stripe dashboard.
+Normally you don't need to run this after a price change: the Admin panel
+(Admin -> Prices) updates Stripe when you save. Run it once when you first
+connect Stripe, and after editing dim.plan_prices by hand in Supabase.
+
+Stripe prices can't be edited once created. When a price changed, this
+script creates a NEW price, moves the lookup key to it (`transfer_lookup_key`),
+and archives the old one — existing subscribers keep their old price until
+you migrate them in the Stripe dashboard.
 
 Nothing is written to the database: the app finds each price in Stripe by
-its lookup key, so the tool list in pricing.py and Stripe are the only copies.
+its lookup key. The helpers live in api/services/stripe_catalog.py.
 
 RUN IT
 ------
@@ -29,6 +34,7 @@ Safe to run again: it only changes what differs.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -36,161 +42,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from api.core.config import get_settings  # noqa: E402
-from api.services import pricing  # noqa: E402
+
+# The helpers live in the API (the Admin panel's price editor uses them too).
+from api.services.stripe_catalog import _cents, ensure_price, ensure_product, sync, sync_plan  # noqa: E402,F401
 
 
-def _cents(usd: float) -> int:
+async def _load_db_prices() -> None:
     """
-    Convert a US dollar amount to whole cents, the unit Stripe prices use.
+    Read the live prices from dim.plan_prices (when DATABASE_URL is set), so Stripe gets those.
 
-    Rounds to the nearest cent first, so floating-point noise (e.g. 19.999999)
-    does not lose a cent.
-
-    Args:
-        usd: Amount in US dollars, e.g. 49.0.
+    Without a database the defaults written in api/services/pricing.py are used.
 
     Returns:
-        int: Amount in cents, e.g. 4900.
-
-    Example:
-        >>> _cents(49.0), _cents(19.99)
-        (4900, 1999)
+        None.
     """
-    return int(round(usd * 100))
+    from api.core import database
+    from api.services import price_store
 
-
-def ensure_product(stripe, key: str, name: str, description: str, dry: bool, log) -> str | None:
-    """
-    Find the product by our metadata key (dcp_key), or create it. Returns its id.
-
-    Rules:
-    - Searches Stripe for a product whose metadata "dcp_key" equals `key`.
-    - Found: updates its name/description only if they differ, and returns its id.
-    - Not found: creates it with metadata {"dcp_key": key}. An empty description is
-      sent to Stripe as None.
-    - Dry run: logs what would change and changes nothing; returns None for a product
-      that does not exist yet.
-
-    Args:
-        stripe: The configured `stripe` module (or a test double with the same API).
-        key: Our stable product key: a plan id such as "data_visualization".
-        name: Product name shown in Stripe and on invoices, e.g. "Dashboards".
-        description: Product description ("" for none).
-        dry: If True, only log; make no changes in Stripe.
-        log: Callable that receives one message string per change (e.g. print).
-
-    Returns:
-        str | None: The Stripe product id ("prod_..."), or None in a dry run when the
-        product would have been created.
-
-    Example:
-        >>> ensure_product(stripe, "ai", "AI", "", dry=False, log=print)
-        create product ai (AI)
-        'prod_...'
-    """
-    found = stripe.Product.search(query=f"metadata['dcp_key']:'{key}'", limit=1).data
-    if found:
-        product = found[0]
-        if product.name != name or (product.description or "") != description:
-            log(f"update product {key}")
-            if not dry:
-                stripe.Product.modify(product.id, name=name, description=description or None)
-        return product.id
-    log(f"create product {key} ({name})")
-    if dry:
-        return None
-    return stripe.Product.create(name=name, description=description or None, metadata={"dcp_key": key}).id
-
-
-def ensure_price(stripe, product_id: str | None, lookup_key: str, cents: int, interval: str | None,
-                 dry: bool, log) -> str | None:
-    """
-    Make sure the lookup key points at a price with this amount (and billing interval).
-
-    Stripe prices cannot be edited, so:
-    - If the active price behind `lookup_key` already has this amount and interval,
-      nothing changes and its id is returned.
-    - Otherwise a NEW price is created, the lookup key is moved onto it
-      (`transfer_lookup_key=True`), and the old price (if any) is archived
-      (active=False). Existing subscribers keep the old price until migrated.
-    - Dry run, or no product id yet (the product was not created in a dry run): logs the
-      change and returns the current price id (or None); nothing is created.
-
-    Args:
-        stripe: The configured `stripe` module (or a test double with the same API).
-        product_id: The Stripe product the price belongs to, or None in a dry run.
-        lookup_key: Our stable key for the price, e.g. "dcp_data_visualization_month".
-        cents: Price amount in US cents.
-        interval: "month" or "year" for a subscription price, None for a one-time price.
-        dry: If True, only log; make no changes in Stripe.
-        log: Callable that receives one message string per change (e.g. print).
-
-    Returns:
-        str | None: The id of the price the lookup key now points at ("price_..."),
-        or None in a dry run when no price exists yet.
-
-    Example:
-        >>> ensure_price(stripe, "prod_123", "dcp_consulting_hour", 8000, None, dry=False, log=print)
-        create price dcp_consulting_hour: $80.00
-        'price_...'
-    """
-    current = stripe.Price.list(lookup_keys=[lookup_key], active=True, limit=1).data
-    if current:
-        price = current[0]
-        same_interval = (price.recurring.interval if price.recurring else None) == interval
-        if price.unit_amount == cents and same_interval:
-            return price.id
-    log(f"{'replace' if current else 'create'} price {lookup_key}: ${cents / 100:,.2f}"
-        + (f" per {interval}" if interval else ""))
-    if dry or product_id is None:
-        return current[0].id if current else None
-    new = stripe.Price.create(
-        product=product_id, currency="usd", unit_amount=cents, lookup_key=lookup_key,
-        transfer_lookup_key=True,   # move the key from the old price to this one
-        **({"recurring": {"interval": interval}} if interval else {}),
-    )
-    if current:
-        stripe.Price.modify(current[0].id, active=False)   # archive the old price
-    return new.id
-
-
-def sync(stripe, dry: bool = False, log=print) -> list[dict]:
-    """
-    Sync every plan. Returns one summary row per plan (printed, not stored).
-
-    For each plan in pricing.SUBSCRIPTIONS (in order) it ensures one product and two
-    prices (monthly and annual, via pricing.lookup_key).
-
-    Args:
-        stripe: The configured `stripe` module (or a test double with the same API).
-        dry: If True, only log what would change; make no changes in Stripe.
-        log: Callable that receives one message string per change (default: print).
-
-    Returns:
-        list[dict]: One row per plan, with keys id, name,
-        description, service_ids, monthly_price_usd, annual_price_usd, sort_order,
-        stripe_product_id, kind, is_base, requires, stripe_monthly_price_id and
-        stripe_annual_price_id (Stripe ids may be None in a dry run).
-
-    Example:
-        >>> rows = sync(stripe, dry=True, log=lambda msg: None)
-        >>> rows[0]["sort_order"]
-        0
-    """
-    rows = []
-    for order, plan in enumerate(pricing.SUBSCRIPTIONS):
-        product = ensure_product(stripe, plan.id, plan.name, plan.description, dry, log)
-        rows.append({
-            "id": plan.id, "name": plan.name, "description": plan.description,
-            "service_ids": list(plan.service_ids), "monthly_price_usd": plan.monthly_usd,
-            "annual_price_usd": plan.annual_usd, "sort_order": order, "stripe_product_id": product,
-            "kind": plan.kind, "is_base": plan.base, "requires": list(plan.requires),
-            "stripe_monthly_price_id": ensure_price(stripe, product, pricing.lookup_key(plan.id, "month"),
-                                                    _cents(plan.monthly_usd), "month", dry, log),
-            "stripe_annual_price_id": ensure_price(stripe, product, pricing.lookup_key(plan.id, "year"),
-                                                   _cents(plan.annual_usd), "year", dry, log),
-        })
-    return rows
+    await database.init_pool()
+    try:
+        await price_store.load()
+    finally:
+        await database.close_pool()
 
 
 if __name__ == "__main__":
@@ -204,7 +77,8 @@ if __name__ == "__main__":
 
     stripe.api_key = settings.stripe_secret_key
     mode = "LIVE" if settings.stripe_secret_key.startswith("sk_live") else "test"
-    print(f"Syncing plans to Stripe ({mode} mode){' — dry run' if args.dry_run else ''}…")
+    asyncio.run(_load_db_prices())   # prices come from dim.plan_prices (Admin -> Prices)
+    print(f"Syncing plans to Stripe ({mode} mode){' - dry run' if args.dry_run else ''}...")
     plan_rows = sync(stripe, dry=args.dry_run)
     for row in plan_rows:
         print(f"  {row['id']}: {row['stripe_monthly_price_id']} (month), {row['stripe_annual_price_id']} (year)")

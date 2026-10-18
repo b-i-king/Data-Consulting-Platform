@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from api.core.security import get_acting_context
-from api.services import ai_assistant
+from api.services import ai_assistant, audit
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms
 from api.services.skills_runner import prepare_input
 from data_skills._core import SkillInputError
@@ -99,6 +99,7 @@ async def ask(
     if result is None and plan and "cannot" in plan:
         message = plan["cannot"]
     await ai_assistant.record(t, question, answered=result is not None)
+    await audit.record(ctx, "ai_question", {"answered": result is not None})   # never the question's answer
     return {"answered": result is not None, "result": result,
             "message": None if result else (message or "I can't answer that from this table yet."),
             "engine": engine, "usage": await ai_assistant.usage(ctx, simulate or None),

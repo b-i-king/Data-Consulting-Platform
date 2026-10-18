@@ -73,6 +73,7 @@ import {
   getWarehouseSummary,
   logQuestion,
   setActingAs,
+  signOutServer,
 } from "@/lib/api";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd, toolName } from "@/lib/format";
@@ -564,6 +565,7 @@ export default function Workspace() {
   }
 
   function signOut() {
+    void signOutServer(session?.token); // the token stops working on the server at once
     clearSession();
     router.push("/");
   }
@@ -840,6 +842,32 @@ export default function Workspace() {
         )}
         <ErrorBox message={error} />
         {!plan && !error && <p className="text-sm text-ink-muted">Loading your plan…</p>}
+        {session.account.mfa_required && !session.account.mfa_enabled && (
+          // Admins and consultants: staff pages stay locked until two-step sign-in is on (api/services/mfa.py).
+          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              <strong>Set up two-step sign-in:</strong> admins and consultants need it before the Admin panel or any
+              client&apos;s workspace opens.
+            </span>
+            <Button variant="secondary" onClick={() => setAccountTab("account")}>Set it up</Button>
+          </div>
+        )}
+        {plan?.hipaa?.storing_paused && (
+          // A HIPAA request is waiting for an admin (api/services/hipaa.py): nothing is stored until then.
+          <div role="status" className="flex flex-col gap-2 rounded-2xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              <strong>Storing data is paused</strong> while we confirm your healthcare business (HIPAA). Cleaning and
+              analyzing files still work.
+            </span>
+            <Button variant="secondary" onClick={() => setAccountTab("account")}>See the request</Button>
+          </div>
+        )}
+        {plan && !plan.can_edit && (
+          <p role="status" className="rounded-2xl border border-line bg-surface p-3 text-sm">
+            <strong>View only:</strong> you can look at and download everything your team has, but not change what&apos;s
+            stored or connected. Your team&apos;s owner can give you Developer access.
+          </p>
+        )}
 
         {/* ── The account area (Settings, bottom left) ── */}
         {accountTab === "account" && (
@@ -857,6 +885,30 @@ export default function Workspace() {
             stored={stored}
             canStore={!!plan?.active.includes(ENGINEERING)}
             canChange={!!plan?.can_add}
+            bookingUrl={plan?.consulting.paid_booking_url ?? bookingUrl}
+            // Both read the LATEST session (setSession(prev => ...)), so a refresh never puts back an old token.
+            onToken={(token) =>
+              setSession((prev) => {
+                if (!prev) return prev;
+                const fresh = { ...prev, token };
+                saveSession(fresh);
+                return fresh;
+              })
+            }
+            onRefreshAccount={() => {
+              const latest = loadSession();
+              if (!latest) return;
+              getMe(latest.token)
+                .then((account) =>
+                  setSession((prev) => {
+                    if (!prev) return prev;
+                    const fresh = { ...prev, account };
+                    saveSession(fresh);
+                    return fresh;
+                  }),
+                )
+                .catch(() => {});
+            }}
             onStoredChanged={setStored}
             onSignOut={signOut}
             onDeleted={() => {
@@ -881,7 +933,8 @@ export default function Workspace() {
             openNames={files.map((f) => f.name)} onAdd={addSources} onClose={() => setAdding(false)} />
         )}
         {accountTab === "integrations" && (
-          <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_add}
+          // Owners and developers connect data; a view-only member just looks (teams.py).
+          <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_edit}
             isAdmin={!!session.account.is_admin}
             onOpenTable={openCloud} onOpenLive={openLive} notice={integrationNotice} />
         )}
@@ -1058,6 +1111,7 @@ export default function Workspace() {
                 hasDates={group.report.column_reports.some((c) => c.inferred_type.startsWith("date") && c.action !== "dropped")}
                 canBuild={!!plan?.active.includes(DASHBOARD)}
                 onEditContext={() => setAccountTab("account")}
+                viewerName={session.account.first_name}
               />
             )}
 
@@ -1069,6 +1123,13 @@ export default function Workspace() {
                     This table lives in your own database, which already manages it — we analyze it where it is and don&apos;t
                     keep a copy. The ER diagram and data dictionary tabs work on it as usual. (Storing is for files and
                     business tools like QuickBooks.)
+                  </p>
+                </Card>
+              ) : !plan?.can_edit ? (
+                <Card>
+                  <h2 className="font-semibold">Storing data needs Developer access</h2>
+                  <p className="mt-1 text-sm text-ink-muted">
+                    You&apos;re a view-only member of this team. Ask your team&apos;s owner to make you a Developer.
                   </p>
                 </Card>
               ) : (

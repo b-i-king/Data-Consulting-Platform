@@ -8,7 +8,20 @@
 
 import type {
   Account,
+  AuditEntry,
+  HipaaRequest,
+  HipaaStatus,
+  DeviceSessions,
+  MfaSetup,
   AdminPanelData,
+  AdminPerson,
+  AdminPrices,
+  AdminSales,
+  DeletionReason,
+  SeasonalSale,
+  TeamInfo,
+  TeamRole,
+  PriceChangeResult,
   BusinessContext,
   CloudSchema,
   CloudTable,
@@ -52,6 +65,7 @@ import type {
   Quote,
   SignupInput,
 } from "./types";
+import { deviceId } from "./session";
 
 // A trailing "/" is removed, so ".../" + "/api/..." never becomes "//api/...".
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/+$/, "");
@@ -149,7 +163,18 @@ export const getIntakeOptions = () => getJson<IntakeOptions>("/api/intake/option
 export const getQuote = (serviceIds: string[], runtimeSeconds?: number) =>
   postJson<Quote>("/api/quote", { service_ids: serviceIds, runtime_seconds: runtimeSeconds });
 
-export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accounts/signup", input);
+/** POST with this browser's device id (sign-up / sign-in), so tabs count as one device. */
+async function postAuth<T>(path: string, body: unknown): Promise<T> {
+  const res = await apiFetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Device-Id": deviceId() },
+    body: JSON.stringify(body),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+export const signup = (input: SignupInput) => postAuth<AuthResponse>("/api/accounts/signup", input);
 
 /**
  * Sign in with email + password (consultants too — no access code).
@@ -157,7 +182,115 @@ export const signup = (input: SignupInput) => postJson<AuthResponse>("/api/accou
  * the account isn't an approved consultant.
  */
 export const signin = (email: string, password: string, asConsultant = false) =>
-  postJson<AuthResponse>("/api/accounts/signin", { email, password, as_consultant: asConsultant });
+  postAuth<AuthResponse>("/api/accounts/signin", { email, password, as_consultant: asConsultant });
+
+/** Step two of signing in: the ticket from signin() and the authenticator (or backup) code. */
+export const signinMfa = (ticket: string, code: string) =>
+  postAuth<AuthResponse>("/api/accounts/signin/mfa", { ticket, code });
+
+/** Sign out THIS device on the server (its token stops working at once). Never throws. */
+export async function signOutServer(token: string | null | undefined): Promise<void> {
+  if (!token) return;
+  try {
+    await apiFetch(`${API_URL}/api/accounts/signout`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    /* already signed out, or offline: the browser forgets the token anyway */
+  }
+}
+
+// ── Security (Settings -> Account) ───────────────────────────────────────────
+
+/** Start two-step sign-in: a key for the authenticator app. */
+export const startMfaSetup = (token: string) => postJson<MfaSetup>("/api/accounts/mfa/setup", {}, token);
+
+/** Finish two-step sign-in with the app's code: backup codes (shown once) and a fresh token. */
+export const enableMfa = (token: string, code: string) =>
+  postJson<{ recovery_codes: string[]; access_token: string }>("/api/accounts/mfa/enable", { code }, token);
+
+/** Turn two-step sign-in off (not allowed for admins / consultants). */
+export const disableMfa = (token: string, code: string) =>
+  postJson<{ message: string }>("/api/accounts/mfa/disable", { code }, token);
+
+/** "Your devices": every device signed in now. */
+export async function getSessions(token: string): Promise<DeviceSessions> {
+  const res = await apiFetch(`${API_URL}/api/accounts/sessions`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Sign out one of my devices. */
+export async function endSession(token: string, sessionId: string): Promise<DeviceSessions> {
+  const res = await apiFetch(`${API_URL}/api/accounts/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Sign out every device but this one. */
+export const endOtherSessions = (token: string) =>
+  postJson<DeviceSessions & { signed_out: number }>("/api/accounts/sessions/sign-out-others", {}, token);
+
+/** My business's HIPAA request (status, details, the admin's note). */
+export async function getHipaa(token: string): Promise<HipaaStatus> {
+  const res = await apiFetch(`${API_URL}/api/accounts/hipaa`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Ask to store health information (or update a waiting request). Storing pauses until an admin decides. */
+export const requestHipaa = (token: string, body: { organization: string; npi?: string; note?: string }) =>
+  postJson<HipaaStatus>("/api/accounts/hipaa", body, token);
+
+/** Take back a waiting HIPAA request. */
+export async function withdrawHipaa(token: string): Promise<HipaaStatus> {
+  const res = await apiFetch(`${API_URL}/api/accounts/hipaa`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: every HIPAA request (waiting first). */
+export async function getHipaaRequests(token: string): Promise<{ requests: HipaaRequest[] }> {
+  const res = await apiFetch(`${API_URL}/api/admin/hipaa-requests`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: approve (audit log on) or deny a HIPAA request, with an optional note to them. */
+export const decideHipaa = (token: string, accountId: string, decision: "approve" | "deny", note?: string) =>
+  postJson<{ requests: HipaaRequest[] }>(`/api/admin/hipaa-requests/${encodeURIComponent(accountId)}/${decision}`,
+    { note: note || null }, token);
+
+/** A healthcare client's activity log (owner or admin). */
+export async function getAuditLog(token: string): Promise<{ enabled: boolean; entries: AuditEntry[] }> {
+  const res = await apiFetch(`${API_URL}/api/accounts/audit`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** The activity log as a CSV file (a Blob to save). */
+export async function downloadAuditLog(token: string): Promise<Blob> {
+  const res = await apiFetch(`${API_URL}/api/accounts/audit?format=csv&limit=5000`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.blob();
+}
+
+/** Admins: healthcare on / off for a plan holder (their data access is audited). */
+export const setHealthcare = (token: string, accountId: string, isHealthcare: boolean) =>
+  postJson<{ account: AdminPerson }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/healthcare`,
+    { is_healthcare: isHealthcare }, token);
+
+/** Admins: sign someone out on every device. */
+export const adminSignOut = (token: string, accountId: string) =>
+  postJson<{ signed_out: number }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/sign-out`, {}, token);
+
+/** Admins: clear someone's two-step sign-in (lost phone and backup codes). */
+export const adminResetMfa = (token: string, accountId: string) =>
+  postJson<{ account: AdminPerson }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reset-mfa`, {}, token);
 
 /** Who am I? The account as the server sees it now (e.g. just approved as a consultant). */
 export async function getMe(token: string): Promise<Account> {
@@ -170,12 +303,19 @@ export async function getMe(token: string): Promise<Account> {
 export const getConsultants = (page = 1, pageSize = 8, q = "") =>
   getJson<ConsultantPage>(`/api/accounts/consultants?page=${page}&page_size=${pageSize}&q=${encodeURIComponent(q)}`);
 
-/** Delete my account and EVERYTHING in it (type your own email to confirm). Cannot be undone. */
-export async function deleteMyAccount(token: string, confirmEmail: string): Promise<{ deleted: number }> {
+/**
+ * Delete my account and EVERYTHING in it (type your own email to confirm). Cannot be undone.
+ * `reason` (optional) is kept only as an anonymous count (dim.account_deletions).
+ */
+export async function deleteMyAccount(
+  token: string,
+  confirmEmail: string,
+  reason: DeletionReason | null = null,
+): Promise<{ deleted: number }> {
   const res = await apiFetch(`${API_URL}/api/accounts/me`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ confirm_email: confirmEmail }),
+    body: JSON.stringify({ confirm_email: confirmEmail, reason }),
   });
   await raiseForStatus(res);
   return res.json();
@@ -200,6 +340,133 @@ export async function requestConsultantRole(token: string): Promise<Account> {
 /** Admins: who asked to be a consultant, and every consultant's load. */
 export async function getAdminPanel(token: string): Promise<AdminPanelData> {
   const res = await apiFetch(`${API_URL}/api/admin/consultant-requests`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: switch a consultant off (their clients move to someone with room) or back on. */
+export async function setConsultantActive(
+  token: string,
+  consultantId: string,
+  active: boolean,
+  reason?: string,
+): Promise<AdminPanelData> {
+  const action = active ? "reactivate" : "deactivate";
+  const res = await apiFetch(`${API_URL}/api/admin/consultants/${encodeURIComponent(consultantId)}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(active ? {} : { reason: reason || null }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: plan holders (newest first), searched by name, email or company — to pick testers. */
+export async function searchAdminAccounts(token: string, q = ""): Promise<{ accounts: AdminPerson[] }> {
+  const res = await apiFetch(`${API_URL}/api/admin/accounts?q=${encodeURIComponent(q)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: make an account a tester (paid tools free) or a paying client again. */
+export async function setTester(token: string, accountId: string, isTester: boolean): Promise<{ account: AdminPerson }> {
+  const res = await apiFetch(`${API_URL}/api/admin/accounts/${encodeURIComponent(accountId)}/tester`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ is_tester: isTester }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: every tool's live price (dim.plan_prices). */
+export async function getAdminPrices(token: string): Promise<AdminPrices> {
+  const res = await apiFetch(`${API_URL}/api/admin/prices`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: change one plan's monthly and annual price (Stripe first, then the site). */
+export async function setPlanPrice(
+  token: string,
+  planId: string,
+  monthlyUsd: number,
+  annualUsd: number,
+  trialDays?: number,
+): Promise<PriceChangeResult> {
+  const res = await apiFetch(`${API_URL}/api/admin/prices/${encodeURIComponent(planId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ monthly_usd: monthlyUsd, annual_usd: annualUsd, trial_days: trialDays ?? null }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: the yearly seasonal sales, and the one running today. */
+export async function getAdminSales(token: string): Promise<AdminSales> {
+  const res = await apiFetch(`${API_URL}/api/admin/sales`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: change one seasonal sale (dates as "MM-DD"; it repeats every year). */
+export async function setSeasonalSale(
+  token: string,
+  sale: Pick<SeasonalSale, "id" | "name" | "starts_on" | "ends_on" | "percent_off" | "active">,
+): Promise<AdminSales> {
+  const { id, ...body } = sale;
+  const res = await apiFetch(`${API_URL}/api/admin/sales/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+// ── Business team (api/routers/accounts.py, api/services/teams.py) ────────────
+
+/** The people on my business team, their roles, and how full it is (5 people at most). */
+export async function getTeam(token: string): Promise<TeamInfo> {
+  const res = await apiFetch(`${API_URL}/api/accounts/team`, { headers: { Authorization: `Bearer ${token}` } });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Owner: add a colleague as a Developer or a Member (view only). */
+export async function addTeamMember(
+  token: string,
+  person: { first_name: string; last_name: string; email: string; role: Exclude<TeamRole, "owner"> },
+): Promise<Account> {
+  const res = await apiFetch(`${API_URL}/api/accounts/team/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(person),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Owner: change a colleague's role. */
+export async function setTeamRole(token: string, memberId: string, role: Exclude<TeamRole, "owner">): Promise<Account> {
+  const res = await apiFetch(`${API_URL}/api/accounts/team/members/${encodeURIComponent(memberId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ role }),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Owner: remove a colleague (their account is deleted). */
+export async function removeTeamMember(token: string, memberId: string): Promise<{ removed: number }> {
+  const res = await apiFetch(`${API_URL}/api/accounts/team/members/${encodeURIComponent(memberId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
   await raiseForStatus(res);
   return res.json();
 }

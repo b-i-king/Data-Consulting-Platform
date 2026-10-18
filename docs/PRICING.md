@@ -78,6 +78,24 @@ Clients pick the **tools** they need; each has a fixed monthly and annual
 price and the total is the **sum**. **All tools** is a cheaper bundle. Code:
 `SUBSCRIPTIONS`, `normalize_selection()` and `selection_price()` in
 `api/services/pricing.py`; the selector is `web/components/billing/PackageBuilder.tsx`.
+
+**Changing a price: one place.** The live prices are in the database table
+`dim.plan_prices`; change them in the workspace's **Admin → Prices** card. A
+save (`api/services/price_store.py`):
+
+1. updates **Stripe first** (when it's on) — a new Stripe price under the same
+   lookup key, the old one archived (`api/services/stripe_catalog.py`). People
+   already subscribed keep the price they signed up at; new checkouts get the
+   new one. If Stripe refuses, nothing changes anywhere.
+2. saves the row in `dim.plan_prices` (with who changed it and when);
+3. swaps the price into the running site (`pricing.apply_prices`), so the
+   plans page, the package builder, quotes and checkout all show it at once.
+
+Rules: at least $0.50 (Stripe's minimum), the annual price no more than 12 ×
+monthly, and a typo guard ($10,000 a month at most). The API reads the table at
+startup; if you edit it by hand in Supabase, run `python scripts/sync_stripe.py`
+(it reads the table) and restart the API. The numbers in the table below, and
+in `pricing.py`, are the **defaults** (the table's starting rows).
 In Stripe each tool is a product with two prices, and one subscription holds
 one item per tool ([PAYMENTS.md](PAYMENTS.md)).
 
@@ -94,8 +112,8 @@ one item per tool ([PAYMENTS.md](PAYMENTS.md)).
 Examples: Data Cleaning + Dashboards = $38/month. All six tools picked
 separately = $164/month, so the selector suggests All tools ($99).
 
-**Placeholder prices.** Annual = 10 × monthly ("2 months free", 17% off);
-change both together, then re-run `scripts/sync_stripe.py`. **Changing tools**
+**Default prices.** Annual = 10 × monthly ("2 months free", 17% off); the
+Prices card shows how many months free each annual price gives. **Changing tools**
 later updates the same subscription (Stripe prorates the difference).
 **Cancel anytime** in Stripe's billing portal ("Manage billing"); access runs to
 the end of the paid period. The packages in the services table above are
@@ -248,6 +266,58 @@ cent at $0.15/GB, compared with the $0.50 minimum runtime charge.
 
 What *can* cost more: very large files (50 MB × many users), the server size you
 pick so big files don't time out, and the Render workspace plan itself.
+
+## Free trials and seasonal sales (a FIRST package)
+
+`api/services/offers.py`. A first package gets ONE offer: a free trial when
+they qualify, otherwise the sale running today. (A discount on the first
+payment would land on the $0 trial invoice and be wasted, so they don't stack.)
+
+- **Free trials** — set "trial days" per tool in Admin → Prices
+  (`dim.plan_prices.trial_days`, 0–90; 0 = none). A first package gets the
+  longest trial among the tools picked; Stripe charges nothing until it ends
+  (Checkout's `trial_period_days`), and the tools are on meanwhile
+  (status `trialing`). **One trial per account** (`dim.accounts.trial_used_at`),
+  and only for someone who never had a package, so nobody cancels and starts
+  over. Testers and admins don't get one.
+- **Seasonal sales** — `dim.seasonal_sales`, Admin → Seasonal sales. Each is
+  a calendar window written month-day (11/24 to 12/31) that **repeats every
+  year by itself**, with a percent off the first payment (the first month, or
+  the first year on annual billing). Switch one on once; nothing to set up in
+  Stripe — the API makes the coupon the first time a checkout needs it. While
+  a sale runs, checkout uses its coupon instead of the promotion-code box;
+  otherwise promotion codes you make in Stripe still work.
+
+Starting windows (all **switched off** until you turn them on), picked for when
+US small businesses tend to spend on their business:
+
+| Sale | Window | Off the first payment | Why then |
+|---|---|---|---|
+| New Year planning sale | 01/01–01/31 | 20% | Budgets and plans for the year get made; a fresh start for new tools |
+| After-tax-season sale | 04/16–05/15 | 20% | Taxes are filed (Apr 15), the books are fresh in mind, and the SBA's National Small Business Week is in early May |
+| Year-end sale | 11/24–12/31 | 25% | Black Friday / Small Business Saturday, and owners buy tools before Dec 31 to deduct them this tax year |
+
+Not a sale: early March to April 15 (tax season — owners are busy and
+cash-careful), and Oct 1, which starts the federal government's fiscal year
+but not most small businesses' (they mostly run on the calendar year).
+
+## Teams: 5 people, three roles
+
+A business team holds **5 people, the owner included** (`TEAM_MAX_PEOPLE`).
+When it's full, the team page says "Talk to us about an Enterprise plan" and
+links to a paid call — set enterprise prices by hand until you know what
+larger teams pay. Roles (`api/services/teams.py`): **Owner** (the team's admin:
+billing, people, roles), **Developer** (uploads, connects and loads data, edits
+dashboards) and **Member** (view and download only). One person is on one team.
+
+## Testers (try the paid tools for free)
+
+An admin can mark any plan holder as a **tester** (Admin → Testers;
+`dim.accounts.is_tester`). A tester goes through the normal "pick a package"
+flow, but it switches on at once with no charge — even when Stripe is live —
+and their downloads are free. Turning the switch off ends their free package.
+Someone paying through Stripe must cancel first (so nobody is charged for a plan
+we're also giving away). Details: [PAYMENTS.md](PAYMENTS.md#testers).
 
 ## Open decisions for you
 

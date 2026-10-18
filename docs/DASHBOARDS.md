@@ -30,15 +30,48 @@ of values parse as dates). It is part of the **Data Visualization** service:
 until the client chooses that service it shows as a locked card with an **Add**
 button. Without dates, **Explore your data** opens on **Run a skill** instead.
 
-## Layout (top to bottom)
+## Layout (top to bottom) — built from building blocks
 
-1. **Filters** — dropdowns for WHO the numbers are about (below), plus
-   **Download dashboard (HTML)**.
-2. **Overview** — two cards, **Total amount** and **Transactions**; click one to
-   chart it over time ("Transactions over time"), with a values-by-period table.
-3. **KPIs** — one card and one line chart per KPI (below).
-4. **Breakdown** — the top 8 values of a category column (e.g. product) vs. the
-   previous period.
+The look comes from the Canva design "SaaS Dashboard UI Desktop Prototype"
+(7 pages), in the site's own colors (navy-black / white, gold, Fira Code
+numbers), light and dark. There is **no fixed template**: the blocks in
+`data_skills/build-dashboard/templates/layouts.json` are picked and filled for
+each table by `layout.py`, like a newspaper's front page — the most important
+things **above the fold**.
+
+1. **Header bar** — the business name (and industry), the dashboard tabs
+   (Overview, plus any tabs the client added — keep it to one when you can:
+   each tab re-runs its questions) and "Hello! <first name>".
+2. **Title, subtitle and the Filter button.** The filters (WHO the numbers are
+   about: customer type, store, age group…) live in a panel that opens next to
+   the button — hidden until wanted, so the dashboard stays clean. The button
+   shows how many are on; Esc or a click outside closes it. Download (HTML) sits
+   beside it.
+3. **KPI row — above the fold.** 1 to 4 cards (Canva pages 1–7), best first:
+   1. the main total (the **hero** card, in gold),
+   2. the **industry KPIs** this table can compute (below),
+   3. transactions, 4. average per transaction.
+   Each shows the change vs. the previous range as a colored pill — **green**
+   good, **gray** about the same (under 0.5%), **red** bad — using the metric's
+   direction: a cost, refund or days-in-A/R going *down* is green. Industry KPIs
+   show their benchmark under the number. With a single KPI, a trend chart sits
+   beside it in the same row (Canva page 7).
+4. **Container rows** — as many as there are visuals, mixed and matched from
+   five patterns (6-column grid; phones stack them):
+
+   | Pattern | Widths | Canva |
+   |---|---|---|
+   | `full` | 6 | — |
+   | `half_half` | 3 + 3 | pages 2, 5, 6 |
+   | `two_thirds_third` | 4 + 2 | page 1 |
+   | `third_two_thirds` | 2 + 4 | page 4 |
+   | `thirds` | 2 + 2 + 2 | page 3 |
+
+   Visual priority: **trends as line charts** (the main total first; this range
+   vs. the previous one), then **categories as horizontal bar charts** (name on
+   the left, the value at the end of the bar, its change as a pill), then
+   complementary visuals (the other KPIs' trends, more breakdowns). A trend
+   takes the wide slot next to a bar; three bars share a row in thirds.
 5. **Time bar** — two separate, slightly see-through (frosted) panels floating
    at the bottom of the screen while the dashboard is in view, so the chart
    behind stays visible: date ranges on top, comparisons below
@@ -58,6 +91,40 @@ button. Without dates, **Explore your data** opens on **Run a skill** instead.
 
    Short labels come from `data_skills/_time.py` (`RANGE_SHORT`, `COMPARISON_SHORT`);
    screen readers and hover tooltips always give the full label.
+
+## KPI card styles (one per dashboard)
+
+The whole KPI row uses ONE style, so it looks consistent (`layout.kpi_style`,
+`web/components/explore/KpiCard.tsx`, `templates/kpi_card.html`):
+
+| Style | Shows | Chosen when |
+|---|---|---|
+| **number** | the title and the big number | no range has an earlier period to compare with |
+| **change** | title, number, and the change vs. the previous range as a pill | the usual |
+| **gauge** | a half-circle dial 0–100% with the healthy band shaded, "On target / Above / Below target", and the change | the data has 2+ percentage KPIs and at least one has a target band (`target` in `industry_metrics.json`, e.g. billable utilization 75–85%) |
+
+In a gauge row only the percentage KPIs appear (a dial needs a 0–100 scale;
+dollars don't have one) and the main total leads the containers as its trend.
+`kpi_style` (auto / number / change / gauge) can force one; a forced gauge with
+no percentages falls back to change. Percentages always change in **points**:
+60% → 62% shows "▲ 2.0 pts" (gray under half a point), not "▲ 3.3%".
+A daily-summary table (one row per date) leaves out "number of records" and
+"average per transaction" — they'd only count days.
+
+## Industry KPIs (and the generic fallback)
+
+The client's industry (NAICS sector from sign-up) is sent as `industry`.
+`data_skills/build-dashboard/industry_metrics.json` — readable copy
+`INDUSTRY_METRICS.md`, from the "Metrics by industry" research — lists each
+sector's KPIs as recipes: which columns they need (name hints) and how to
+combine them (sum, mean, ratio of sums, share of rows, days between two dates,
+per distinct person, net). The ones the table can compute become KPI cards and
+trend containers ("Prime cost %" for a restaurant with food and labor cost
+columns; "Days in A/R" for a clinic with service and paid dates). Ratios are
+computed from their parts per period (30% of $100 and 50% of $10 is 32%, not
+40%). **No match → the generic dashboard** (total, transactions, average per
+transaction), with a line saying so. To teach it a new metric, add a recipe —
+no code (`tests/test_dashboard_layout.py` checks the file).
 
 ## KPIs come from transaction types
 
@@ -197,9 +264,12 @@ isn't mistaken for a drop. For a fair comparison of the current month, use
 
 ## Download
 
-**Download dashboard (HTML)** saves a single self-contained file with every
-range and comparison built in, for the filters chosen at the time (listed at
-the top of the file) — open it in any browser, offline, or email it to a client.
+**Download (HTML)** saves a single self-contained file with every range and
+comparison built in, for the filters chosen at the time (in its Filter panel),
+in the same layout — header, title, Filter, KPI row, containers, time bar — with
+a Light / Dark / System switch. It's put together from
+`templates/page.html` + `kpi_card.html` + `container.html` (`render_html` in
+`skill.py`). Open it in any browser, offline, or email it to a client.
 The web app builds this file only when you click the button (`include_html`),
 which keeps every other dashboard response about half the size. From the
 command line:
@@ -207,7 +277,9 @@ command line:
 
 ## Colors
 
-Gold (this period) and blue (previous period) were checked with the dataviz
+Gold (this period) and blue (previous period, dashed) were checked with the dataviz
 palette validator in both themes: lightness, color strength, color-blind
-separation, and contrast all pass. They live in `web/app/globals.css` as
+separation, and contrast all pass. Changes: green (`--color-good`) good, gray
+(`--color-ink-muted`) about the same, red (`--color-bad`) bad — always with ▲ / ▼
+too, so it never relies on color alone. They live in `web/app/globals.css` as
 `--color-chart-current` and `--color-chart-previous`.

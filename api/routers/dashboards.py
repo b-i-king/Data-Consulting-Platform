@@ -24,7 +24,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from api.core.security import get_acting_context
 from api.models.accounts import DashboardTabIn, QuestionLogIn
-from api.services import account_store, dashboards, entitlements
+from api.services import account_store, dashboards, entitlements, teams
 
 router = APIRouter()
 VISUALIZATION = "data_visualization"
@@ -56,6 +56,8 @@ async def _overview(holder: dict) -> dict:
         "tabs": [_tab_out(t) for t in await account_store.list_dashboard_tabs(hid)],
         "context": account_store.business_context_of(holder),
         "industry": dashboards.industry_label(holder.get("naics_sector")),
+        # The sector code itself: the Overview asks build-dashboard for that industry's KPIs.
+        "naics_sector": holder.get("naics_sector"),
         "company": holder.get("company_name"),
         "frequent": await account_store.frequent_questions(hid),
         "max_tabs": dashboards.MAX_TABS,
@@ -103,9 +105,11 @@ async def add_tab(body: DashboardTabIn, ctx: Annotated[dict, Depends(get_acting_
     POST /api/dashboards/tabs — add a dashboard tab.
 
     Raises:
-        HTTPException: 403 without Data Visualization; 400 at the tab limit (10) or with no questions.
+        HTTPException: 403 without Data Visualization or for a view-only member; 400 at the tab
+            limit (10) or with no questions.
     """
     await _can_build(ctx)
+    teams.require_editor(ctx)
     holder = await entitlements.plan_holder(ctx["account"])
     questions = dashboards.clean_questions(body.questions)
     if not questions:
@@ -122,6 +126,7 @@ async def add_tab(body: DashboardTabIn, ctx: Annotated[dict, Depends(get_acting_
 async def change_tab(tab_id: str, body: DashboardTabIn, ctx: Annotated[dict, Depends(get_acting_context)]):
     """PUT /api/dashboards/tabs/{id} — rename a tab or change its questions (404 if it isn't this client's)."""
     await _can_build(ctx)
+    teams.require_editor(ctx)
     holder = await entitlements.plan_holder(ctx["account"])
     questions = dashboards.clean_questions(body.questions)
     if not questions:
@@ -138,7 +143,8 @@ async def change_tab(tab_id: str, body: DashboardTabIn, ctx: Annotated[dict, Dep
 
 @router.delete("/dashboards/tabs/{tab_id}")
 async def delete_tab(tab_id: str, ctx: Annotated[dict, Depends(get_acting_context)]):
-    """DELETE /api/dashboards/tabs/{id} — remove a tab (404 if it isn't this client's)."""
+    """DELETE /api/dashboards/tabs/{id} — remove a tab (404 if it isn't this client's; 403 for a view-only member)."""
+    teams.require_editor(ctx)
     holder = await entitlements.plan_holder(ctx["account"])
     try:
         gone = await account_store.delete_dashboard_tab(str(holder["id"]), tab_id)

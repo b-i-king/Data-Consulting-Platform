@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from api.core.config import get_settings
 from api.core.security import get_acting_context
-from api.services import account_store, entitlements, fair_use
+from api.services import account_store, audit, entitlements, fair_use
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import (
     load_uploads,
@@ -235,6 +235,8 @@ async def download_cleaned(
         amount_usd=cost["amount_usd"],
         data_fingerprint=decision.fingerprint,
     )
+    await audit.record(ctx, "download", {"file": group.label, "rows": len(group.cleaned),
+                                         "format": file_format})   # healthcare clients only
 
     # Build the file in memory and stream it back.
     base = re.sub(r"[^A-Za-z0-9_-]+", "_", group.label).strip("_").lower() or "data"
