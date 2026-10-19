@@ -4,7 +4,9 @@
 // has chosen — Data Cleaning is always included. Every other service shows up
 // as one of these badges instead: its category color, name and starting
 // monthly price as a package tool, and a button to add it: in the guest wizard
-// it joins the package being built on "Your needs" (and unlocks the preview);
+// it joins the package being built on "Your needs" (and shows a one-time
+// PREVIEW of it per visit — the server keeps the full result for the paid
+// package, api/services/skill_access.py);
 // in the workspace it opens Plan & billing with the tool ticked.
 
 "use client";

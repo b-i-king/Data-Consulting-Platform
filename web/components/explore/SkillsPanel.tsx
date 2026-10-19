@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
+import SkillPreview from "./SkillPreview";
 import { categoryColor, categoryEmoji } from "@/lib/categories";
 import type { CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
 import ChartView from "@/components/charts/ChartView";
@@ -264,7 +265,8 @@ export default function SkillsPanel(props: {
 
         <ErrorBox message={error} />
 
-        {result && (
+        {result?.preview && <SkillPreview result={result} />}
+        {result && !result.preview && (
           <div className="space-y-4" aria-live="polite">
             <Card>
               <p className="font-medium">{result.summary}</p>

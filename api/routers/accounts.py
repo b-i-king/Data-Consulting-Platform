@@ -17,7 +17,8 @@ Account endpoints.
     PUT  /api/accounts/business-context  "About your business" — what dashboards are built around
     GET  /api/accounts/consultants    consultants and how full they are, one page at a time (public: the picker)
     POST /api/accounts/consultant     a signed-in client picks a consultant (one-time or monthly)
-    POST /api/accounts/consultant-request   "I'd like to work as a consultant" (an admin decides)
+    GET  /api/accounts/consultant-application   may I apply to be a consultant? (and my last result)
+    POST /api/accounts/consultant-request   the consultant screening application (an admin decides)
 
 Guests only need an account at the DOWNLOAD step. Signup asks for:
   * individual: first name, last name, email
@@ -25,13 +26,14 @@ Guests only need an account at the DOWNLOAD step. Signup asks for:
   * required:   the Terms of Service + Privacy Policy box (accept_terms)
   * optional:   "I'd like a consultant to do this for me" — a consultant
                 picked by name (capacity permitting) and one-time or monthly help
-  * optional:   "I'd like to work as a consultant" (waits for an admin)
+  * NOT here:    applying to be a consultant — that's done from the account,
+                 after signing up (consultant-request below)
 (Subscriptions are bought after signup: api/routers/billing.py.)
 
 CONSULTANTS sign up and sign in here like everyone else — no access code. An
 ADMIN_EMAILS address is an admin and a consultant from the start; anyone
-else becomes a consultant only when an admin approves their request
-(api/routers/admin.py). Their token says role "consultant". The services
+else becomes a consultant only when they're invited, apply from their account
+(the screening application) and an admin approves it (api/routers/admin.py). Their token says role "consultant". The services
 endpoints accept `X-Acting-As: <client id>` from a consultant to work on an
 assigned client (api/services/consultants.py).
 
@@ -59,6 +61,7 @@ from api.models.accounts import (
     AuthOut,
     BusinessContextIn,
     ChooseConsultantIn,
+    ConsultantApplicationIn,
     DeleteAccountIn,
     ForgotPasswordIn,
     HipaaRequestIn,
@@ -70,15 +73,20 @@ from api.models.accounts import (
     TeamMemberIn,
     TeamRoleIn,
 )
-from api.services import (account_store, audit, auth, billing, hipaa, consultants, consultations, dashboards, entitlements,
-                          locations, login_guard, mfa, offers, pricing, sessions, teams, warehouse_store)
+from api.services import (account_store, audit, auth, billing, consulting_billing, hipaa, consultants, consultations,
+                          dashboards, entitlements, locations, login_guard, mfa, offers, pricing, sessions, teams,
+                          warehouse_store)
 from api.services.pricing import catalog, subscription_catalog
+
+# Signing up "as a consultant" is refused: an account comes first, then the application.
+CONSULTANT_LATER = ("Create your account first, then apply from Settings → Account → "
+                    "\"Work as a consultant\" (by invitation).")
 
 router = APIRouter(prefix="/accounts")
 
 # The Terms of Service / Privacy Policy version ticked at sign-up (saved on the
 # account). When web/app/terms or web/app/privacy changes, bump this too.
-TERMS_VERSION = "2026-10-17"   # web/app/terms (added: health information)
+TERMS_VERSION = "2026-10-19"   # web/app/terms (added: paying a consultant through the platform)
 
 # A valid sign-in token whose account no longer exists. Without a database
 # (DATABASE_URL empty, e.g. a free test deploy) accounts live in memory and
@@ -203,8 +211,9 @@ async def signup(body: SignupIn, request: Request):
     POST /api/accounts/signup — create an individual or business account and sign it in.
 
     The Terms box must be ticked. `signup_as` is the choice at the bottom of
-    the form: "client"; "consultant" (a request — waits for an admin's
-    approval); or "admin" (refused unless the email is in ADMIN_EMAILS). An
+    the form: "client", or "admin" (refused unless the email is in
+    ADMIN_EMAILS). "consultant" is refused: consultants apply from their
+    account after signing up (POST /api/accounts/consultant-request). An
     ADMIN_EMAILS address becomes an admin and consultant at once either way. "I'd like a consultant" assigns
     the consultant they picked, or one with room (consultants.pick).
 
@@ -215,8 +224,8 @@ async def signup(body: SignupIn, request: Request):
         AuthOut: the new login token and the account (HTTP 201).
 
     Raises:
-        HTTPException: 400 without accept_terms or for unknown service ids;
-            403 for signup_as "admin" with an email that isn't an admin;
+        HTTPException: 400 without accept_terms, for unknown service ids, or
+            for signup_as "consultant"; 403 for signup_as "admin" with an email that isn't an admin;
             409 when an email already has an account or the picked consultant
             is full; 404 for an unknown consultant.
             (Malformed fields are rejected with 422 before this runs.)
@@ -231,14 +240,15 @@ async def signup(body: SignupIn, request: Request):
     if not body.accept_terms:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             detail="Please accept the Terms of Service and Privacy Policy to create an account.")
+    if body.signup_as == "consultant" or body.consultant_request:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=CONSULTANT_LATER)
     admin = consultants.is_admin_email(body.email)
     if body.signup_as == "admin" and not admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             detail="That email isn't on the admin list. Choose Client, or Request to be a consultant.")
     if body.signup_as != "client":
         # Consultants and admins don't hire a consultant for themselves.
-        body = body.model_copy(update={"wants_consultant": False, "consultant_id": None, "consultant_plan": None,
-                                       "consultant_request": body.signup_as == "consultant" or body.consultant_request})
+        body = body.model_copy(update={"wants_consultant": False, "consultant_id": None, "consultant_plan": None})
     password = auth.check_password_rules(body.password)  # 422 if missing or too short
     await _check_new_signup(body)                          # 400/409 BEFORE the password is registered
     if body.wants_consultant and not admin:
@@ -1019,6 +1029,9 @@ async def delete_me(body: DeleteAccountIn, token: Annotated[dict, Depends(get_cu
     # "Had a paid package" for the anonymous deletion count: checked BEFORE billing is canceled.
     holder = await entitlements.plan_holder(acc)
     paid = bool(await account_store.list_subscriptions(str(holder["id"]))) and not holder.get("is_tester")
+    # A consultant leaving: their clients' ongoing help ends now (refund the rest in Stripe).
+    if (mine := await account_store.get_consultant_by_account(str(acc["id"]))) is not None:
+        await consulting_billing.end_for_consultant(str(mine["id"]), "consultant_left")
     if not teams.is_colleague(acc):
         await billing.cancel_everything(acc)              # stop Stripe billing before the rows go
         await warehouse_store.delete(acc)                 # the in-memory store too (the database cascades)
@@ -1059,38 +1072,75 @@ async def choose_consultant(body: ChooseConsultantIn, ctx: Annotated[dict, Depen
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Consultants can't hire a consultant for themselves.")
     current = str(acc["consultant_id"]) if acc.get("consultant_id") else None
     keep = current is not None and body.consultant_id in (None, "", current)
+    if not keep:   # 409 while ongoing help with the current consultant is running
+        await consulting_billing.can_switch(acc, body.consultant_id or None)
     chosen = current if keep else await consultants.pick(body.consultant_id)
     await account_store.set_consultant_for(str(acc["id"]), chosen, body.consultant_plan)
     ctx = {**ctx, "account": await account_store.get_account(str(acc["id"]))}
     return await _services_out(ctx)
 
 
-@router.post("/consultant-request", response_model=AccountOut)
-async def ask_to_be_consultant(token: Annotated[dict, Depends(get_current_account)]):
+@router.get("/consultant-application")
+async def consultant_application(token: Annotated[dict, Depends(get_current_account)]):
     """
-    POST /api/accounts/consultant-request — "I'd like to work as a consultant".
+    GET /api/accounts/consultant-application — may I apply to be a consultant?
 
-    Puts the caller on the admin's list (api/routers/admin.py). Nothing
-    changes until an admin approves.
+    Settings -> Account -> "Work as a consultant" shows the form, or why it
+    can't be sent yet (waiting for review, the waiting period after a denial,
+    or not invited), and the last decision with its reason.
 
     Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: consultants.application_status (can_apply, blocked, message,
+        reapply_after, latest, code_of_conduct, ...).
+
+    Raises:
+        HTTPException: 401 when the account is gone.
+
+    Example:
+        GET /api/accounts/consultant-application
+        -> 200 {"can_apply": false, "blocked": "waiting", "message": "You can apply again on 01/18/2027.", ...}
+    """
+    acc = await account_store.get_account(token["sub"])
+    if acc is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
+    return await consultants.application_status(acc)
+
+
+@router.post("/consultant-request", response_model=AccountOut)
+async def ask_to_be_consultant(body: ConsultantApplicationIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/accounts/consultant-request — the consultant screening application.
+
+    Only from a signed-in account, and (while applications are invite-only)
+    only for an invited email. Puts the application on the admin's list
+    (api/routers/admin.py); nothing changes until an admin approves.
+
+    Args:
+        body: ConsultantApplicationIn, the screening answers (services, experience,
+            tools, profile link, optional work sample, a project, the code of conduct).
         token: dict, the decoded login token (injected by `get_current_account`).
 
     Returns:
         AccountOut: the caller's account, consultant_request "pending".
 
     Raises:
-        HTTPException: 401 when the account is gone; 409 if already a
-            consultant or already waiting.
+        HTTPException: 401 when the account is gone; 403 when not invited;
+            409 if already a consultant, already waiting, or inside the waiting
+            period after a denial; 422 for missing or malformed answers.
 
     Example:
         POST /api/accounts/consultant-request
+        {"services": ["data_cleaning"], "years_experience": 4, "tools": "SQL, pandas",
+         "profile_url": "https://www.linkedin.com/in/kim", "project_summary": "...", "agree_conduct": true}
         -> 200 {"consultant_request": "pending", ...}
     """
     acc = await account_store.get_account(token["sub"])
     if acc is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ACCOUNT_GONE)
-    return await _full_account_out(await consultants.request(acc))
+    return await _full_account_out(await consultants.apply(acc, body.model_dump()))
 
 
 @router.post("/forgot-password")

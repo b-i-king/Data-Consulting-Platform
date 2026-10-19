@@ -8,7 +8,8 @@ Takes the same multipart upload and cleaning choices as every analysis, plus
 `spec` (JSON): {"period": "month",
                 "left":  {"group_id": 0, "date": "played_at", "value": "hours", "agg": "sum"},
                 "right": {"group_id": 1, "date": "invoice_date", "value": "line_amount", "agg": "sum"}}.
-No sign-in, like the skills: nothing is stored.
+Part of the Dashboard page, so it needs sign-in and Data Visualization in the
+package (403 otherwise; skill_access.require). Nothing is stored.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from __future__ import annotations
 import json
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
-from api.services import compare as compare_service
+from api.core.security import get_acting_context
+from api.services import compare as compare_service, skill_access
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
 from data_skills._core import SkillInputError
 
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/compare")
 
 @router.post("/over-time")
 async def over_time(
+    ctx: Annotated[dict, Depends(get_acting_context)],
     files: Annotated[list[UploadFile], File()],
     spec: Annotated[str, Form()],
     missing_strategy: Annotated[Literal["keep", "drop_any"], Form()] = "keep",
@@ -42,12 +45,14 @@ async def over_time(
         "correlation", "summary", "cautions", "period"}.
 
     Raises:
-        HTTPException: 400 for a bad spec, an unknown table or column, or no dates / numbers.
+        HTTPException: 401 without sign-in; 403 without Data Visualization in the
+            package; 400 for a bad spec, an unknown table or column, or no dates / numbers.
 
     Example:
         POST /api/compare/over-time  files=@games.csv files=@invoices.csv spec={...}
         -> 200 {"periods": ["2026-01-01", ...], "correlation": -0.42, "summary": "Across 9 months ...", ...}
     """
+    await skill_access.require(ctx, "data_visualization")
     try:
         s = json.loads(spec)
         period, sides = s.get("period", "month"), [s["left"], s["right"]]

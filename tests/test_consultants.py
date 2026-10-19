@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from api.core.config import get_settings
 from api.main import app
 from api.services import account_store
+from tests.consultant_helpers import APPLICATION, apply_as_consultant
 
 client = TestClient(app)
 
@@ -34,7 +35,8 @@ def consultant_settings(monkeypatch):
     """
     monkeypatch.setenv("ADMIN_EMAILS", "brandon@example.com")
     get_settings.cache_clear()
-    for store in (account_store._accounts, account_store._teams, account_store._consultants):
+    for store in (account_store._accounts, account_store._teams, account_store._consultants,
+                  account_store._invites, account_store._applications):
         store.clear()
     yield
     get_settings.cache_clear()
@@ -47,8 +49,7 @@ def _signup(email, first="Dana", **extra):
     Args:
         email: Email for the new account.
         first: First name (default "Dana"); the last name is always "Lee".
-        **extra: Extra signup fields merged into the JSON body, e.g. wants_consultant=True
-            or consultant_request=True.
+        **extra: Extra signup fields merged into the JSON body, e.g. wants_consultant=True.
 
     Returns:
         httpx.Response: The TestClient response (check .status_code, then .json()).
@@ -87,7 +88,7 @@ def _auth(token, acting_as=None):
 def _consultant(email="brandon@example.com", first="Brandon"):
     """
     Sign up a consultant: the admin (brandon@example.com) directly; anyone else
-    by asking and being approved by the admin (who must already exist).
+    by being invited, applying and being approved by the admin (who must already exist).
 
     Args:
         email: Consultant email (default "brandon@example.com", the admin and default consultant).
@@ -104,8 +105,10 @@ def _consultant(email="brandon@example.com", first="Brandon"):
     """
     if email == "brandon@example.com":
         return _signup(email, first).json()["access_token"]
-    asked = _signup(email, first, consultant_request=True).json()
+    asked = _signup(email, first).json()
     admin = client.post("/api/accounts/signin", json={"email": "brandon@example.com", "password": "Correct-horse-9"})
+    applied = apply_as_consultant(client, _auth(admin.json()["access_token"]), asked["access_token"], email)
+    assert applied.status_code == 200, applied.text
     res = client.post(f"/api/admin/consultant-requests/{asked['account']['id']}/approve",
                       headers=_auth(admin.json()["access_token"]))
     assert res.status_code == 200, res.text
@@ -120,8 +123,12 @@ def test_admin_is_a_consultant_and_others_must_be_approved():
     """
     admin = _signup("brandon@example.com", "Brandon").json()
     assert admin["account"]["role"] == "consultant" and admin["account"]["is_admin"]
-    kim = _signup("kim@example.com", "Kim", consultant_request=True).json()
-    lee = _signup("lee@example.com", "Lee", consultant_request=True).json()
+    kim = _signup("kim@example.com", "Kim").json()
+    lee = _signup("lee@example.com", "Lee").json()
+    for who in (kim, lee):
+        res = apply_as_consultant(client, _auth(admin["access_token"]), who["access_token"], who["account"]["email"])
+        assert res.status_code == 200, res.text
+        who["account"] = res.json()
     assert kim["account"]["role"] == "client" and kim["account"]["consultant_request"] == "pending"
     # Nobody but an admin sees the list or decides.
     assert client.get("/api/admin/consultant-requests", headers=_auth(kim["access_token"])).status_code == 403
@@ -132,17 +139,18 @@ def test_admin_is_a_consultant_and_others_must_be_approved():
                                                                       ("lee@example.com", "pending")]
     h = _auth(admin["access_token"])
     client.post(f"/api/admin/consultant-requests/{kim['account']['id']}/approve", headers=h)
-    panel = client.post(f"/api/admin/consultant-requests/{lee['account']['id']}/deny", headers=h).json()
+    panel = client.post(f"/api/admin/consultant-requests/{lee['account']['id']}/deny", headers=h,
+                        json={"denial_reason": "work_sample",
+                              "note": "The work sample link was empty; please share a finished project."}).json()
     assert {r["email"]: r["status"] for r in panel["requests"]} == {"kim@example.com": "approved", "lee@example.com": "denied"}
     assert [c["name"] for c in panel["consultants"]] == ["Brandon", "Kim"]   # default consultant first
     # Approved: a consultant from the next page load (no new sign-in needed for /me).
     assert client.get("/api/accounts/me", headers=_auth(kim["access_token"])).json()["role"] == "consultant"
     assert client.get("/api/consultant/clients", headers=_auth(kim["access_token"])).status_code == 200
-    # Denied: still a client, and may ask again.
+    # Denied: still a client, and must wait before applying again (test_consultant_screening).
     assert client.get("/api/accounts/me", headers=_auth(lee["access_token"])).json()["role"] == "client"
-    again = client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"]))
-    assert again.status_code == 200 and again.json()["consultant_request"] == "pending"
-    assert client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"])).status_code == 409
+    again = client.post("/api/accounts/consultant-request", headers=_auth(lee["access_token"]), json=APPLICATION)
+    assert again.status_code == 409 and "apply again on" in again.json()["detail"]
 
 
 def test_signup_choice_and_signing_in_as_a_consultant():
@@ -156,8 +164,14 @@ def test_signup_choice_and_signing_in_as_a_consultant():
     assert all(a["email"] != "eve@example.com" for a in account_store._accounts.values())   # nothing created
     admin = _signup("brandon@example.com", "Brandon", signup_as="admin").json()["account"]
     assert admin["is_admin"] and admin["role"] == "consultant"
-    kim = _signup("kim@example.com", "Kim", signup_as="consultant", wants_consultant=True).json()["account"]
-    assert kim["consultant_request"] == "pending" and not kim["wants_consultant"]   # consultants don't hire one
+    # "Request to be a consultant" at sign-up is gone: the account comes first, then the application.
+    refused = _signup("kim@example.com", "Kim", signup_as="consultant")
+    assert refused.status_code == 400 and "Create your account first" in refused.json()["detail"]
+    assert _signup("kim@example.com", "Kim", consultant_request=True).status_code == 400
+    kim_token = _signup("kim@example.com", "Kim").json()["access_token"]
+    admin_token = client.post("/api/accounts/signin", json={"email": "brandon@example.com",
+                                                             "password": "Correct-horse-9"}).json()["access_token"]
+    assert apply_as_consultant(client, _auth(admin_token), kim_token, "kim@example.com").status_code == 200
 
     def sign_in(email, as_consultant):
         return client.post("/api/accounts/signin", json={"email": email, "password": "Correct-horse-9",

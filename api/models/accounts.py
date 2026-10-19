@@ -8,12 +8,14 @@ even runs. The models also document the API at http://localhost:8000/docs.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from api.services import locations, validation
 from api.services.intake import COMPANY_SIZE_CODES, validate_industry
+from api.services.pricing import SERVICES_BY_ID
 
 
 class TeamMemberIn(BaseModel):
@@ -147,12 +149,13 @@ class SignupIn(BaseModel):
     wants_consultant: bool = False
     consultant_id: str | None = Field(default=None, max_length=64)
     consultant_plan: Literal["one_time", "monthly"] | None = None
-    # Who is signing up (the clean choice at the bottom of the form):
+    # Who is signing up (the choice at the bottom of the form):
     #   "client"     the default
-    #   "consultant" a REQUEST to be a consultant (waits for an admin)
     #   "admin"      only works for an ADMIN_EMAILS address (refused otherwise)
+    #   "consultant" REFUSED (400): consultants apply from their account after
+    #                signing up (screening, api/services/consultants.py)
     signup_as: Literal["client", "consultant", "admin"] = "client"
-    # Older name for signup_as="consultant" (still accepted).
+    # Older name for signup_as="consultant" (refused the same way).
     consultant_request: bool = False
     # The Terms of Service + Privacy Policy box. POST /api/accounts/signup
     # refuses a sign-up without it; a consultant adding a client leaves it out.
@@ -504,6 +507,24 @@ class CheckoutIn(BaseModel):
     interval: Literal["month", "year"]
 
 
+class ConsultingCheckoutIn(BaseModel):
+    """
+    Pay your consultant through the platform (Plan & billing -> "Your consultant").
+
+      kind          "setup" (one time) or "retainer" (ongoing help)
+      services      retainer only: the services they need help with — the hours
+                    a week (and price) are worked out from these (pricing.help_hours)
+      interval      retainer only: "month" or "year" (a year = 10 months)
+      accept_terms  ticked consulting_billing.CANCEL_TERMS (required)
+    Prices: pricing.consulting_catalog(); rules: api/services/consulting_billing.py.
+    """
+
+    kind: Literal["setup", "retainer"]
+    services: list[str] = Field(default_factory=list, max_length=10)
+    interval: Literal["month", "year"] | None = None
+    accept_terms: bool = False
+
+
 class PriceIn(BaseModel):
     """Price a package before subscribing (the selector's running total)."""
 
@@ -576,6 +597,132 @@ class ConsultantSettingsIn(BaseModel):
         if v and (not v.lower().startswith("https://") or " " in v or len(v) < 12):
             raise ValueError("Use a full https:// link, like https://cal.com/you/30min.")
         return v
+
+
+# A LinkedIn personal profile: https://[www. | uk. | ...]linkedin.com/in/<name>[/...]
+LINKEDIN_PROFILE = re.compile(r"^https://([a-z]{2,3}\.)?linkedin\.com/(in|pub)/[^\s/?#]{2,}[^\s]*$", re.I)
+
+
+class ConsultantApplicationIn(BaseModel):
+    """
+    The consultant screening application (Settings -> Account -> "Work as a consultant").
+
+      services          the services they can deliver (of the seven, at least one)
+      experience        hands-on data experience, a range: "lt_1" (less than 1
+                        year), "1_3", "3_5", "5_10" or "10_plus" (consultants.EXPERIENCE_RANGES)
+      tools             tools they use well ("SQL, pandas, Power BI")
+      linkedin_url      REQUIRED: their LinkedIn profile, https://www.linkedin.com/in/...
+                        (how the admin confirms a real, verifiable person)
+      work_sample_url   optional: a portfolio, GitHub, a report or a dashboard, https://
+      project_summary   a data project they delivered: the problem, what they
+                        did, the result (at least 100 characters)
+      agree_conduct     the code of conduct (consultants.CODE_OF_CONDUCT) — must be true
+    The rules for WHO may apply live in api/services/consultants.py.
+    """
+
+    services: list[str] = Field(min_length=1, max_length=10)
+    experience: Literal["lt_1", "1_3", "3_5", "5_10", "10_plus"]
+    tools: str = Field(min_length=2, max_length=300)
+    linkedin_url: str = Field(max_length=500)
+    work_sample_url: str | None = Field(default=None, max_length=500)
+    project_summary: str = Field(min_length=100, max_length=2000)
+    agree_conduct: bool = False
+
+    @field_validator("services")
+    @classmethod
+    def _services(cls, v: list[str]) -> list[str]:
+        """
+        Keep only real service ids, each once, in the catalog's order.
+
+        Args:
+            v: list[str], the service ids ticked on the form.
+
+        Returns:
+            list[str]: the same ids, deduplicated.
+
+        Raises:
+            ValueError: "Pick at least one service from the list." for an unknown id.
+
+        Example:
+            >>> ConsultantApplicationIn._services(["data_cleaning", "data_cleaning"])
+            ['data_cleaning']
+        """
+        if not v or any(s not in SERVICES_BY_ID for s in v):
+            raise ValueError("Pick at least one service from the list.")
+        return [s for s in SERVICES_BY_ID if s in v]
+
+    @field_validator("tools", "project_summary")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        """Trim spaces at either end (a summary of only spaces is then too short)."""
+        return v.strip()
+
+    @field_validator("work_sample_url")
+    @classmethod
+    def _https(cls, v: str | None) -> str | None:
+        """
+        The optional work sample must be a full https:// address (empty means none).
+
+        Args:
+            v: str | None, the link as typed.
+
+        Returns:
+            str | None: the trimmed link, or None when left empty.
+
+        Raises:
+            ValueError: "Use a full https:// link, like https://github.com/you/project."
+
+        Example:
+            >>> ConsultantApplicationIn._https(" https://github.com/kim ")
+            'https://github.com/kim'
+        """
+        v = (v or "").strip()
+        if not v:
+            return None
+        if not v.lower().startswith("https://") or " " in v or len(v) < 12:
+            raise ValueError("Use a full https:// link, like https://github.com/you/project.")
+        return v
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def _linkedin(cls, v: str) -> str:
+        """
+        The LinkedIn profile is required: a personal profile address on linkedin.com.
+
+        Accepts https://www.linkedin.com/in/<name> (also without "www.", or a
+        country site like "uk.linkedin.com"); "http://" and no "https://" at
+        all are fixed to https://.
+
+        Args:
+            v: str, the link as typed.
+
+        Returns:
+            str: the cleaned link, e.g. "https://www.linkedin.com/in/kim-lee".
+
+        Raises:
+            ValueError: "Add your LinkedIn profile link, like https://www.linkedin.com/in/your-name."
+
+        Example:
+            >>> ConsultantApplicationIn._linkedin("linkedin.com/in/kim-lee/")
+            'https://linkedin.com/in/kim-lee/'
+        """
+        v = (v or "").strip()
+        v = re.sub(r"^(https?://)?", "https://", v, count=1, flags=re.I)
+        if not LINKEDIN_PROFILE.match(v):
+            raise ValueError("Add your LinkedIn profile link, like https://www.linkedin.com/in/your-name.")
+        return v
+
+    @model_validator(mode="after")
+    def _required(self) -> "ConsultantApplicationIn":
+        """
+        The code of conduct must be ticked.
+
+        Raises:
+            ValueError: when the code of conduct isn't ticked.
+        """
+        if not self.agree_conduct:
+            raise ValueError("Please agree to the consultant code of conduct.")
+        return self
 
 
 class CloudConnectIn(BaseModel):

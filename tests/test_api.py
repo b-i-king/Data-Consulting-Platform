@@ -7,9 +7,12 @@ These walk the same path a guest takes in the browser:
 
 import io
 
+import pytest
+
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from api.core.config import get_settings
 from api.main import app
 
 client = TestClient(app)
@@ -141,12 +144,32 @@ def test_list_skills():
     assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
 
 
-def test_run_dashboard_skill_on_upload():
+@pytest.fixture
+def admin(monkeypatch):
+    """
+    Headers for a signed-in ADMIN, who gets every tool's full result.
+
+    Paid skills give guests only a preview (api/services/skill_access.py;
+    tests/test_skill_access.py checks that), so tests of what a skill computes
+    sign in first.
+    """
+    monkeypatch.setenv("ADMIN_EMAILS", "skills-admin@example.com")
+    get_settings.cache_clear()
+    body = {"account_type": "individual", "first_name": "Sam", "last_name": "Lee", "email": "skills-admin@example.com",
+            "password": "Correct-horse-9", "accept_terms": True}
+    res = client.post("/api/accounts/signup", json=body)
+    if res.status_code != 201:   # already signed up by an earlier test
+        res = client.post("/api/accounts/signin", json={"email": body["email"], "password": body["password"]})
+    yield {"Authorization": f"Bearer {res.json()['access_token']}"}
+    get_settings.cache_clear()
+
+
+def test_run_dashboard_skill_on_upload(admin):
     """
     Check that running build-dashboard on the sample sales upload returns every date range
     (last week through all time) and an HTML dashboard artifact.
     """
-    res = client.post("/api/skills/build-dashboard/run", files=_files(("sales.csv", SALES)),
+    res = client.post("/api/skills/build-dashboard/run", files=_files(("sales.csv", SALES)), headers=admin,
                       data={"params": '{"value_columns": ["amount"]}'})
     assert res.status_code == 200, res.text
     body = res.json()
@@ -154,14 +177,14 @@ def test_run_dashboard_skill_on_upload():
     assert "html_dashboard" in body["artifacts"]
 
 
-def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not():
+def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not(admin):
     """
     Check that a raw-data skill (data-cleaning) sees the sample's duplicate rows, while a
     skill that runs on cleaned data (validate-data) finds none.
     """
     raw = client.post("/api/skills/data-cleaning/run", files=_files(("sales.csv", SALES))).json()
     assert raw["data"]["report"]["duplicate_rows_removed"] > 0
-    cleaned = client.post("/api/skills/validate-data/run", files=_files(("sales.csv", SALES)),
+    cleaned = client.post("/api/skills/validate-data/run", files=_files(("sales.csv", SALES)), headers=admin,
                           data={"params": '{"metric": "amount"}'}).json()
     dup_check = next(c for c in cleaned["tables"]["checks"] if c["check"] == "duplicate rows")
     assert dup_check["status"] == "pass"
@@ -171,15 +194,16 @@ def test_raw_skill_sees_duplicates_and_cleaned_skill_does_not():
 BIG = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(40))
 
 
-def test_skill_errors_are_friendly():
+def test_skill_errors_are_friendly(admin):
     """
     Check skill run errors: an unknown skill is 404, a missing required option is 400 naming
     it, and a command-line-only option (db_path) sent through the API is 400.
     """
     assert client.post("/api/skills/nope/run", files=_files(("s.csv", BIG))).status_code == 404
-    res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", BIG)), data={"params": "{}"})
+    res = client.post("/api/skills/hypothesis-testing/run", files=_files(("s.csv", BIG)), data={"params": "{}"},
+                      headers=admin)
     assert res.status_code == 400 and "outcome" in res.json()["detail"]
-    res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", BIG)),
+    res = client.post("/api/skills/setup-data-workspace/run", files=_files(("s.csv", BIG)), headers=admin,
                       data={"params": '{"db_path": "/tmp/evil.db"}'})
     assert res.status_code == 400 and "command line" in res.json()["detail"]
 
@@ -214,15 +238,15 @@ def test_bad_column_actions_are_friendly_errors():
     assert "average" in bad_method.json()["detail"]
 
 
-def test_skills_see_the_same_cleaning_choices():
+def test_skills_see_the_same_cleaning_choices(admin):
     """Check that skills apply the same column actions as analyze (a dropped column is not in the output)."""
-    res = client.post("/api/skills/explore-data/run", files=_files(("gaps.csv", GAPS)),
+    res = client.post("/api/skills/explore-data/run", files=_files(("gaps.csv", GAPS)), headers=admin,
                       data={"column_actions": '{"0": {"notes": "drop"}}'})
     assert res.status_code == 200, res.text
     assert '"notes"' not in res.text
 
 
-def test_analysis_needs_30_rows_before_and_after_cleaning():
+def test_analysis_needs_30_rows_before_and_after_cleaning(admin):
     """
     Check the 30-row minimum for analysis: 3 rows can be cleaned but not analyzed; 35 rows with
     10 duplicates (25 after cleaning) are still refused; 40 rows are ready.
@@ -231,14 +255,14 @@ def test_analysis_needs_30_rows_before_and_after_cleaning():
     small = client.post("/api/files/analyze", files=_files(("s.csv", CSV))).json()["groups"][0]["report"]
     assert small["analysis_ready"] is False and "at least 30" in small["analysis_note"]
     assert client.post("/api/skills/data-cleaning/run", files=_files(("s.csv", CSV))).status_code == 200
-    res = client.post("/api/skills/explore-data/run", files=_files(("s.csv", CSV)))
+    res = client.post("/api/skills/explore-data/run", files=_files(("s.csv", CSV)), headers=admin)
     assert res.status_code == 400 and "at least 30" in res.json()["detail"]
     # 35 rows uploaded, but 10 are duplicates: 25 left AFTER cleaning -> still refused.
     dupes = b"customer,amount\n" + b"".join(f"C{i},{i}\n".encode() for i in range(25)) + b"C1,1\n" * 10
     rep = client.post("/api/files/analyze", files=_files(("d.csv", dupes))).json()["groups"][0]["report"]
     assert rep["rows_before"] == 35 and rep["rows_after"] == 25
     assert rep["analysis_ready"] is False and "After cleaning" in rep["analysis_note"]
-    assert client.post("/api/skills/build-dashboard/run", files=_files(("d.csv", dupes))).status_code == 400
+    assert client.post("/api/skills/build-dashboard/run", files=_files(("d.csv", dupes)), headers=admin).status_code == 400
     # 40 rows: ready.
     big = client.post("/api/files/analyze", files=_files(("b.csv", BIG))).json()["groups"][0]["report"]
     assert big["analysis_ready"] is True and big["analysis_note"] == ""
@@ -293,7 +317,7 @@ def test_excel_download_lists_rows_removed_for_a_missing_id():
     assert sheets["rows_missing_id"]["total_amount"].tolist() == [0, 10, 20, 30]
 
 
-def test_client_column_names_apply_to_analyze_and_skills():
+def test_client_column_names_apply_to_analyze_and_skills(admin):
     """
     Check that duplicate and unnamed columns are reported, that client-chosen column names fix
     them in analyze and skills, and that renaming two columns to the same name gives a 400.
@@ -313,7 +337,7 @@ def test_client_column_names_apply_to_analyze_and_skills():
     assert g["preview"]["columns"] == ["order_id", "amount_paid", "amount_refunded"]
     assert g["report"]["duplicate_columns"] == [] and g["report"]["unnamed_columns"] == []
 
-    res = client.post("/api/skills/statistical-analysis/run", files=_files(("o.csv", csv)),
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("o.csv", csv)), headers=admin,
                       data={"column_names": names, "column_actions": actions})
     assert res.status_code == 200, res.text
     assert "amount_refunded" in res.text
@@ -323,7 +347,7 @@ def test_client_column_names_apply_to_analyze_and_skills():
     assert bad.status_code == 400 and "share a name" in bad.json()["detail"]
 
 
-def test_transform_steps_apply_to_analyze_and_skills():
+def test_transform_steps_apply_to_analyze_and_skills(admin):
     """
     Check that a transform step (cap duration outliers at 120) is applied by analyze and skills,
     and that an unknown step gives a 400.
@@ -336,7 +360,8 @@ def test_transform_steps_apply_to_analyze_and_skills():
     body = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": steps}).json()
     report = body["groups"][0]["report"]
     assert report["transforms_applied"][0]["count"] == 1
-    res = client.post("/api/skills/statistical-analysis/run", files=_files(("w.csv", csv)), data={"transforms": steps})
+    res = client.post("/api/skills/statistical-analysis/run", files=_files(("w.csv", csv)), data={"transforms": steps},
+                      headers=admin)
     assert res.status_code == 200, res.text
     bad = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": '{"0": [{"op": "x"}]}'})
     assert bad.status_code == 400 and "unknown step" in bad.json()["detail"]

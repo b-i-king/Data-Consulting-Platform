@@ -1,7 +1,11 @@
 // Settings pieces, used by the workspace's Account area (AccountPanel.tsx and
 // the Consultant section):
 //
-//   * CONSULTANTS (the "finish setting up" steps for a new consultant):
+//   * CONSULTANTS — ONBOARDING after approval: a checklist at the top (two-step
+//     sign-in, the independent-contractor agreement, both booking links, the
+//     webhook; capacity is optional), the agreement itself (they get paid
+//     directly and pay their own taxes — "I agree" is saved with its version),
+//     then the setup cards:
 //       1. Your booking links — their own FREE 30-minute and PAID session
 //          Cal.com links (paid through their own Cal.com + Stripe, so they're
 //          paid directly). Their clients see these instead of the defaults.
@@ -11,9 +15,14 @@
 //          are recorded as theirs.
 //       3. Capacity — how many clients at once (1 to 10, default 3), with the
 //          fill bar. When full, nobody new can pick them (lowering drops nobody).
-//   * CLIENTS: "Work as a consultant" — send a request; an admin approves or
-//     denies (status shown here). Approval switches this workspace to
-//     consultant mode on its next load.
+//   * CLIENTS: "Work as a consultant" — the screening application (services of
+//     the seven, an experience range, tools, their LinkedIn profile (required),
+//     an optional portfolio / work sample, a project, the code of conduct).
+//     A denial shows that a real person decided, the reason and their personal
+//     feedback. Only for invited emails while applications are invite-only,
+//     never while one is waiting, and not before the waiting period after a
+//     denial ends (the reason and the date are shown). An admin approves or
+//     denies; approval switches this workspace to consultant mode on its next load.
 //   * EVERYONE with stored data (the account holder, their consultant working
 //     on them, or an admin): "Update your most recent upload" — pick the
 //     corrected file; it REPLACES the latest stored file (same name), after the
@@ -31,9 +40,14 @@
 import { useMemo, useEffect, useState } from "react";
 import {
   API_URL,
+  agreeToContractorTerms,
+  openPayoutsDashboard,
+  startPayouts,
   analyzeFiles,
   deleteMyAccount,
+  getConsultantApplication,
   getConsultantSettings,
+  getIntakeOptions,
   newWebhookSecret,
   requestConsultantRole,
   saveConsultantSettings,
@@ -42,10 +56,15 @@ import type {
   Account,
   AnalyzeResponse,
   CleaningInput,
+  ConsultantApplicationInput,
+  ConsultantApplicationStatus,
+  ConsultantOnboarding,
   ConsultantSettings,
   DeletionReason,
+  Service,
   WarehouseCounts,
 } from "@/lib/types";
+import { fmtDate } from "@/lib/format";
 import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
@@ -201,6 +220,137 @@ export function DeleteAccount(props: { token: string; account: Account; onDelete
 
 const field = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-consultant";
 
+/** Onboarding: what's done and what's left (the required steps hide the nudge once done). */
+function OnboardingChecklist({ onboarding }: { onboarding: ConsultantOnboarding }) {
+  const left = onboarding.steps.filter((st) => st.required && !st.done).length;
+  return (
+    <Card className={onboarding.done ? "" : "border-consultant/40 bg-consultant-soft"}>
+      <h2 className="font-semibold">{onboarding.done ? "Onboarding complete ✓" : "Welcome! Your onboarding"}</h2>
+      <p className="mt-1 text-sm text-ink-muted">
+        {onboarding.done
+          ? "You're all set. You can change any of these below at any time."
+          : `${left} step${left === 1 ? "" : "s"} left. Until they're done, your clients see the platform's default booking links.`}
+      </p>
+      <ul className="mt-3 space-y-1.5 text-sm">
+        {onboarding.steps.map((st) => (
+          <li key={st.id} className="flex items-start gap-2">
+            <span aria-hidden className={st.done ? "text-good" : "text-ink-muted"}>{st.done ? "✓" : "○"}</span>
+            <span className={st.done ? "text-ink-muted" : ""}>
+              {st.label}
+              <span className="sr-only">{st.done ? " (done)" : " (to do)"}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/**
+ * Onboarding: connect a Stripe payout account. Clients pay the platform for setup
+ * and ongoing help; Stripe sends this consultant their share (consulting_billing).
+ * Stripe collects identity, bank and tax details on its own page — never this app.
+ */
+function Payouts(props: { token: string; data: ConsultantSettings; onSaved: (d: ConsultantSettings) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { payouts } = props.data;
+
+  async function connect() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await startPayouts(props.token);
+      if (res.url) {
+        window.location.assign(res.url); // Stripe's page; it comes back to Settings -> Consultant
+        return;
+      }
+      props.onSaved(await getConsultantSettings(props.token)); // test mode: connected at once
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't work.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function dashboard() {
+    setError(null);
+    try {
+      window.open((await openPayoutsDashboard(props.token)).url, "_blank", "noopener");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't work.");
+    }
+  }
+
+  return (
+    <Card>
+      <h2 className="font-semibold">Payouts</h2>
+      <p className="mt-1 text-sm text-ink-muted">
+        Clients pay for your setup and ongoing help through the platform, and Stripe sends your share to your own Stripe
+        account automatically. Stripe asks for your identity, bank and tax details on its own secure page.
+      </p>
+      {payouts.ready ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-good">✓ Payouts are set up.</span>
+          {!payouts.test_mode && (
+            <Button variant="secondary" onClick={dashboard}>Open my Stripe payouts</Button>
+          )}
+        </div>
+      ) : (
+        <Button className="mt-3" onClick={connect} disabled={busy}>
+          {busy ? "One moment…" : payouts.connected ? "Finish setting up payouts" : "Set up payouts with Stripe"}
+        </Button>
+      )}
+      <ErrorBox message={error} />
+    </Card>
+  );
+}
+
+/** Onboarding: the independent-contractor terms — they're paid directly and pay their own taxes. */
+function ContractorAgreement(props: { token: string; onboarding: ConsultantOnboarding; onSaved: (d: ConsultantSettings) => void }) {
+  const [ticked, setTicked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const agreedAt = props.onboarding.contractor_agreed_at;
+  const current = props.onboarding.steps.find((st) => st.id === "contractor")?.done;
+
+  async function agree() {
+    setBusy(true);
+    setError(null);
+    try {
+      props.onSaved(await agreeToContractorTerms(props.token));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <h2 className="font-semibold">Independent-contractor terms</h2>
+      <p className="mt-1 text-sm text-ink-muted">How you work with us, how you get paid, and your taxes.</p>
+      <ul className="mt-3 list-inside list-disc space-y-1 text-sm">
+        {props.onboarding.contractor_terms.map((t) => (
+          <li key={t}>{t}</li>
+        ))}
+      </ul>
+      {current && agreedAt ? (
+        <p className="mt-3 text-sm text-good" role="status">You agreed on {fmtDate(agreedAt)}.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {agreedAt && <p className="text-sm text-warn">These terms changed since you agreed — please read and agree again.</p>}
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={ticked} onChange={(e) => setTicked(e.target.checked)} />
+            I&apos;ve read these terms and I agree to work as an independent contractor.
+          </label>
+          <Button onClick={agree} disabled={!ticked || busy}>{busy ? "Saving…" : "I agree"}</Button>
+        </div>
+      )}
+      <ErrorBox message={error} />
+    </Card>
+  );
+}
+
 export function ConsultantSetup({ token, onSetupNeeded }: { token: string; onSetupNeeded?: (needed: boolean) => void }) {
   const [data, setStoredData] = useState<ConsultantSettings | null>(null);
   const setData = (d: ConsultantSettings) => {
@@ -219,12 +369,11 @@ export function ConsultantSetup({ token, onSetupNeeded }: { token: string; onSet
   if (!data) return error ? <ErrorBox message={error} /> : <p className="text-sm text-ink-muted">Loading…</p>;
   return (
     <div className="max-w-2xl space-y-5">
-      {data.setup_needed && (
-        <p role="status" className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
-          <strong>Welcome! Finish setting up:</strong> add your Cal.com booking links (1), then connect your Cal.com
-          webhook (2). Until then your clients see the platform&apos;s default links.
-        </p>
+      <OnboardingChecklist onboarding={data.onboarding} />
+      {data.onboarding.steps.some((st) => st.id === "contractor" && st.required) && (
+        <ContractorAgreement token={token} onboarding={data.onboarding} onSaved={setData} />
       )}
+      {data.payouts.needed && <Payouts token={token} data={data} onSaved={setData} />}
       <BookingLinks token={token} data={data} onSaved={setData} />
       <Webhook token={token} data={data} onSaved={setData} />
       <Capacity token={token} data={data} onSaved={setData} />
@@ -262,8 +411,9 @@ function BookingLinks({ token, data, onSaved }: SectionProps) {
       <h2 className="font-semibold">1. Your booking links</h2>
       <p className="mt-1 text-sm text-ink-muted">
         Your clients book you through these. In Cal.com, make two event types: a <strong>free 30-minute</strong>{" "}
-        consultation, and a <strong>paid session</strong> (turn on Cal.com&apos;s Stripe app and set the price, so clients
-        pay you directly when they book). Paste each event&apos;s link here.
+        consultation, and a <strong>paid session</strong>. For the paid one, install a payment app in Cal.com
+        (Stripe or PayPal — your choice, your own account) and set your price, so clients pay you directly when they
+        book. Paste each event&apos;s link here.
       </p>
       <div className="mt-4 space-y-3">
         <label className="block space-y-1 text-sm">
@@ -416,44 +566,185 @@ function Capacity({ token, data, onSaved }: SectionProps) {
   );
 }
 
+/** The screening application's empty form. */
+const EMPTY_APPLICATION: ConsultantApplicationInput = {
+  services: [],
+  experience: "",
+  tools: "",
+  linkedin_url: "",
+  work_sample_url: "",
+  project_summary: "",
+  agree_conduct: false,
+};
+const MIN_SUMMARY = 100; // characters (ConsultantApplicationIn.project_summary on the server)
+
+/**
+ * "Work as a consultant" (Settings -> Account): the screening application.
+ * Shows the form only when the person may apply (invited, nothing waiting, past
+ * any waiting period); otherwise why not, and the last decision with its reason.
+ */
 export function AskToConsult(props: { token: string; account: Account; onAccount: (a: Account) => void }) {
+  const [check, setCheck] = useState<ConsultantApplicationStatus | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [form, setForm] = useState<ConsultantApplicationInput>(EMPTY_APPLICATION);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const status = props.account.consultant_request;
 
-  async function ask() {
+  useEffect(() => {
+    getConsultantApplication(props.token)
+      .then(setCheck)
+      .catch((e) => setError(e instanceof Error ? e.message : "We couldn't check your application."));
+    getIntakeOptions()
+      .then((o) => setServices(o.services))
+      .catch(() => {});
+    // Re-check whenever the account's request status changes (e.g. just sent).
+  }, [props.token, props.account.consultant_request]);
+
+  const set = <K extends keyof ConsultantApplicationInput>(key: K, value: ConsultantApplicationInput[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+  const toggleService = (id: string) =>
+    set("services", form.services.includes(id) ? form.services.filter((s) => s !== id) : [...form.services, id]);
+  const https = (v: string) => /^https:\/\/\S{4,}$/i.test(v.trim());
+  // Same rule as the server (LINKEDIN_PROFILE): a personal profile on linkedin.com ("https://" optional here).
+  const linkedin = (v: string) => /^(https?:\/\/)?([a-z]{2,3}\.)?linkedin\.com\/(in|pub)\/[^\s/?#]{2,}\S*$/i.test(v.trim());
+  // What's still missing, in plain words (the server checks the same rules).
+  const missing = [
+    !form.services.length && "pick at least one service",
+    !form.experience && "choose your experience",
+    form.tools.trim().length < 2 && "list your tools",
+    !linkedin(form.linkedin_url) && "add your LinkedIn profile link",
+    form.work_sample_url.trim() !== "" && !https(form.work_sample_url) && "fix the portfolio link (https://)",
+    form.project_summary.trim().length < MIN_SUMMARY && `describe a project (${MIN_SUMMARY}+ characters)`,
+    !form.agree_conduct && "agree to the code of conduct",
+  ].filter(Boolean) as string[];
+
+  async function send() {
     setBusy(true);
     setError(null);
     try {
-      props.onAccount(await requestConsultantRole(props.token));
+      props.onAccount(await requestConsultantRole(props.token, form));
+      setOpen(false);
+      setForm(EMPTY_APPLICATION);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "We couldn't send your request.");
+      setError(e instanceof Error ? e.message : "We couldn't send your application.");
     } finally {
       setBusy(false);
     }
   }
 
+  const latest = check?.latest;
+  const input = "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm";
+
   return (
     <Card className="max-w-xl">
       <h2 className="font-semibold">Work as a consultant</h2>
       <p className="mt-1 text-sm text-ink-muted">
-        Consultants sign in to their clients&apos; accounts and do the work for them. Every consultant is approved by us
-        first.
+        Consultants sign in to their clients&apos; accounts and do the work for them. Every consultant is screened and
+        approved by us first{check?.mode === "invite" ? ", and applications are by invitation for now" : ""}.
       </p>
-      {status === "pending" ? (
-        <p className="mt-4 text-sm" role="status">
-          <strong>Your request is waiting for approval.</strong> We&apos;ll switch your workspace to consultant mode once
-          it&apos;s approved.
-        </p>
-      ) : (
-        <>
-          {status === "denied" && (
-            <p className="mt-4 text-sm">Your last request wasn&apos;t approved. You&apos;re welcome to ask again.</p>
+
+      {/* The last decision, with the reason when it wasn't approved. */}
+      {latest?.status === "denied" && (
+        <div className="mt-4 rounded-xl border border-line bg-surface-2 p-3 text-sm">
+          <p>
+            <strong>Your application from {fmtDate(latest.submitted_at)} wasn&apos;t approved.</strong>
+          </p>
+          {latest.human_review_note && <p className="mt-1 text-ink-muted">{latest.human_review_note}</p>}
+          <p className="mt-2"><span className="font-medium">The main reason:</span> {latest.denial_reason_text}</p>
+          {latest.decision_note && (
+            <p className="mt-1 whitespace-pre-line"><span className="font-medium">Personal feedback:</span> {latest.decision_note}</p>
           )}
-          <Button className="mt-4" onClick={ask} disabled={busy}>
-            {busy ? "Sending…" : "Request to be a consultant"}
-          </Button>
-        </>
+        </div>
+      )}
+
+      {check && !check.can_apply && (
+        <p className="mt-4 text-sm" role="status">
+          <strong>{check.message}</strong>
+          {check.blocked === "pending" && " We'll switch your workspace to consultant mode once it's approved."}
+        </p>
+      )}
+
+      {check?.can_apply && !open && (
+        <Button className="mt-4" onClick={() => setOpen(true)}>
+          {latest?.status === "denied" ? "Apply again" : "Apply to be a consultant"}
+        </Button>
+      )}
+
+      {check?.can_apply && open && (
+        <div className="mt-4 space-y-4 text-sm">
+          <fieldset>
+            <legend className="font-medium">Services you can deliver</legend>
+            <div className="mt-2 grid gap-1 sm:grid-cols-2">
+              {services.map((s) => (
+                <label key={s.id} className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.services.includes(s.id)} onChange={() => toggleService(s.id)} />
+                  {s.name}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block">
+            <span className="font-medium">Hands-on data experience</span>
+            <select value={form.experience} onChange={(e) => set("experience", e.target.value as ConsultantApplicationInput["experience"])}
+              className={`${input} mt-1 sm:w-56`}>
+              <option value="">Choose…</option>
+              {check.experience_ranges.map((r) => (
+                <option key={r.id} value={r.id}>{r.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="font-medium">Tools you use well</span>
+            <input value={form.tools} maxLength={300} placeholder="e.g. SQL, pandas, Power BI, Tableau"
+              onChange={(e) => set("tools", e.target.value)} className={`${input} mt-1`} />
+          </label>
+          <label className="block">
+            <span className="font-medium">Your LinkedIn profile (required)</span>
+            <input type="url" value={form.linkedin_url} maxLength={500} placeholder="https://www.linkedin.com/in/your-name"
+              onChange={(e) => set("linkedin_url", e.target.value)} className={`${input} mt-1`} />
+            <span className="mt-1 block text-xs text-ink-muted">
+              We use it to confirm you&apos;re a real, verifiable person and to see your experience.
+            </span>
+          </label>
+          <label className="block">
+            <span className="font-medium">A portfolio or work sample (optional)</span>
+            <input type="url" value={form.work_sample_url} maxLength={500}
+              placeholder="https://github.com/you/project — a report, notebook or dashboard"
+              onChange={(e) => set("work_sample_url", e.target.value)} className={`${input} mt-1`} />
+          </label>
+          <label className="block">
+            <span className="font-medium">A data project you delivered</span>
+            <textarea value={form.project_summary} maxLength={2000} rows={5}
+              placeholder="The problem, what you did (data, tools, steps), and the result for the business."
+              onChange={(e) => set("project_summary", e.target.value)} className={`${input} mt-1`} />
+            <span className="mt-1 block text-xs text-ink-muted">
+              <span className="font-mono">{form.project_summary.trim().length}</span> / {MIN_SUMMARY}+ characters
+            </span>
+          </label>
+          <fieldset className="rounded-xl border border-line p-3">
+            <legend className="px-1 font-medium">Consultant code of conduct</legend>
+            <ul className="list-inside list-disc space-y-1 text-ink-muted">
+              {check.code_of_conduct.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
+            </ul>
+            <label className="mt-3 flex items-start gap-2">
+              <input type="checkbox" className="mt-1" checked={form.agree_conduct}
+                onChange={(e) => set("agree_conduct", e.target.checked)} />
+              I agree to follow the code of conduct.
+            </label>
+          </fieldset>
+          {missing.length > 0 && <p className="text-xs text-ink-muted">To send it: {missing.join(", ")}.</p>}
+          <div className="flex gap-2">
+            <Button onClick={send} disabled={busy || missing.length > 0}>
+              {busy ? "Sending…" : "Send my application"}
+            </Button>
+            <Button variant="secondary" onClick={() => setOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
       )}
       <ErrorBox message={error} />
     </Card>

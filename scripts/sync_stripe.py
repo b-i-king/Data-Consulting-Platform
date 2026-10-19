@@ -9,8 +9,10 @@ For every TOOL (and the All tools bundle) in SUBSCRIPTIONS it makes sure Stripe 
     two PRICES   monthly and annual, found later by their "lookup key":
                  dcp_data_visualization_month, dcp_data_visualization_year
 A client's subscription holds one item per tool they pick ("build your own
-package"); the bundle is a single item. (Consulting time is paid on Cal.com,
-not through Stripe, so there is no consulting price here.)
+package"); the bundle is a single item.
+It also makes the two products a consultant's SETUP and ONGOING HELP are sold
+under (their prices are sent at checkout — api/services/consulting_billing.py).
+Hourly consulting sessions are paid on Cal.com, so there's no price for those.
 
 Normally you don't need to run this after a price change: the Admin panel
 (Admin -> Prices) updates Stripe when you save. Run it once when you first
@@ -44,7 +46,7 @@ sys.path.insert(0, str(ROOT))
 from api.core.config import get_settings  # noqa: E402
 
 # The helpers live in the API (the Admin panel's price editor uses them too).
-from api.services.stripe_catalog import _cents, ensure_price, ensure_product, sync, sync_plan  # noqa: E402,F401
+from api.services.stripe_catalog import _cents, ensure_price, ensure_product, sync, sync_consulting, sync_plan  # noqa: E402,F401
 
 
 async def _load_db_prices() -> None:
@@ -82,4 +84,7 @@ if __name__ == "__main__":
     plan_rows = sync(stripe, dry=args.dry_run)
     for row in plan_rows:
         print(f"  {row['id']}: {row['stripe_monthly_price_id']} (month), {row['stripe_annual_price_id']} (year)")
+    print("Syncing the consultant products (setup, ongoing help)...")
+    for row in sync_consulting(stripe, dry=args.dry_run):
+        print(f"  {row['key']}: {row['stripe_product_id']}")
     print("Done.")

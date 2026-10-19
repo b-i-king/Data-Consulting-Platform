@@ -56,6 +56,8 @@ services:
         value: "80"
       - key: ADMIN_EMAILS
         sync: false        # your email (admin + default consultant); approves other consultants
+      - key: CONSULTANT_APPLICATIONS
+        value: "invite"    # only invited emails may apply to be a consultant ("open" = anyone with an account)
       - key: PRICE_PER_RUNTIME_MINUTE_USD
         value: "0.50"
       # 512 MB of memory: a 14 MB CSV peaks around 300-375 MB while cleaning and

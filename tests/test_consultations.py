@@ -182,7 +182,10 @@ def test_each_consultant_has_their_own_links_and_webhook():
     assert bad.status_code == 422                                      # https only
     saved = client.put("/api/consultant/settings", headers=_h(coach), json={
         "free_booking_url": "https://cal.com/coach-own/30min", "paid_booking_url": "https://cal.com/coach-own/session"}).json()
-    assert not saved["setup_needed"] and saved["free_booking_url"] == "https://cal.com/coach-own/30min"
+    assert saved["free_booking_url"] == "https://cal.com/coach-own/30min"
+    done = {st["id"]: st["done"] for st in saved["onboarding"]["steps"]}
+    assert done["free_link"] and done["paid_link"] and not done["webhook"]
+    assert saved["setup_needed"]                                       # onboarding isn't finished yet
     secret = client.post("/api/consultant/settings/webhook-secret", headers=_h(coach)).json()["webhook"]
     cid = next(iter(account_store._consultants))
     assert len(secret["secret"]) >= 40 and secret["path"] == f"/api/consultations/calcom-webhook/{cid}"

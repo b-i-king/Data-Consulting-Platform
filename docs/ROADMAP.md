@@ -42,8 +42,11 @@ Still to do:
 3. Consultants: add two-factor sign-in (Supabase MFA), since a consultant can
    open every client assigned to them. (Consultants are already approved one by
    one by an admin; there is no shared access code.)
-4. Email the person when an admin approves or denies their consultant request
-   (today they see it in Settings, and their workspace switches on its next load).
+4. Email the person when an admin approves or denies their consultant application
+   (today they see it — with the reason and the date they can apply again — in
+   Settings, and their workspace switches on its next load), and email the
+   invitation when an admin adds someone to the consultant invite list (today
+   the admin copies the sign-up link and sends it).
 5. Google and Apple sign-in (Supabase Auth providers) — no table changes needed.
 6. ✅ Sign-in lockout: 3 wrong passwords in a row lock sign-in for 15 minutes, each try says how many
    are left, and a password reset unlocks at once (`api/services/login_guard.py`). Later: a per-IP

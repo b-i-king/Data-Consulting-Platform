@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Terms of Service" };
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" updated="10/17/2026">
+    <LegalPage title="Terms of Service" updated="10/19/2026">
       <Section title="Acceptance of Terms">
         <p>
           By using <strong>{SITE_NAME}</strong> (&quot;the Platform&quot;), operated by <strong>{COMPANY}</strong>, you
@@ -68,6 +68,29 @@ export default function TermsPage() {
           <li>
             Your first 30-minute consultation is free (Data Strategy &amp; Discovery is paid from the start). Later
             sessions are booked and paid through our scheduling page.
+          </li>
+        </List>
+      </Section>
+
+      <Section title="Paying a Consultant Through the Platform">
+        <List>
+          <li>
+            A consultant&apos;s setup is a one-time fee. It isn&apos;t refundable once the work has started.
+          </li>
+          <li>
+            Ongoing help is priced by the services you need help with and renews each month or year. You can cancel
+            anytime; it stays on, and is paid, until the end of the current period. There are no refunds for unused
+            time, except when your consultant becomes unavailable — then ongoing help ends at once and we refund the
+            time you paid for but didn&apos;t get.
+          </li>
+          <li>
+            You can have one ongoing help at a time. To change the services or switch consultants, end it and choose
+            again when it ends.
+          </li>
+          <li>
+            Consultants are independent contractors, not our employees. Your payment goes to your consultant through our
+            payment processor, minus our service fee. Your consultant may help beyond the hours shown at their
+            discretion.
           </li>
         </List>
       </Section>

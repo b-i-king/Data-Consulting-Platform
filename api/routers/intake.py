@@ -34,7 +34,8 @@ async def intake_options():
         "supported_extensions", "file_formats", "excluded_formats", "limits"
         (max_upload_mb, max_files_per_upload), "pricing" (per-minute rate,
         billing increment), "booking_url", "subscriptions",
-        "consulting_rate_per_hour_usd", "consultant" ({"name"} or None until the
+        "consulting_rate_per_hour_usd", "consulting" (a consultant's setup fee and
+        ongoing-help prices, pricing.consulting_catalog), "consultant" ({"name"} or None until the
         default consultant has signed in once), "industries" (NAICS tree) and
         "company_sizes".
 
@@ -67,6 +68,8 @@ async def intake_options():
         "subscriptions": pricing.subscription_catalog(),
         # Consulting after the free 30-minute first consultation.
         "consulting_rate_per_hour_usd": pricing.consulting_rate(),
+        # A consultant's one-time SETUP fee and ONGOING HELP (5 / 10 / 20 hours a week).
+        "consulting": pricing.consulting_catalog(),
         # The default consultant's first name, for "I'd like Brandon to do this
         # for me" at signup (None until a consultant has signed in once).
         "consultant": {"name": c["display_name"]} if (c := await consultants.default_consultant()) else None,

@@ -84,7 +84,8 @@ export function AddServiceConfirm(props: {
             <TotalRow strong label={`Package total per ${per}`} value={fmtUsd(packageTotal(plans, next, interval))} />
           </div>
           <p className="text-xs text-ink-muted">
-            Try it now in this preview; you&apos;ll start the package after creating your account. Cancel anytime.
+            See a quick preview now (once per tool each visit); you&apos;ll get the full results after creating
+            your account and starting the package. Cancel anytime.
           </p>
         </>
       ) : (

@@ -27,6 +27,7 @@ WHERE VALUES COME FROM (in priority order)
 """
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -131,10 +132,15 @@ class Settings(BaseSettings):
     # Email addresses of the platform ADMINS (comma-separated; normally just
     # yours). An admin is also a consultant, and the FIRST admin is the default
     # consultant: "do it for me" clients who don't pick anyone go to them.
-    # Everyone else becomes a consultant only by asking ("I'd like to work as a
-    # consultant") and being APPROVED by an admin in the workspace's Admin panel
-    # — there is no access code to share or guess.
+    # Everyone else becomes a consultant only by APPLYING (a screening
+    # application, from a signed-in account) and being APPROVED by an admin in
+    # the workspace's Admin panel — there is no access code to share or guess.
     admin_emails: str = Field(default="", alias="ADMIN_EMAILS")
+    # Who may apply to be a consultant (api/services/consultants.py):
+    #   "invite" (default) — only emails an admin added to the invite list
+    #                        (Admin panel -> Consultant invites)
+    #   "open"             — anyone with an account
+    consultant_applications: Literal["invite", "open"] = Field(default="invite", alias="CONSULTANT_APPLICATIONS")
 
     # ── Integrations: clients' own databases (api/services/cloud_sources.py) ──
     # Leave OFF in production: when true, a client's database may be on a
@@ -146,6 +152,9 @@ class Settings(BaseSettings):
     # everyone, PREMIUM with the AI package. Admins have no limit; a consultant
     # uses the allowance of the client they're working on.
     ai_free_monthly: int = Field(default=20, alias="AI_FREE_MONTHLY")
+    # Paid tools without the package (api/services/skill_access.py): ONE preview
+    # per tool per visit — a "visit" is the same IP address within this many hours.
+    skill_preview_hours: float = Field(default=8, alias="SKILL_PREVIEW_HOURS")
     # Sign-in lockout (api/services/login_guard.py): wrong passwords in a row
     # before sign-in is locked, and for how many minutes. A password reset unlocks at once.
     login_max_attempts: int = Field(default=3, alias="LOGIN_MAX_ATTEMPTS")

@@ -1,8 +1,11 @@
 """
 Payments with Stripe: subscriptions to tools (monthly or annual).
 
-Consulting time is NOT sold here: clients book and pay for it on Cal.com
-(the free first call, then PAID_BOOKING_URL) — see api/services/consultations.py.
+A consultant's SETUP fee and ONGOING HELP are sold in
+api/services/consulting_billing.py (Stripe Connect: the consultant gets their
+share); this file routes their webhook events there. Hourly consulting sessions
+are paid on Cal.com (the free first call, then PAID_BOOKING_URL) — see
+api/services/consultations.py.
 
 WHAT THIS FILE DOES
 -------------------
@@ -418,6 +421,9 @@ async def cancel_everything(account: dict) -> int:
         >>> await cancel_everything(owner)
         1
     """
+    from api.services import consulting_billing   # imported here: it imports this file
+
+    await consulting_billing.cancel_all(account)   # ongoing help from a consultant, too
     live = await account_store.list_subscriptions(str(account["id"]))
     if stripe_enabled():
         stripe = _stripe()
@@ -552,7 +558,12 @@ async def handle_webhook(payload: bytes, signature: str | None) -> str:
 
     Handled events:
     - customer.subscription.created / updated / deleted -> save the subscription
-      (this is what switches a paid plan on or off).
+      (this is what switches a paid plan on or off) — or, for a consultant's
+      ongoing help (metadata kind "consulting"), its engagement.
+    - checkout.session.completed for a consultant purchase -> the setup is paid,
+      or the retainer gets its subscription id (consulting_billing).
+    - charge.refunded (a refund made in the Stripe dashboard) -> a consultant
+      setup becomes "refunded".
     Other event types are accepted and ignored.
 
     Args:
@@ -583,8 +594,17 @@ async def handle_webhook(payload: bytes, signature: str | None) -> str:
     event = json.loads(payload)
     obj = event["data"]["object"]
     kind = event["type"]
+    from api.services import consulting_billing   # imported here: it imports this file
+
     if kind in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
-        await _save_subscription(obj)
+        if consulting_billing.is_consulting(obj):
+            await consulting_billing.save_subscription(obj)
+        else:
+            await _save_subscription(obj)
+    elif kind == "checkout.session.completed" and consulting_billing.is_consulting(obj):
+        await consulting_billing.checkout_completed(obj)
+    elif kind == "charge.refunded":
+        await consulting_billing.charge_refunded(obj)
     return kind
 
 

@@ -1,12 +1,16 @@
 """
 Admin endpoints (admins only — everyone else gets 403).
 
-    GET  /api/admin/consultant-requests                 who asked to be a consultant
-                                                        (waiting first), plus every
+    GET  /api/admin/consultant-requests                 consultant applications (waiting
+                                                        first, with the screening answers),
+                                                        the invite list, and every
                                                         consultant and how full they are
     POST /api/admin/consultant-requests/{id}/approve    make them a consultant (their
                                                         dim.consultants row is created at once)
-    POST /api/admin/consultant-requests/{id}/deny       say no (they stay a client)
+    POST /api/admin/consultant-requests/{id}/deny       say no: a reason (they see it) and a
+                                                        waiting period (3, 6 or 12 months)
+    POST   /api/admin/consultant-invites                add an email that may apply
+    DELETE /api/admin/consultant-invites/{email}        take it off the list
     POST /api/admin/consultants/{id}/deactivate         switch a consultant off (their
                                                         clients move to someone with room)
     POST /api/admin/consultants/{id}/reactivate         switch them back on
@@ -19,6 +23,8 @@ Admin endpoints (admins only — everyone else gets 403).
     POST /api/admin/accounts/{id}/reset-mfa             clear two-step sign-in (lost phone + backup codes)
     GET  /api/admin/prices                              every tool's live price
     PUT  /api/admin/prices/{plan_id}                    change a price or trial (Stripe + dim.plan_prices)
+    GET  /api/admin/consulting-prices                   a consultant's help: setup, rate, hours rule, fee
+    PUT  /api/admin/consulting-prices                   change them (dim.consulting_prices)
     GET  /api/admin/sales                               the yearly seasonal sales
     PUT  /api/admin/sales/{sale_id}                     change one (dates, percent, on / off)
 
@@ -34,7 +40,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.core.security import get_current_account
-from api.models.admin import DeactivateIn, HealthcareIn, HipaaDecisionIn, PlanPriceIn, SeasonalSaleIn, TesterIn
+from api.core.config import get_settings
+from api.models.admin import (ConsultantDecisionIn, ConsultantInviteIn, ConsultingPricesIn, DeactivateIn, HealthcareIn,
+                              HipaaDecisionIn, PlanPriceIn, SeasonalSaleIn, TesterIn)
 from api.services import account_store, billing, consultants, hipaa, mfa, offers, price_store, sessions
 from api.services.entitlements import is_admin
 
@@ -64,24 +72,59 @@ async def _admin(token: dict) -> dict:
     return me
 
 
-def _request_out(acc: dict) -> dict:
+def _iso(d):
+    """A date or date-time as ISO text (None stays None)."""
+    return d.isoformat() if d else None
+
+
+def _application_out(app: dict | None) -> dict | None:
+    """
+    The screening answers and decision of one application, for the Admin panel.
+
+    Args:
+        app: dict | None, a consultant_applications row (with "times_applied").
+
+    Returns:
+        dict | None: {"services", "experience", "experience_label", "tools", "linkedin_url",
+        "work_sample_url", "project_summary", "submitted_at", "times_applied",
+        "denial_reason", "decision_note", "reapply_after"}, or None (a request
+        from before screening existed).
+    """
+    if app is None:
+        return None
+    return {
+        "services": app["services"],
+        "experience": app["experience"],
+        "experience_label": consultants.EXPERIENCE_RANGES.get(app["experience"], app["experience"]),
+        "tools": app["tools"],
+        "linkedin_url": app["linkedin_url"],
+        "work_sample_url": app.get("work_sample_url"),
+        "project_summary": app["project_summary"],
+        "submitted_at": _iso(app.get("submitted_at")),
+        "times_applied": app.get("times_applied", 1),
+        "denial_reason": app.get("denial_reason"),
+        "decision_note": app.get("decision_note"),
+        "reapply_after": _iso(app.get("reapply_after")),
+    }
+
+
+def _request_out(acc: dict, app: dict | None = None) -> dict:
     """
     One consultant request as the Admin panel shows it.
 
     Args:
-        acc: dict, the accounts row of the person who asked.
+        acc: dict, the accounts row of the person who applied.
+        app: dict | None, their latest application (None for an old request).
 
     Returns:
         dict: {"account_id", "name", "email", "company_name", "location",
-        "status", "requested_at", "decided_at"} (dates as ISO text).
+        "status", "requested_at", "decided_at", "application"} (dates as ISO text).
 
     Example:
-        >>> _request_out(kim)["status"]
-        'pending'
+        >>> _request_out(kim, app)["application"]["experience_label"]
+        '3–5 years'
     """
-    def iso(d):
-        return d.isoformat() if d else None
-
+    iso = _iso
     return {
         "account_id": str(acc["id"]),
         "name": f"{acc['first_name']} {acc['last_name']}",
@@ -91,6 +134,7 @@ def _request_out(acc: dict) -> dict:
         "status": acc["consultant_request"],
         "requested_at": iso(acc.get("consultant_requested_at")),
         "decided_at": iso(acc.get("consultant_decided_at")),
+        "application": _application_out(app),
     }
 
 
@@ -103,8 +147,20 @@ async def _panel() -> dict:
         (active ones), "team": [consultants.team_row, ...] (everyone, with
         active / deactivated dates), "deletions": account_store.deletion_summary()}.
     """
+    latest: dict[str, dict] = {}
+    for app in await account_store.list_applications():   # newest first: keep each person's latest
+        latest.setdefault(app["account_id"], app)
     return {
-        "requests": [_request_out(a) for a in await account_store.list_consultant_requests()],
+        "requests": [_request_out(a, latest.get(str(a["id"]))) for a in await account_store.list_consultant_requests()],
+        # Screening: who may apply, and the admin's choices when denying.
+        "applications_mode": get_settings().consultant_applications,
+        "invites": [{"email": i["email"], "note": i.get("note"), "created_at": _iso(i.get("created_at")),
+                     "has_account": await account_store.get_account_by_email(i["email"]) is not None}
+                    for i in await account_store.list_invites()],
+        "denial_reasons": [{"id": k, "text": v} for k, v in consultants.DENIAL_REASONS.items()],
+        "reapply_choices": list(consultants.REAPPLY_CHOICES),
+        "min_feedback_chars": consultants.MIN_FEEDBACK_CHARS,
+        "human_review_note": consultants.HUMAN_REVIEW_NOTE,   # what the applicant sees with a denial
         "consultants": await consultants.directory(),
         "team": await consultants.team(),
         "deletions": await account_store.deletion_summary(),
@@ -138,25 +194,29 @@ async def consultant_requests(token: Annotated[dict, Depends(get_current_account
 
 
 @router.post("/consultant-requests/{account_id}/{decision}")
-async def decide_request(account_id: str, decision: str, token: Annotated[dict, Depends(get_current_account)]):
+async def decide_request(account_id: str, decision: str, token: Annotated[dict, Depends(get_current_account)],
+                         body: ConsultantDecisionIn | None = None):
     """
     POST /api/admin/consultant-requests/{account_id}/approve (or /deny).
 
     Approving makes the person a consultant straight away (capacity 3, which
-    they can change in their workspace). Denying keeps them a client; they may
-    ask again later.
+    they can change in their workspace). Denying keeps them a client, needs a
+    reason they'll see, and starts the waiting period (3, 6 or 12 months)
+    before they may apply again.
 
     Args:
-        account_id: str, the person who asked.
+        account_id: str, the person who applied.
         decision: str, "approve" or "deny".
         token: dict, the decoded login token (injected by `get_current_account`).
+        body: ConsultantDecisionIn | None, {"denial_reason", "note", "wait_months"}
+            (required to deny; optional note when approving).
 
     Returns:
         dict: the refreshed Admin panel (see `_panel`).
 
     Raises:
         HTTPException: 403 for non-admins; 404 for an unknown decision or
-            account; 400 if the person never asked.
+            account; 400 if nothing is waiting or a denial has no reason.
 
     Example:
         POST /api/admin/consultant-requests/7b1e.../approve
@@ -165,7 +225,60 @@ async def decide_request(account_id: str, decision: str, token: Annotated[dict, 
     me = await _admin(token)
     if decision not in ("approve", "deny"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Use /approve or /deny.")
-    await consultants.decide(account_id, decision == "approve", me)
+    body = body or ConsultantDecisionIn()
+    await consultants.decide(account_id, decision == "approve", me, denial_reason=body.denial_reason,
+                             note=body.note, wait_months=body.wait_months)
+    return await _panel()
+
+
+@router.post("/consultant-invites")
+async def add_consultant_invite(body: ConsultantInviteIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/consultant-invites — let this email apply to be a consultant.
+
+    Share the sign-up link with them yourself; they create an account with
+    THIS email, then apply from Settings -> Account.
+
+    Args:
+        body: ConsultantInviteIn, {"email", "note"} (the note is for admins only).
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: the refreshed Admin panel (see `_panel`).
+
+    Raises:
+        HTTPException: 403 for non-admins; 422 for a malformed email.
+
+    Example:
+        POST /api/admin/consultant-invites  {"email": "kim@example.com", "note": "Referred by Ana"}
+        -> 200 {"invites": [{"email": "kim@example.com", ...}], ...}
+    """
+    me = await _admin(token)
+    await consultants.invite(body.email, me, body.note)
+    return await _panel()
+
+
+@router.delete("/consultant-invites/{email}")
+async def remove_consultant_invite(email: str, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    DELETE /api/admin/consultant-invites/{email} — take an email off the invite list.
+
+    Stops NEW applications from that email only: an application already sent
+    and an approved consultant are not affected.
+
+    Args:
+        email: str, the invited address.
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: the refreshed Admin panel (see `_panel`).
+
+    Raises:
+        HTTPException: 403 for non-admins; 404 if that email wasn't invited.
+    """
+    await _admin(token)
+    if not await account_store.remove_invite(email):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That email isn't on the invite list.")
     return await _panel()
 
 
@@ -202,6 +315,10 @@ async def deactivate_consultant(consultant_id: str, body: DeactivateIn,
         notice += f" {result['moved']} client{'s' if result['moved'] != 1 else ''} moved to other consultants."
     if result["waiting"]:
         notice += f" {result['waiting']} waiting for a consultant (everyone else is full)."
+    if result.get("help_ended"):
+        who = "; ".join(f"{h['client']} ({h['email']})" for h in result["help_ended"])
+        notice += (f" Their ongoing help ended now for: {who}. Refund the unused time in the Stripe dashboard "
+                   "(Payments -> the payment -> Refund, with \"Reverse transfer\" ticked).")
     return {**await _panel(), "notice": notice}
 
 
@@ -505,3 +622,32 @@ async def change_sale(sale_id: str, body: SeasonalSaleIn, token: Annotated[dict,
     await offers.set_sale(sale_id, name=body.name, starts_on=body.starts_on, ends_on=body.ends_on,
                           percent_off=body.percent_off, active=body.active, admin=me)
     return {"sales": await offers.list_sales(), "running": await offers.current_sale()}
+
+
+@router.get("/consulting-prices")
+async def get_consulting_prices(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    GET /api/admin/consulting-prices — what a consultant's help costs (Admin -> Prices).
+
+    Returns:
+        dict: price_store.consulting_prices() — {"values", "defaults", "updated_at", "example"}.
+    """
+    await _admin(token)
+    return await price_store.consulting_prices()
+
+
+@router.put("/consulting-prices")
+async def put_consulting_prices(body: ConsultingPricesIn, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    PUT /api/admin/consulting-prices — change the setup fee, hourly rate, hours rule or platform fee.
+
+    New purchases use them at once; running ongoing help keeps the price it started at.
+
+    Returns:
+        dict: the saved numbers (price_store.consulting_prices()).
+
+    Raises:
+        HTTPException: 400 when the weekly maximum is below the Data Cleaning / Engineering hours.
+    """
+    me = await _admin(token)
+    return await price_store.set_consulting_prices(body.model_dump(exclude_none=True), me)

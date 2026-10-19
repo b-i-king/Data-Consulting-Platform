@@ -25,10 +25,11 @@
 // CONSULTANTS use the same form with no access code:
 //   * SIGN IN: a clean "Account | Consultant" switch at the top. "Consultant"
 //     only works for an approved consultant (the server says why otherwise).
-//   * SIGN UP: "Signing up as" at the bottom — Client · Request to be a
-//     consultant (an admin approves or denies it, in the workspace's Admin
-//     panel) · I'm an admin (only for an ADMIN_EMAILS address). Nobody can
-//     make themselves a consultant. Consultants and admins don't see the
+//   * SIGN UP: "Signing up as" at the bottom — Client · I'm an admin (only
+//     for an ADMIN_EMAILS address). There is NO consultant choice here: an
+//     invited consultant signs up as a client, then sends the screening
+//     application from Settings -> Account (an admin approves or denies it).
+//     Nobody can make themselves a consultant. Admins don't see the
 //     "I'd like a consultant" box.
 //
 // FOOLPROOF INPUT (rules in lib/validation.ts, enforced again on the server):
@@ -98,8 +99,7 @@ function Segmented<T extends string>(props: {
 }
 
 const SIGNUP_AS: { id: SignupAs; label: string; note: string }[] = [
-  { id: "client", label: "Client", note: "Clean, explore and store your own data — or have a consultant do it." },
-  { id: "consultant", label: "Request to be a consultant", note: "We review every request. Once approved, your workspace switches to consultant mode." },
+  { id: "client", label: "Client", note: "Clean, explore and store your own data — or have a consultant do it. Invited to work as a consultant? Sign up here, then apply from Settings → Account." },
   { id: "admin", label: "I'm an admin", note: "Only for the platform's admin email addresses." },
 ];
 

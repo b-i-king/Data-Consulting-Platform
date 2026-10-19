@@ -28,10 +28,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runSkill, saveText } from "@/lib/api";
 import { buildDashboardHtml } from "@/lib/dashboardFile";
-import type { CleaningInput, DashboardData, DashboardVisual, PeriodRow } from "@/lib/types";
+import type { CleaningInput, DashboardData, DashboardVisual, PeriodRow, SkillResult } from "@/lib/types";
 import HBarChart from "@/components/charts/HBarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
 import KpiCard, { ChangePill } from "./KpiCard";
+import SkillPreview from "./SkillPreview";
 import TimeBar from "./TimeBar";
 import { Button, ErrorBox } from "@/components/wizard/ui";
 
@@ -155,6 +156,8 @@ export default function Dashboard(props: {
     }
   }
   const [data, setData] = useState<DashboardData | null>(null);
+  // Without Data Visualization in the package the server sends a PREVIEW (headline KPIs only).
+  const [preview, setPreview] = useState<SkillResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -185,6 +188,11 @@ export default function Dashboard(props: {
     runSkill("build-dashboard", input, { ...skillParams, include_html: false }, groupId)
       .then((r) => {
         if (cancelled) return;
+        if (r.preview) {
+          setPreview(r);
+          return;
+        }
+        setPreview(null);
         const d = r.data as unknown as DashboardData;
         if (!loadedOnce.current) {
           // First load: start on the skill's suggested range and comparison.
@@ -229,6 +237,8 @@ export default function Dashboard(props: {
     }
   }
 
+  // The preview keeps showing (it was this visit's one) even if a later rebuild is refused.
+  if (preview) return <SkillPreview result={preview} />;
   if (!data) return error ? <ErrorBox message={error} /> : <p className="py-8 text-sm text-ink-muted">Building your dashboard…</p>;
 
   // Numbers in US formats, by the metric's format (currency, percent, days, number).

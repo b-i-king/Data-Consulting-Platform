@@ -113,6 +113,7 @@ import { ConsultantSetup } from "./SettingsPanel";
 import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
 import WarehouseLoad from "@/components/explore/WarehouseLoad";
 import BillingPanel from "@/components/billing/BillingPanel";
+import ConsultantHelp from "@/components/billing/ConsultantHelp";
 import DashboardTabs from "@/components/explore/DashboardTabs";
 import AssistantPanel from "@/components/explore/AssistantPanel";
 import CompareOverTime from "@/components/explore/CompareOverTime";
@@ -869,11 +870,11 @@ export default function Workspace() {
         {isConsultant && setupNeeded && accountTab !== "consultant" && (
           <div role="status" className="flex flex-col gap-2 rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
             <span>
-              <strong>Finish setting up:</strong> add your Cal.com booking links and webhook, so your clients book you (and
-              pay you) directly.
+              <strong>Welcome aboard! Finish your onboarding:</strong> two-step sign-in, the independent-contractor terms,
+              and your Cal.com booking links and webhook, so clients can book you (and pay you) directly.
             </span>
             <Button variant="secondary" onClick={() => setAccountTab("consultant")}>
-              Open Consultant settings
+              Continue onboarding
             </Button>
           </div>
         )}
@@ -996,6 +997,10 @@ export default function Workspace() {
             )}
             <BillingPanel key={suggestTool ?? "billing"} token={session.token} plan={plan} bookingUrl={bookFor()}
               onChanged={reloadPlan} suggestTool={suggestTool} />
+            {/* Paying a consultant for setup / ongoing help (not for admins' own accounts: nothing to buy). */}
+            {(plan.acting || !session.account.is_admin) && (
+              <ConsultantHelp key={`consult-${planAccountId}`} token={session.token} acting={plan.acting} />
+            )}
           </>
         )}
         {adding && session && (
