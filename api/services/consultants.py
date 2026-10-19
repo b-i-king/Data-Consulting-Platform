@@ -15,16 +15,18 @@ WHO IS A CONSULTANT? (no access codes)
 --------------------------------------
   * ADMINS are the ADMIN_EMAILS addresses (normally just the owner). An admin
     is always a consultant; the first admin is the DEFAULT consultant.
-  * Anyone else ASKS ("I'd like to work as a consultant" at sign-up, or in the
-    workspace) and waits. An admin APPROVES or DENIES in the Admin panel.
-    Approval creates their dim.consultants row at once, so their next page
-    load shows the consultant workspace. Nobody can make themselves a consultant.
+  * Anyone else goes through SCREENING (below) and waits. An admin APPROVES
+    or DENIES in the Admin panel. Approval creates their dim.consultants row
+    at once, so their next page load shows the consultant workspace. Nobody
+    can make themselves a consultant.
 
   is_admin_email(email)       is this address in ADMIN_EMAILS?
   sync_roles(account)         at sign-up / sign-in: admins get their flags and
                               consultant row; approved consultants get their row
-  request(account)            "I'd like to work as a consultant"
-  decide(account_id, ok, me)  an admin approves or denies
+  application_status(acc)     may this person apply now? (and their last result)
+  apply(account, answers)     submit the screening application
+  invite(email, admin)        an admin adds an email to the invite list
+  decide(account_id, ok, me)  an admin approves or denies (a reason + waiting period)
   default_consultant()        who "do it for me" clients go to when they pick nobody
   pick(consultant_id)         CAPACITY RULE: the consultant a new client gets
   directory()                 every consultant with how full they are (the picker)
@@ -35,6 +37,33 @@ WHO IS A CONSULTANT? (no access codes)
                               move to someone with room (or wait)
   reactivate(id, admin)       an admin switches them back on
   team()                      every consultant, active or not (Admin panel)
+
+SCREENING (dim.consultant_invites, dim.consultant_applications)
+---------------------------------------------------------------
+  1. INVITE ONLY to start (CONSULTANT_APPLICATIONS = "invite", the default):
+     an admin adds the person's email in Admin -> Consultant invites. With
+     "open", anyone with an account may apply.
+  2. ACCOUNT FIRST: the application is sent from a signed-in account
+     (Settings -> Account -> "Work as a consultant"), never at sign-up.
+  3. THE APPLICATION: the services they can deliver (of the seven), their
+     hands-on data experience (EXPERIENCE_RANGES), tools, their LinkedIn
+     profile (REQUIRED — how we confirm a real, verifiable person), an optional
+     portfolio / work sample, a project they delivered, and the CODE_OF_CONDUCT.
+  4. REVIEW (the admin; Admin panel checklist): verify who they are, check
+     experience and skills against the services, read the work sample, hold a
+     short screening call, then approve — or deny with one of DENIAL_REASONS
+     plus PERSONAL FEEDBACK (required, MIN_FEEDBACK_CHARS). They see both, with
+     HUMAN_REVIEW_NOTE: a real person decided, and it's a judgment call.
+  5. WAITING PERIOD: a denial sets reapply_after = today + 3, 6 or 12 months
+     (MIN_REAPPLY_MONTHS = 3 at least). Applying again before then is refused.
+  Each application is its own row, so the Admin panel shows repeat applicants.
+  6. ONBOARDING after approval (Settings -> Consultant; `onboarding`):
+     two-step sign-in, the independent-contractor agreement (CONTRACTOR_TERMS:
+     they get paid directly and pay their own taxes), the free and paid Cal.com
+     booking links (the paid one connected to their own Stripe / PayPal), the
+     Cal.com webhook, and their capacity. Until the required steps are done the
+     workspace shows "Finish your onboarding" and their clients see the
+     platform's default booking links.
 
 DEACTIVATED CONSULTANTS
 -----------------------
@@ -67,10 +96,13 @@ docs/ROADMAP.md.
 
 from __future__ import annotations
 
+import calendar
+from datetime import date
+
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store
+from api.services import account_store, mfa, pricing
 from api.services.entitlements import is_admin, plan_holder_id
 
 MAX_CAPACITY = 10   # the most clients one consultant can take (same CHECK in db/schema.sql)
@@ -151,59 +183,318 @@ async def sync_roles(account: dict) -> dict:
     return account
 
 
-async def request(account: dict) -> dict:
+# ── Screening: invite list, application, decision, waiting period ────────────
+
+MIN_REAPPLY_MONTHS = 3            # a denied person waits at least this long to apply again
+MIN_FEEDBACK_CHARS = 20           # a denial's personal feedback: at least a real sentence
+
+# Hands-on data experience, as the application's choices (same ids as the CHECK in db/schema.sql).
+EXPERIENCE_RANGES: dict[str, str] = {
+    "lt_1": "Less than 1 year",
+    "1_3": "1–3 years",
+    "3_5": "3–5 years",
+    "5_10": "5–10 years",
+    "10_plus": "10+ years",
+}
+
+# Shown with every denial, above the reason and the personal feedback.
+HUMAN_REVIEW_NOTE = ("A real person on our team read your application. This decision is a judgment call — it's "
+                     "subjective, not a score, and it isn't a measure of your worth or your potential. We've "
+                     "shared our honest reasons so you know what we saw, and we'd be glad to see a new "
+                     "application when the waiting period ends.")
+REAPPLY_CHOICES = (3, 6, 12)      # the waiting periods an admin can choose when denying
+
+# Why an application can be turned down: a FIXED list (the person sees the
+# text, so it stays fair and consistent). Same ids as the CHECK in db/schema.sql.
+DENIAL_REASONS: dict[str, str] = {
+    "identity_unverified": "We couldn't verify your identity or professional profile.",
+    "not_enough_experience": "You don't have enough hands-on data experience for client work yet.",
+    "skills_mismatch": "Your skills don't match the services our clients need right now.",
+    "work_sample": "Your work sample or project description didn't show the skills the work needs.",
+    "conduct": "We had concerns about data handling, confidentiality or professionalism.",
+    "incomplete": "The application was incomplete or we couldn't review it.",
+    "not_adding": "We aren't adding consultants for these services right now.",
+}
+
+# What every consultant agrees to before applying (the application form shows it).
+CODE_OF_CONDUCT: tuple[str, ...] = (
+    "Keep every client's data confidential, and use it only for the work they asked for.",
+    "Work on client data only inside this platform — never copy or store it anywhere else.",
+    "Be honest about your skills; take only work you can deliver well.",
+    "Keep client work and payments on the platform (no taking clients off it).",
+    "Two-step sign-in stays on for your account.",
+)
+
+# Why someone can't apply right now (GET /api/accounts/consultant-application).
+_BLOCKED = {
+    "already": "You're already a consultant.",
+    "pending": "Your application is waiting for review.",
+    "not_invited": ("Consultant applications are by invitation for now. If you've been invited, "
+                    "sign in with the email address the invitation was sent to."),
+}
+
+
+def add_months(day: date, months: int) -> date:
     """
-    "I'd like to work as a consultant": put the request on the admin's list.
+    The same day `months` later (the last day of the month when it doesn't exist).
 
     Args:
-        account: dict, the signed-in person asking (their own account, never a client's).
+        day: date, the starting day.
+        months: int, how many months to add.
 
     Returns:
-        dict: the account row after the request.
-
-    Raises:
-        HTTPException: 409 if they already are a consultant or already asked.
+        date: e.g. 11/30/2026 + 3 months -> 02/28/2027.
 
     Example:
-        >>> (await request(kim))["consultant_request"]
+        >>> add_months(date(2026, 10, 18), 3)
+        datetime.date(2027, 1, 18)
+    """
+    total = day.month - 1 + months
+    year, month = day.year + total // 12, total % 12 + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def _us_date(day: date) -> str:
+    """A date as US text: 01/18/2027."""
+    return day.strftime("%m/%d/%Y")
+
+
+async def application_status(account: dict) -> dict:
+    """
+    Whether this person may apply now, and what happened to their last application.
+
+    The checks, in order: already a consultant (or admin) -> an application
+    waiting -> denied and still inside the waiting period -> (invite-only mode)
+    not on the invite list. Otherwise they may apply.
+
+    Args:
+        account: dict, the signed-in person's own accounts row.
+
+    Returns:
+        dict: {"can_apply": bool, "blocked": None | "already" | "pending" |
+        "waiting" | "not_invited", "message": str | None, "mode": "invite" | "open",
+        "invited": bool, "reapply_after": "YYYY-MM-DD" | None,
+        "latest": {status, submitted_at, decided_at, denial_reason,
+        denial_reason_text, decision_note, human_review_note} | None,
+        "code_of_conduct": [...], "experience_ranges": [{id, label}, ...]}.
+
+    Example:
+        >>> (await application_status(kim))["blocked"]
+        'waiting'
+    """
+    mode = get_settings().consultant_applications
+    invited = await account_store.get_invite(account["email"]) is not None
+    latest = await account_store.latest_application(str(account["id"]))
+    blocked, message, reapply_after = None, None, None
+    if account.get("is_consultant") or account.get("is_admin"):
+        blocked = "already"
+    elif account.get("consultant_request") == "pending":
+        blocked = "pending"
+    elif latest and latest["status"] == "denied" and latest.get("reapply_after") and latest["reapply_after"] > date.today():
+        blocked, reapply_after = "waiting", latest["reapply_after"]
+        message = f"You can apply again on {_us_date(reapply_after)}."
+    elif mode == "invite" and not invited:
+        blocked = "not_invited"
+    message = message or _BLOCKED.get(blocked or "")
+    return {
+        "can_apply": blocked is None,
+        "blocked": blocked,
+        "message": message,
+        "mode": mode,
+        "invited": invited,
+        "reapply_after": reapply_after.isoformat() if reapply_after else None,
+        "latest": {
+            "status": latest["status"],
+            "submitted_at": latest["submitted_at"].isoformat(),
+            "decided_at": latest["decided_at"].isoformat() if latest.get("decided_at") else None,
+            "denial_reason": latest.get("denial_reason"),
+            "denial_reason_text": DENIAL_REASONS.get(latest.get("denial_reason") or ""),
+            "decision_note": latest.get("decision_note"),
+            "human_review_note": HUMAN_REVIEW_NOTE if latest["status"] == "denied" else None,
+        } if latest else None,
+        "code_of_conduct": list(CODE_OF_CONDUCT),
+        "experience_ranges": [{"id": k, "label": v} for k, v in EXPERIENCE_RANGES.items()],
+    }
+
+
+async def apply(account: dict, answers: dict) -> dict:
+    """
+    Submit a screening application ("I'd like to work as a consultant").
+
+    Args:
+        account: dict, the signed-in person's own accounts row (never a client's).
+        answers: dict, the validated form (api/models/accounts.py ConsultantApplicationIn).
+
+    Returns:
+        dict: the account row after applying (consultant_request 'pending').
+
+    Raises:
+        HTTPException: 409 when already a consultant, already waiting, or inside
+            the waiting period after a denial; 403 when applications are
+            invite-only and this email isn't invited.
+
+    Example:
+        >>> (await apply(kim, answers))["consultant_request"]
         'pending'
     """
-    if account.get("is_consultant") or account.get("is_admin"):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="You're already a consultant.")
-    if account.get("consultant_request") == "pending":
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Your request is already waiting for approval.")
-    await account_store.request_consultant(str(account["id"]))
+    check = await application_status(account)
+    if not check["can_apply"]:
+        code = status.HTTP_403_FORBIDDEN if check["blocked"] == "not_invited" else status.HTTP_409_CONFLICT
+        raise HTTPException(code, detail=check["message"])
+    await account_store.create_application(str(account["id"]), answers)
     return await account_store.get_account(str(account["id"])) or account
 
 
-async def decide(account_id: str, approved: bool, admin: dict) -> dict:
+async def invite(email: str, admin: dict, note: str | None = None) -> dict:
     """
-    An admin approves or denies a consultant request.
-
-    Approving creates the person's dim.consultants row straight away (capacity
-    3), so they can take clients the next time their workspace loads.
+    An admin puts an email on the invite list (so that person may apply).
 
     Args:
-        account_id: str, the person who asked.
+        email: str, the person's email address.
+        admin: dict, the admin's accounts row.
+        note: str | None, a private note for admins.
+
+    Returns:
+        dict: the consultant_invites row.
+
+    Example:
+        >>> (await invite("kim@example.com", me))["email"]
+        'kim@example.com'
+    """
+    return await account_store.add_invite(email, str(admin["id"]), (note or "").strip() or None)
+
+
+# ── Onboarding (after approval) ──────────────────────────────────────────────
+
+CONTRACTOR_TERMS_VERSION = "2026-10-19"   # change the date when CONTRACTOR_TERMS' wording changes
+
+# The independent-contractor agreement every consultant accepts while onboarding.
+CONTRACTOR_TERMS: tuple[str, ...] = (
+    "You work as an independent contractor, not an employee. You choose your own hours and how you do the work.",
+    "Hourly sessions: clients pay you directly through your own Cal.com paid booking, connected to the "
+    "payment tool you choose (Stripe, PayPal, ...).",
+    "Setup and ongoing help: clients pay through the platform, and Stripe sends your share to your connected "
+    "Stripe payout account automatically. The platform keeps a service fee (shown in your onboarding); the rest "
+    "is yours.",
+    "You're responsible for your own taxes — federal, state and local income tax and self-employment tax. "
+    "Nothing is withheld for you. Stripe may send you a tax form (1099) for payouts made through the platform.",
+    "You handle any business license or insurance your city or state requires.",
+    "You follow the consultant code of conduct you agreed to when you applied.",
+)
+
+
+def onboarding(consultant: dict, account: dict, mfa_on: bool) -> dict:
+    """
+    A newly approved consultant's onboarding checklist (Settings -> Consultant).
+
+    Required steps: two-step sign-in, the independent-contractor agreement, a
+    connected Stripe PAYOUT account (consulting_billing: how clients' setup and
+    ongoing-help payments reach them), the free and paid Cal.com booking links,
+    and the Cal.com webhook. Capacity is optional (3 clients unless they change
+    it). Admins skip the contractor and payout steps (it's their platform).
+
+    Args:
+        consultant: dict, their consultants row.
+        account: dict, their accounts row (admins skip the contractor step: it's their platform).
+        mfa_on: bool, two-step sign-in is turned on (api/services/mfa.is_on).
+
+    Returns:
+        dict: {"steps": [{"id", "label", "done", "required"}, ...], "done": bool
+        (every required step done), "contractor_terms": [...],
+        "contractor_terms_version", "contractor_agreed_at"}.
+
+    Example:
+        >>> onboarding(new_consultant, account, mfa_on=True)["done"]
+        False
+    """
+    owner = bool(account.get("is_admin"))
+    agreed = consultant.get("contractor_agreed_at")
+    steps = [
+        {"id": "two_step", "label": "Turn on two-step sign-in (Settings → Account)", "done": mfa_on, "required": True},
+        {"id": "contractor", "label": "Agree to the independent-contractor terms (your pay and your taxes)",
+         "done": owner or (bool(agreed) and consultant.get("contractor_terms_version") == CONTRACTOR_TERMS_VERSION),
+         "required": not owner},
+        {"id": "payouts", "label": "Connect your Stripe payout account (how clients' setup and ongoing-help "
+                                    f"payments reach you; the platform keeps {pricing.CONSULTING['platform_fee_percent']:g}%)",
+         "done": owner or bool(consultant.get("payouts_ready_at")), "required": not owner},
+        {"id": "free_link", "label": "Add your free 30-minute Cal.com booking link",
+         "done": bool(consultant.get("free_booking_url")), "required": True},
+        {"id": "paid_link", "label": "Add your paid session link (connected to your own Stripe or PayPal in Cal.com)",
+         "done": bool(consultant.get("paid_booking_url")), "required": True},
+        {"id": "webhook", "label": "Connect your Cal.com webhook (so bookings show up here)",
+         "done": bool(consultant.get("calcom_webhook_secret")), "required": True},
+        {"id": "capacity", "label": "Choose how many clients you take at once (optional — 3 unless you change it)",
+         "done": True, "required": False},
+    ]
+    return {
+        "steps": steps,
+        "done": all(st["done"] for st in steps if st["required"]),
+        "contractor_terms": list(CONTRACTOR_TERMS),
+        "contractor_terms_version": CONTRACTOR_TERMS_VERSION,
+        "contractor_agreed_at": agreed.isoformat() if agreed else None,
+    }
+
+
+async def decide(account_id: str, approved: bool, admin: dict, *, denial_reason: str | None = None,
+                 note: str | None = None, wait_months: int = MIN_REAPPLY_MONTHS) -> dict:
+    """
+    An admin approves or denies the application that's waiting.
+
+    Approving creates the person's dim.consultants row straight away (capacity
+    3), so they can take clients the next time their workspace loads. Denying
+    needs a reason from DENIAL_REASONS and personal feedback in `note` (they
+    see both, with HUMAN_REVIEW_NOTE), and starts the waiting period: they may
+    apply again on today + `wait_months` (3 at least).
+
+    Args:
+        account_id: str, the person who applied.
         approved: bool, True = approve, False = deny.
         admin: dict, the admin's accounts row.
+        denial_reason: str | None, a DENIAL_REASONS id (required to deny).
+        note: str | None, personal feedback shown to the person (required to deny,
+            MIN_FEEDBACK_CHARS at least; optional when approving).
+        wait_months: int, denial only: 3, 6 or 12 (REAPPLY_CHOICES).
 
     Returns:
         dict: the person's account row after the decision.
 
     Raises:
-        HTTPException: 404 if the account doesn't exist; 400 if they never asked.
+        HTTPException: 404 if the account doesn't exist; 400 if nothing is
+            waiting, or a denial without a valid reason, personal feedback or
+            waiting period.
 
     Example:
         >>> (await decide(kim_id, True, me))["is_consultant"]
         True
+        >>> (await decide(lee_id, False, me, denial_reason="work_sample", wait_months=6,
+        ...               note="The dashboard link was empty; share a finished one next time."))["consultant_request"]
+        'denied'
     """
     person = await account_store.get_account(account_id)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That account was not found.")
-    if not person.get("consultant_request"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="This person hasn't asked to be a consultant.")
-    await account_store.decide_consultant_request(account_id, approved, str(admin["id"]))
+    if person.get("consultant_request") != "pending":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="This person has no application waiting.")
+    reapply_after = None
+    note = (note or "").strip() or None
+    if not approved:
+        if denial_reason not in DENIAL_REASONS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Choose why the application isn't approved.")
+        if len(note or "") < MIN_FEEDBACK_CHARS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="Write them some personal feedback (a sentence or two) so they know why.")
+        if wait_months not in REAPPLY_CHOICES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"The waiting period is {', '.join(map(str, REAPPLY_CHOICES))} months.")
+        reapply_after = add_months(date.today(), wait_months)
+    app = await account_store.latest_application(account_id)
+    if app and app["status"] == "pending":
+        await account_store.decide_application(app["id"], approved=approved, admin_id=str(admin["id"]),
+                                               denial_reason=None if approved else denial_reason,
+                                               decision_note=note, reapply_after=reapply_after)
+    else:
+        # A request from before screening existed (asked at sign-up, no application row).
+        await account_store.decide_consultant_request(account_id, approved, str(admin["id"]))
     person = await account_store.get_account(account_id) or person
     if approved:
         await register(person)
@@ -495,26 +786,39 @@ def _iso(value) -> str | None:
     return value.isoformat() if value else None
 
 
-def team_row(consultant: dict) -> dict:
+def team_row(consultant: dict, account: dict | None = None) -> dict:
     """
     One consultant as the Admin panel lists them (with email: admins only).
 
+    Includes the admin's CONFIRMATION of onboarding: when they agreed to the
+    independent-contractor terms (and whether that's the current wording), and
+    which required onboarding steps are still left.
+
     Args:
         consultant: dict, a consultants row with "client_count" (list_consultants(active_only=False)).
+        account: dict | None, their accounts row (for two-step sign-in and admin status).
 
     Returns:
         dict: load(...) plus {"email", "active", "created_at", "updated_at",
-        "deactivated_at", "deactivation_reason", "reactivated_at"} (ISO text).
+        "deactivated_at", "deactivation_reason", "reactivated_at",
+        "contractor_agreed_at", "contractor_terms_current", "onboarding_done",
+        "onboarding_left": [step labels]} (dates as ISO text).
 
     Example:
-        >>> team_row(kim)["active"]
+        >>> team_row(kim, kim_account)["contractor_terms_current"]
         True
     """
+    account = account or {}
+    steps = onboarding(consultant, account, mfa.is_on(account))
     return {**load(consultant), "email": consultant["email"], "active": bool(consultant.get("active", True)),
             "created_at": _iso(consultant.get("created_at")), "updated_at": _iso(consultant.get("updated_at")),
             "deactivated_at": _iso(consultant.get("deactivated_at")),
             "deactivation_reason": consultant.get("deactivation_reason"),
-            "reactivated_at": _iso(consultant.get("reactivated_at"))}
+            "reactivated_at": _iso(consultant.get("reactivated_at")),
+            "contractor_agreed_at": _iso(consultant.get("contractor_agreed_at")),
+            "contractor_terms_current": consultant.get("contractor_terms_version") == CONTRACTOR_TERMS_VERSION,
+            "onboarding_done": steps["done"],
+            "onboarding_left": [st["label"] for st in steps["steps"] if st["required"] and not st["done"]]}
 
 
 async def team() -> list[dict]:
@@ -524,7 +828,8 @@ async def team() -> list[dict]:
     Returns:
         list[dict]: team_row(...) for each consultant.
     """
-    rows = [team_row(c) for c in await account_store.list_consultants(active_only=False)]
+    rows = [team_row(c, await account_store.get_account(str(c["account_id"])))
+            for c in await account_store.list_consultants(active_only=False)]
     return sorted(rows, key=lambda c: (not c["active"], not c["is_default"], c["name"].lower()))
 
 
@@ -544,7 +849,9 @@ async def deactivate(consultant_id: str, admin: dict, reason: str | None = None)
         reason: str | None, an optional short note ("On leave until March").
 
     Returns:
-        dict: {"moved": n clients reassigned, "waiting": n clients now waiting}.
+        dict: {"moved": n clients reassigned, "waiting": n clients now waiting,
+        "help_ended": [...] — clients whose ongoing help (paid through the platform)
+        ended now: refund their unused time in Stripe (consulting_billing.end_for_consultant)}.
 
     Raises:
         HTTPException: 404 unknown consultant; 400 for the default consultant or
@@ -565,12 +872,14 @@ async def deactivate(consultant_id: str, admin: dict, reason: str | None = None)
         raise HTTPException(status.HTTP_409_CONFLICT, detail="That consultant is already deactivated.")
     note = (reason or "").strip()[:300] or None
     await account_store.set_consultant_active(consultant_id, False, str(admin["id"]), note)
+    from api.services import consulting_billing   # imported here: it imports this file's neighbors
+    help_ended = await consulting_billing.end_for_consultant(consultant_id, "consultant_deactivated")
     moved = waiting = 0
     for client in await account_store.list_clients(consultant_id):
         new = await pick(None)   # they are inactive now, so pick() never gives them back
         await account_store.set_consultant_for(str(client["id"]), new, client.get("consultant_plan"))
         moved, waiting = (moved + 1, waiting) if new else (moved, waiting + 1)
-    return {"moved": moved, "waiting": waiting}
+    return {"moved": moved, "waiting": waiting, "help_ended": help_ended}
 
 
 async def reactivate(consultant_id: str, admin: dict) -> dict:

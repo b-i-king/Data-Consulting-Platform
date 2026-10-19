@@ -1,6 +1,8 @@
 // Small display helpers (US formatting: 1,234 and $1,234.56).
 
 export const fmtInt = (n: number) => n.toLocaleString("en-US");
+/** A number in US format with up to 2 decimals: 1234.567 -> "1,234.57". */
+export const fmtNumber = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 export const fmtUsd = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });

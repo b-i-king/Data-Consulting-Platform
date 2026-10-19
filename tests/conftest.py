@@ -22,3 +22,21 @@ os.environ.setdefault("AUTH_RATE_LIMIT_PER_MINUTE", "0")
 for _key in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "DATABASE_URL", "ADMIN_DATABASE_URL", "SUPABASE_URL",
              "SUPABASE_KEY", "GEMINI_API_KEY", "SENTRY_DSN"):
     os.environ[_key] = ""
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def fresh_skill_previews():
+    """
+    Every test starts with no paid-tool previews used (api/services/skill_access.py).
+
+    Every TestClient request comes from the same "IP", so without this one test's
+    preview would count against the next one's.
+    """
+    from api.services import skill_access
+
+    skill_access._previews.clear()
+    yield
+    skill_access._previews.clear()

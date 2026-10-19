@@ -589,6 +589,7 @@ export default function Wizard() {
           subscription={subscription}
           onSubscription={setSubscription}
           consultingRate={options.consulting_rate_per_hour_usd ?? 80}
+          consultingCatalog={options.consulting}
           path={path}
           onPath={setPath}
           consultants={options.consultants ?? []}

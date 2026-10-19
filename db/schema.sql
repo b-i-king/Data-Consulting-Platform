@@ -104,8 +104,10 @@ CREATE TABLE IF NOT EXISTS dim.accounts (
     -- Roles. is_admin: an ADMIN_EMAILS address (set by the API at sign-in);
     -- admins approve consultants. is_consultant: an approved consultant (the
     -- API also creates their dim.consultants row). Nobody becomes a consultant
-    -- on their own: they ASK (consultant_request = 'pending') and an admin
-    -- approves ('approved') or denies ('denied') — api/services/consultants.py.
+    -- on their own: an INVITED person with an account APPLIES (the screening
+    -- application, dim.consultant_applications; consultant_request = 'pending')
+    -- and an admin approves ('approved') or denies ('denied', with a waiting
+    -- period before they may apply again) — api/services/consultants.py.
     is_admin                BOOLEAN NOT NULL DEFAULT false,
     is_consultant           BOOLEAN NOT NULL DEFAULT false,
     consultant_request      TEXT CHECK (consultant_request IN ('pending', 'approved', 'denied')),
@@ -197,6 +199,17 @@ CREATE TABLE IF NOT EXISTS dim.consultants (
     deactivation_reason   TEXT,                      -- optional note from the admin
     reactivated_at        TIMESTAMPTZ,
     reactivated_by        UUID,                      -- the admin's account id
+    -- Onboarding (Settings -> Consultant): the independent-contractor agreement
+    -- — they're not employees, they receive their own payments (their Cal.com +
+    -- Stripe / PayPal) and pay their own taxes. Version = consultants.CONTRACTOR_TERMS_VERSION.
+    contractor_agreed_at      TIMESTAMPTZ,
+    contractor_terms_version  TEXT,
+    -- Payouts (onboarding): their Stripe Connect Express account. Clients pay the
+    -- platform for setup and ongoing help; Stripe sends the consultant's share here
+    -- (api/services/consulting_billing.py). payouts_ready_at = Stripe says it can
+    -- receive transfers. Admins don't need one (their share is the platform's).
+    stripe_account_id         TEXT UNIQUE,               -- acct_...
+    payouts_ready_at          TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now() -- set by the trigger dim.touch_updated_at
 );
@@ -257,6 +270,10 @@ ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivation_reason TEXT;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS reactivated_at TIMESTAMPTZ;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS reactivated_by UUID;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS contractor_agreed_at TIMESTAMPTZ;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS contractor_terms_version TEXT;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS stripe_account_id TEXT UNIQUE;
+ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS payouts_ready_at TIMESTAMPTZ;
 
 -- "Modified" timestamps: any UPDATE that changes a row sets updated_at = now().
 -- Columns that change on their own all the time (last_login_at on every
@@ -282,6 +299,148 @@ CREATE TRIGGER consultants_touch_updated_at BEFORE UPDATE ON dim.consultants
 -- The admin's to-do list: who is waiting for a decision.
 CREATE INDEX IF NOT EXISTS idx_accounts_consultant_request ON dim.accounts (consultant_request)
     WHERE consultant_request = 'pending';
+
+-- ── dim.consultant_invites: who may apply to be a consultant ────────────────
+-- While consultant applications are INVITE ONLY (CONSULTANT_APPLICATIONS =
+-- 'invite', the default), only an email on this list — or an admin — can apply.
+-- An admin adds and removes emails in the Admin panel (api/services/consultants.py).
+-- Removing an invite stops NEW applications only; it never removes a consultant.
+CREATE TABLE IF NOT EXISTS dim.consultant_invites (
+    email       TEXT PRIMARY KEY,                    -- lowercase
+    invited_by  UUID REFERENCES dim.accounts (id) ON DELETE SET NULL,   -- the admin
+    note        TEXT,                                -- e.g. 'Met at the data meetup' (admins only)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── dim.consultant_applications: the screening application ─────────────────
+-- One row per application (a person who was turned down and applies again
+-- gets a NEW row, so the history is kept). Only a signed-in account can apply
+-- (Settings -> Account). dim.accounts.consultant_request mirrors the LATEST
+-- row's status.
+-- Screening answers: the services they can deliver (catalog ids), their
+-- hands-on data experience as a RANGE (consultants.EXPERIENCE_RANGES), tools,
+-- their LinkedIn profile (REQUIRED: how we confirm they're a real, verifiable
+-- person), an optional portfolio / work sample, and a project they delivered
+-- (their words). They must agree to the code of conduct (agreed_conduct_at).
+-- A denial needs a reason from a FIXED list plus PERSONAL FEEDBACK (both shown
+-- to them) and sets
+-- reapply_after: they can't apply again before that date (3 months at least,
+-- MIN_REAPPLY_MONTHS in consultants.py).
+CREATE TABLE IF NOT EXISTS dim.consultant_applications (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id         UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
+    status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+    services           TEXT[] NOT NULL,              -- e.g. {data_cleaning,data_visualization}
+    experience         TEXT NOT NULL CHECK (experience IN ('lt_1', '1_3', '3_5', '5_10', '10_plus')),
+    tools              TEXT NOT NULL,                -- e.g. 'SQL, pandas, Power BI'
+    linkedin_url       TEXT NOT NULL,                -- https://www.linkedin.com/in/... (required)
+    work_sample_url    TEXT,                         -- optional: portfolio, GitHub, a report, a dashboard
+    project_summary    TEXT NOT NULL,                -- a data project they delivered
+    agreed_conduct_at  TIMESTAMPTZ NOT NULL,         -- ticked the code of conduct
+    submitted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at         TIMESTAMPTZ,
+    decided_by         UUID REFERENCES dim.accounts (id) ON DELETE SET NULL,   -- the admin
+    denial_reason      TEXT CHECK (denial_reason IN ('identity_unverified', 'not_enough_experience',
+                                                     'skills_mismatch', 'work_sample', 'conduct',
+                                                     'incomplete', 'not_adding')),
+    decision_note      TEXT,                         -- personal feedback (required to deny), shown to them
+    reapply_after      DATE                          -- denied: the first day they may apply again
+);
+-- Upgrading the first version of this table (before 10/2026's changes):
+-- profile_url became linkedin_url, and years_experience (a number) became
+-- experience (a range). The table was new and empty then, so nothing is lost.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'dim'
+               AND table_name = 'consultant_applications' AND column_name = 'profile_url') THEN
+        ALTER TABLE dim.consultant_applications RENAME COLUMN profile_url TO linkedin_url;
+    END IF;
+END $$;
+ALTER TABLE dim.consultant_applications DROP COLUMN IF EXISTS years_experience;
+ALTER TABLE dim.consultant_applications ADD COLUMN IF NOT EXISTS experience TEXT
+    CHECK (experience IN ('lt_1', '1_3', '3_5', '5_10', '10_plus'));
+CREATE INDEX IF NOT EXISTS idx_consultant_applications_account
+    ON dim.consultant_applications (account_id, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_consultant_applications_pending
+    ON dim.consultant_applications (submitted_at) WHERE status = 'pending';
+
+-- ── dim.consulting_prices: what a consultant's help costs (ONE row) ─────────
+-- Admin -> Prices -> "Consultant help" (api/services/price_store.py). Read at
+-- startup into pricing.CONSULTING; each checkout sends Stripe the price it
+-- works out from these, so nothing needs syncing when they change.
+--   setup_usd             the one-time setup fee
+--   help_rate_usd         ongoing help, per hour (the tool does most of the work)
+--   core_hours            a week, when Data Cleaning and/or Data Engineering is picked
+--   service_hours         a week, per other service picked (AI counts 0)
+--   max_hours             never more than this a week
+--   platform_fee_percent  the platform's share (Stripe sends the rest to the consultant)
+CREATE TABLE IF NOT EXISTS dim.consulting_prices (
+    id                    BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),     -- only one row
+    setup_usd             NUMERIC(10, 2) NOT NULL DEFAULT 300 CHECK (setup_usd >= 0),
+    help_rate_usd         NUMERIC(10, 2) NOT NULL DEFAULT 20 CHECK (help_rate_usd >= 0),
+    core_hours            NUMERIC(4, 1) NOT NULL DEFAULT 10 CHECK (core_hours >= 0),
+    service_hours         NUMERIC(4, 1) NOT NULL DEFAULT 2.5 CHECK (service_hours >= 0),
+    max_hours             NUMERIC(4, 1) NOT NULL DEFAULT 20 CHECK (max_hours > 0 AND max_hours <= 60),
+    platform_fee_percent  NUMERIC(5, 2) NOT NULL DEFAULT 20 CHECK (platform_fee_percent BETWEEN 0 AND 100),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by            UUID REFERENCES dim.accounts (id) ON DELETE SET NULL
+);
+INSERT INTO dim.consulting_prices (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+
+-- ── dim.consultant_engagements: what a client pays their consultant for ─────
+-- One row per purchase through the platform (Plan & billing -> "Your consultant"):
+--   kind 'setup'    a one-time fee (dim.consulting_prices.setup_usd) — 'paid' once paid,
+--                   'refunded' if refunded in the Stripe dashboard
+--   kind 'retainer' ongoing help for the SERVICES picked (hours_per_week worked out
+--                   from them, pricing.help_hours), billed monthly or yearly — a
+--                   Stripe subscription; status follows Stripe's. Cancel any time:
+--                   it runs (and is paid) to the end of the period. ended_reason
+--                   says why it ended early (the consultant left or was deactivated).
+-- Paid with Stripe Connect DESTINATION charges: the client pays the platform,
+-- Stripe moves (100 - platform_fee_percent)% to the consultant's
+-- stripe_account_id. platform_fee_percent is kept as charged (the setting may
+-- change later). Hourly Cal.com sessions are NOT here (paid to the consultant directly).
+CREATE TABLE IF NOT EXISTS dim.consultant_engagements (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id              UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,       -- the client (plan holder)
+    consultant_id           UUID REFERENCES dim.consultants (id) ON DELETE SET NULL,
+    kind                    TEXT NOT NULL CHECK (kind IN ('setup', 'retainer')),
+    hours_per_week          NUMERIC(4, 1) CHECK (hours_per_week > 0 AND hours_per_week <= 60),   -- retainer only
+    services                TEXT[] NOT NULL DEFAULT '{}',   -- retainer: the services they need help with
+    billing_interval        TEXT CHECK (billing_interval IN ('month', 'year')),  -- retainer only
+    amount_usd              NUMERIC(10, 2) NOT NULL,          -- per period (retainer) or once (setup)
+    platform_fee_percent    NUMERIC(5, 2) NOT NULL DEFAULT 0,
+    status                  TEXT NOT NULL CHECK (status IN ('pending', 'paid', 'refunded', 'active', 'trialing',
+                                                            'past_due', 'unpaid', 'canceled', 'incomplete',
+                                                            'incomplete_expired', 'paused')),
+    ended_reason            TEXT CHECK (ended_reason IN ('client', 'consultant_deactivated', 'consultant_left',
+                                                         'account_deleted')),
+    terms_accepted_at       TIMESTAMPTZ,                      -- ticked "cancel any time, paid to the end of the period"
+    cancel_at_period_end    BOOLEAN NOT NULL DEFAULT false,
+    current_period_end      TIMESTAMPTZ,
+    stripe_subscription_id  TEXT UNIQUE,                      -- retainer
+    stripe_checkout_id      TEXT UNIQUE,                      -- cs_... (setup: matched when it's paid)
+    stripe_payment_intent_id TEXT,                            -- pi_... (setup: matched when it's refunded)
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Upgrading the first version of this table (10/2026): fixed 5 / 10 / 20-hour levels
+-- became hours worked out from the services picked.
+ALTER TABLE dim.consultant_engagements DROP CONSTRAINT IF EXISTS consultant_engagements_hours_per_week_check;
+ALTER TABLE dim.consultant_engagements ALTER COLUMN hours_per_week TYPE NUMERIC(4, 1);
+ALTER TABLE dim.consultant_engagements ADD CONSTRAINT consultant_engagements_hours_per_week_check
+    CHECK (hours_per_week > 0 AND hours_per_week <= 60);
+ALTER TABLE dim.consultant_engagements ADD COLUMN IF NOT EXISTS services TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE dim.consultant_engagements ADD COLUMN IF NOT EXISTS ended_reason TEXT
+    CHECK (ended_reason IN ('client', 'consultant_deactivated', 'consultant_left', 'account_deleted'));
+ALTER TABLE dim.consultant_engagements ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE dim.consultant_engagements ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT;
+ALTER TABLE dim.consultant_engagements DROP CONSTRAINT IF EXISTS consultant_engagements_status_check;
+ALTER TABLE dim.consultant_engagements ADD CONSTRAINT consultant_engagements_status_check
+    CHECK (status IN ('pending', 'paid', 'refunded', 'active', 'trialing', 'past_due', 'unpaid', 'canceled',
+                      'incomplete', 'incomplete_expired', 'paused'));
+CREATE INDEX IF NOT EXISTS idx_consultant_engagements_account ON dim.consultant_engagements (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_consultant_engagements_consultant ON dim.consultant_engagements (consultant_id);
 
 -- ── dim.teams: one per business ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS dim.teams (
@@ -951,7 +1110,8 @@ BEGIN
     FOREACH t IN ARRAY ARRAY['accounts', 'consultants', 'teams', 'subscriptions', 'consultations', 'usage_events',
                              'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
                              'api_usage', 'ai_usage', 'plan_prices', 'account_deletions', 'seasonal_sales',
-                             'sessions', 'audit_log']
+                             'sessions', 'audit_log', 'consultant_invites', 'consultant_applications',
+                             'consultant_engagements', 'consulting_prices']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;

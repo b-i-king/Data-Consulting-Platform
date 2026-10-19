@@ -1,15 +1,17 @@
 // Admin panel (🛡️ in the workspace's left pane, admins only — ADMIN_EMAILS).
 //
-//   * CONSULTANT REQUESTS: everyone who ticked "I'd like to work as a
-//     consultant". Waiting ones first, each with Approve / Deny. Approving
+//   * CONSULTANT INVITES + APPLICATIONS (AdminConsultantRequests.tsx): who may
+//     apply, and the screening applications with a review checklist. Approving
 //     makes them a consultant at once (their dim.consultants row is created;
-//     their workspace switches to consultant mode on its next load). Denied
-//     people stay clients and may ask again.
+//     their workspace switches to consultant mode on its next load). Denying
+//     needs a reason they see and starts a waiting period (3+ months).
 //   * CONSULTANTS: everyone, with a fill bar (clients ÷ capacity) and a
-//     Deactivate / Reactivate switch. Deactivating moves their clients to
+//     Deactivate / Reactivate switch, plus their ONBOARDING: when they agreed
+//     to the independent-contractor terms, and which required steps are left. Deactivating moves their clients to
 //     someone with room; they keep their own account (as a client).
 //   * HIPAA REQUESTS (AdminHipaa.tsx): confirm a healthcare business before it stores health data.
 //   * PRICES (AdminPrices.tsx): change what each tool costs (and its free trial), in one place.
+//   * CONSULTANT HELP (AdminConsultingPrices.tsx): setup fee, ongoing-help rate and hours rule, platform share.
 //   * SEASONAL SALES (AdminSales.tsx): yearly discount windows, switched on once.
 //   * TESTERS (AdminTesters.tsx): people who try the paid tools for free.
 //   * ACCOUNT DELETIONS: how many people deleted their account, and why —
@@ -20,12 +22,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { decideConsultantRequest, getAdminPanel, setConsultantActive } from "@/lib/api";
+import { getAdminPanel, setConsultantActive } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
-import type { AdminPanelData, ConsultantRequest, TeamConsultant } from "@/lib/types";
+import type { AdminPanelData, TeamConsultant } from "@/lib/types";
 import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
+import AdminConsultantRequests from "./AdminConsultantRequests";
 import AdminHipaa from "./AdminHipaa";
+import AdminConsultingPrices from "./AdminConsultingPrices";
 import AdminPrices from "./AdminPrices";
 import AdminSales from "./AdminSales";
 import AdminTesters from "./AdminTesters";
@@ -54,12 +58,6 @@ const REASONS: Record<string, string> = {
   none: "No reason given",
 };
 
-const STATUS: Record<ConsultantRequest["status"], { label: string; cls: string }> = {
-  pending: { label: "Waiting", cls: "bg-warn/15 text-warn" },
-  approved: { label: "Approved", cls: "bg-good/15 text-good" },
-  denied: { label: "Denied", cls: "bg-bad/15 text-bad" },
-};
-
 export default function AdminPanel({ token, onChanged }: { token: string; onChanged?: () => void }) {
   const [data, setData] = useState<AdminPanelData | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -73,19 +71,6 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : "We couldn't load the admin panel."));
   }, [token]);
-
-  async function decide(r: ConsultantRequest, decision: "approve" | "deny") {
-    setBusy(r.account_id);
-    setError(null);
-    try {
-      setData(await decideConsultantRequest(token, r.account_id, decision));
-      onChanged?.();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "That didn't work.");
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function switchConsultant(c: TeamConsultant, active: boolean) {
     setBusy(c.id);
@@ -102,50 +87,12 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
     }
   }
 
-  const waiting = data?.requests.filter((r) => r.status === "pending") ?? [];
-  const decided = data?.requests.filter((r) => r.status !== "pending") ?? [];
-
   return (
     <div className="space-y-5">
       <ErrorBox message={error} />
       {!data && !error && <p className="text-sm text-ink-muted">Loading…</p>}
 
-      {data && (
-        <Card>
-          <h2 className="font-semibold">Consultant requests</h2>
-          <p className="mt-1 text-sm text-ink-muted">
-            People who asked to work as a consultant. Approve to give them consultant mode at once; they start with room
-            for 3 clients and can change it in their Settings.
-          </p>
-          {waiting.length === 0 && <p className="mt-4 text-sm">Nobody is waiting right now.</p>}
-          <ul className="mt-4 divide-y divide-line">
-            {[...waiting, ...decided].map((r) => (
-              <li key={r.account_id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm">
-                  <span className="font-medium">{r.name}</span>{" "}
-                  <span className={`ml-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS[r.status].cls}`}>
-                    {STATUS[r.status].label}
-                  </span>
-                  <span className="block text-xs text-ink-muted">
-                    {[r.email, r.company_name, r.location].filter(Boolean).join(" · ")}
-                    {r.requested_at && ` · asked ${fmtDate(r.requested_at)}`}
-                  </span>
-                </div>
-                {r.status === "pending" && (
-                  <div className="flex gap-2">
-                    <Button onClick={() => decide(r, "approve")} disabled={busy !== null}>
-                      {busy === r.account_id ? "One moment…" : "Approve"}
-                    </Button>
-                    <Button variant="secondary" onClick={() => decide(r, "deny")} disabled={busy !== null}>
-                      Deny
-                    </Button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {data && <AdminConsultantRequests token={token} data={data} onData={setData} onChanged={onChanged} />}
 
       {data && (
         <Card>
@@ -176,6 +123,23 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
                     {!c.active && c.deactivated_at && ` · off since ${fmtDate(c.deactivated_at)}`}
                     {!c.active && c.deactivation_reason && ` (${c.deactivation_reason})`}
                     {c.active && c.reactivated_at && ` · back since ${fmtDate(c.reactivated_at)}`}
+                  </span>
+                  {/* Onboarding: your confirmation they agreed to the contractor terms, and what's left. */}
+                  <span className="block text-xs">
+                    {c.contractor_agreed_at && c.contractor_terms_current ? (
+                      <span className="text-good">✓ Contractor terms agreed {fmtDate(c.contractor_agreed_at)}</span>
+                    ) : c.contractor_agreed_at ? (
+                      <span className="text-warn">Agreed to older contractor terms ({fmtDate(c.contractor_agreed_at)}) — not the current ones yet</span>
+                    ) : c.onboarding_left.some((l) => l.includes("contractor")) ? (
+                      <span className="text-warn">Contractor terms not agreed yet</span>
+                    ) : null}
+                    {c.onboarding_done ? (
+                      <span className="ml-2 text-good">· Onboarding complete</span>
+                    ) : (
+                      <span className="ml-2 text-ink-muted" title={c.onboarding_left.join(" · ")}>
+                        · Onboarding: {c.onboarding_left.length} step{c.onboarding_left.length === 1 ? "" : "s"} left
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -222,6 +186,7 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
 
       <AdminHipaa token={token} />
       <AdminPrices token={token} />
+      <AdminConsultingPrices token={token} />
       <AdminSales token={token} />
       <AdminTesters token={token} />
 

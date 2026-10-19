@@ -16,6 +16,17 @@ from api.services import compare
 
 client = TestClient(app)
 
+
+def _viz_client(email="compare@example.com"):
+    """A signed-in client with Data Visualization (test mode: switched on with no charge); their headers."""
+    res = client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": "Ana", "last_name": "Lee",
+                                                    "email": email, "password": "Correct-horse-9", "accept_terms": True})
+    if res.status_code != 201:   # signed up by an earlier test
+        res = client.post("/api/accounts/signin", json={"email": email, "password": "Correct-horse-9"})
+    h = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    client.post("/api/billing/checkout", headers=h, json={"plan_ids": ["data_visualization"], "interval": "month"})
+    return h
+
 # A game tracker (hours played) and invoices (sales): no shared IDs or names.
 GAMES = "\n".join(["played_at,game,hours"] + [
     f"2026-{m:02d}-{d:02d},Halo,{h}" for m, h in zip(range(1, 13), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1])
@@ -40,7 +51,9 @@ def test_two_unrelated_tables_line_up_by_month():
     assert len(ids) == 2
     spec = {"period": "month", "left": {"group_id": ids[0], "date": "played_at", "value": "hours", "agg": "sum"},
             "right": {"group_id": ids[1], "date": "invoice_date", "value": "amount", "agg": "sum"}}
-    res = client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)})
+    # Part of the Dashboard page: sign-in and Data Visualization are required.
+    assert client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)}).status_code == 401
+    res = client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)}, headers=_viz_client())
     assert res.status_code == 200, res.text
     r = res.json()
     assert r["periods"][0] == "2026-01-01" and r["overlap"] == 12
@@ -68,5 +81,15 @@ def test_a_wrong_column_is_explained():
     ids = list(_groups().values())
     spec = {"period": "month", "left": {"group_id": ids[0], "date": "nope", "value": "hours"},
             "right": {"group_id": ids[1], "date": "invoice_date", "value": "amount"}}
-    res = client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)})
+    res = client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)}, headers=_viz_client())
     assert res.status_code == 400 and "'nope' isn't a column" in res.json()["detail"]
+
+
+def test_compare_needs_data_visualization_in_the_package():
+    res = client.post("/api/accounts/signup", json={"account_type": "individual", "first_name": "Bo", "last_name": "Lee",
+                                                    "email": "no-viz@example.com", "password": "Correct-horse-9",
+                                                    "accept_terms": True})
+    h = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    spec = {"period": "month", "left": {"group_id": 0, "date": "played_at"}, "right": {"group_id": 1, "date": "invoice_date"}}
+    refused = client.post("/api/compare/over-time", files=_files(), data={"spec": json.dumps(spec)}, headers=h)
+    assert refused.status_code == 403 and "Data Visualization" in refused.json()["detail"]

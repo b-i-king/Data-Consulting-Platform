@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from api.core.config import get_settings
 from api.main import app
 from api.services import account_store, billing, price_store, pricing
+from tests.consultant_helpers import apply_as_consultant
 
 client = TestClient(app)
 PW = "Correct-horse-9"
@@ -253,7 +254,8 @@ def test_tester_rules():
 def _kim_with_a_client():
     """The admin (default consultant), Kim (approved) and Sam (Kim's client). Returns tokens and ids."""
     admin, _ = _signup("boss@example.com", "Boss")
-    _, kim_acc = _signup("kim@example.com", "Kim", consultant_request=True)
+    kim_tok, kim_acc = _signup("kim@example.com", "Kim")
+    assert apply_as_consultant(client, _h(admin), kim_tok, "kim@example.com").status_code == 200
     client.post(f"/api/admin/consultant-requests/{kim_acc}/approve", headers=_h(admin))
     kim = _signin("kim@example.com")
     kim_id = next(c["id"] for c in client.get("/api/accounts/consultants").json()["consultants"] if c["name"] == "Kim")

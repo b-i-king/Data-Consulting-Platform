@@ -7,6 +7,9 @@ Billing endpoints (Stripe). The logic lives in api/services/billing.py.
                                          (AI only once the account has stored data)
     POST /api/billing/portal             Stripe's billing portal (card, invoices, CANCEL ANYTIME)
     POST /api/billing/cancel             test mode only: switch the subscription off
+    GET  /api/billing/consulting         "Your consultant": prices, their consultant, what was bought
+    POST /api/billing/consulting/checkout   pay for SETUP (once) or ONGOING HELP (a retainer)
+    POST /api/billing/consulting/cancel  end ongoing help (at the end of the paid period)
     POST /api/billing/webhook            Stripe -> us (signed); keeps the tables in sync
 
 The signed-in ones accept X-Acting-As, so a consultant can set up billing for
@@ -20,8 +23,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from api.core.security import get_acting_context
-from api.models.accounts import CheckoutIn, PriceIn
-from api.services import billing, entitlements, offers, pricing
+from api.models.accounts import CheckoutIn, ConsultingCheckoutIn, PriceIn
+from api.services import billing, consulting_billing, entitlements, offers, pricing
 from api.services.pricing import subscription_catalog
 
 router = APIRouter(prefix="/billing")
@@ -186,6 +189,81 @@ async def cancel(ctx: Annotated[dict, Depends(get_acting_context)]):
     """
     await billing.cancel_placeholder(await _plan_holder(ctx))
     return {"ok": True}
+
+
+async def _client_only(ctx: dict) -> dict:
+    """
+    The plan holder, paying for THEIR consultant — never a consultant buying their own time for a client.
+
+    Raises:
+        HTTPException: 403 when a consultant is acting for the client; plus _plan_holder's 403.
+    """
+    if ctx.get("acting"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Your client chooses and pays for your help themselves (Plan & billing).")
+    return await _plan_holder(ctx)
+
+
+@router.get("/consulting")
+async def consulting(ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    GET /api/billing/consulting — what the client's consultant's help costs, and what they've bought.
+
+    Args:
+        ctx: dict, the acting context (a consultant may look at their client's).
+
+    Returns:
+        dict: consulting_billing.overview — {"catalog", "consultant", "can_buy", "reason",
+        "engagements", "retainer", "test_mode"}.
+
+    Example:
+        GET /api/billing/consulting
+        -> 200 {"catalog": {"setup_usd": 300.0, "retainers": [...]}, "consultant": {"name": "Kim"}, ...}
+    """
+    return await consulting_billing.overview(ctx["account"])
+
+
+@router.post("/consulting/checkout")
+async def consulting_checkout(body: ConsultingCheckoutIn, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/billing/consulting/checkout — pay for setup or ongoing help -> Stripe Checkout URL.
+
+    The consultant's share goes to their Stripe account automatically (Stripe
+    Connect); in test mode it switches on at once with no charge.
+
+    Args:
+        body: ConsultingCheckoutIn, {"kind", "services", "interval", "accept_terms"}.
+        ctx: dict, the acting context (the client themselves; 403 for a consultant acting).
+
+    Returns:
+        dict: {"url", "activated", "test_mode"}.
+
+    Raises:
+        HTTPException: 400 no consultant / bad choice / terms not accepted / admin; 403 for a consultant acting or a
+            team colleague; 409 consultant not ready to be paid, or ongoing help already running.
+
+    Example:
+        POST /api/billing/consulting/checkout
+        {"kind": "retainer", "services": ["data_cleaning", "data_visualization"], "interval": "month",
+         "accept_terms": true}
+        -> 200 {"url": "https://checkout.stripe.com/...", "hours_per_week": 12.5, "amount_usd": 1083.33, ...}
+    """
+    return await consulting_billing.start_checkout(await _client_only(ctx), body.kind, body.services,
+                                                   body.interval, body.accept_terms)
+
+
+@router.post("/consulting/cancel")
+async def consulting_cancel(ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/billing/consulting/cancel — end ongoing help when the paid period ends (test mode: now).
+
+    Returns:
+        dict: the retainer, with "cancel_at_period_end" (Stripe) or status "canceled" (test mode).
+
+    Raises:
+        HTTPException: 404 when no ongoing help is running; 403 as for checkout.
+    """
+    return await consulting_billing.cancel_retainer(await _client_only(ctx))
 
 
 @router.post("/webhook")

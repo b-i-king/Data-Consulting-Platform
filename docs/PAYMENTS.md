@@ -131,19 +131,65 @@ charged. A banner in Plan & billing says so.
 4. **Webhook:** Developers → Webhooks → Add endpoint
    - URL: `https://<your-api>.onrender.com/api/billing/webhook`
    - Events: `customer.subscription.created`, `customer.subscription.updated`,
-     `customer.subscription.deleted`, `checkout.session.completed`
+     `customer.subscription.deleted`, `checkout.session.completed`, `charge.refunded`
    - Copy the **Signing secret** (`whsec_...`).
-5. **Billing portal:** Settings → Billing → Customer portal → turn on
+5. **Stripe Connect (paying consultants):** Settings → Connect → get started,
+   choose **Express** accounts, platform country United States. Fill in your
+   platform profile (Stripe asks what you do: "marketplace / platform for data
+   consultants"). Then each consultant connects their own payout account from
+   Settings → Consultant → Payouts (Stripe asks for their identity, bank and tax
+   details; the app never sees them). Under Connect → Tax reporting you can let
+   Stripe file and send consultants' 1099s. `sync_stripe.py` (step 3) also makes
+   the two products consultant help is sold under ("Consultant setup", "Ongoing
+   help from your consultant"); their prices are sent at checkout.
+6. **Billing portal:** Settings → Billing → Customer portal → turn on
    "Cancel subscriptions" (at end of billing period) and "Update payment methods".
-6. **On Render → Environment:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+7. **On Render → Environment:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
    and `SITE_URL` = your Vercel address (where Stripe sends people back). Save.
-7. **Try it** with Stripe's test card `4242 4242 4242 4242` (any future date,
+8. **Try it** with Stripe's test card `4242 4242 4242 4242` (any future date,
    any CVC): subscribe in Plan & billing → you return to Plan & billing in the
    workspace (`/workspace/settings/billing?checkout=success`; canceling returns
    with `?checkout=canceled`, and "Manage billing" returns there too) → the
    plan shows within a few seconds. Cancel in "Manage billing".
-8. **Go live:** switch Stripe to Live mode, repeat steps 2–6 with the live key
+9. **Go live:** switch Stripe to Live mode, repeat steps 2–7 with the live key
    and a live webhook, and run the sync script with the live key.
+
+## Paying consultants (Stripe Connect)
+
+Code: `api/services/consulting_billing.py` (routes: `GET/POST /api/billing/consulting*`,
+`POST /api/consultant/settings/payouts*`, `GET/PUT /api/admin/consulting-prices`).
+Rows: `dim.consultant_engagements`; prices: `dim.consulting_prices`.
+
+1. **Onboarding:** a consultant connects a Stripe **Express** account
+   (`start_payouts` → Stripe's page → back to Settings → Consultant). It's ready
+   when Stripe says the account's `transfers` capability is active
+   (`payouts_status` asks Stripe on the next page load). Admins skip this.
+2. **Checkout:** the client ticks the billing terms (stored as
+   `terms_accepted_at`) and pays on the platform's Checkout page — setup as a
+   one-time payment, ongoing help as its own subscription (separate from the
+   tools package). The price is worked out on the server from the services
+   picked and sent as Stripe `price_data` on the "consult_setup" /
+   "consult_retainer" products. Each is a **destination charge**:
+   `transfer_data.destination` = the consultant's account, and the platform
+   keeps `platform_fee_percent` (`application_fee_amount` for setup,
+   `application_fee_percent` for the subscription). Metadata `kind: consulting`.
+3. **Webhook:** `checkout.session.completed` marks a setup paid (and saves its
+   payment intent); `customer.subscription.*` with `kind: consulting` keeps
+   ongoing help's status — never the tools package; `charge.refunded` marks a
+   fully refunded setup "refunded".
+4. **Ending ongoing help:** "End ongoing help" (or the Stripe portal) sets
+   `cancel_at_period_end`: it stays on, and paid, to the period's end.
+   Deleting the account cancels it at once.
+
+### The rules for the gaps
+
+| Situation | What happens |
+|---|---|
+| Change services or hours | One ongoing help at a time: end it, choose again once it has ended (changes happen at a period boundary) |
+| Switch consultant while ongoing help is running | Refused (`can_switch`, 409) with the date it ends. Need it sooner? End the subscription in the Stripe dashboard — the webhook marks it ended — and refund if you choose |
+| Consultant **deactivated** (Admin) or **deletes their account** | Their clients' ongoing help ends **at once** (`end_for_consultant`, `ended_reason`); the Admin notice lists who; the client sees why in Plan & billing |
+| **Refunds** | In the Stripe dashboard: Payments → the payment → Refund, with **"Reverse transfer"** ticked so the consultant's share comes back too (and "Refund application fee" for yours). A fully refunded setup shows as "refunded" (webhook) |
+| Client's package drops a tool their ongoing help covers | Ongoing help continues to the period's end; the consultant can only use the tools the client has |
 
 ## How it works
 

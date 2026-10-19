@@ -201,3 +201,32 @@ async def get_acting_context(
     from api.services import consultants   # imported here to avoid a circular import
 
     return await consultants.acting_context(token, x_acting_as)
+
+
+async def get_optional_acting_context(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    x_acting_as: Annotated[str | None, Header()] = None,
+) -> dict | None:
+    """
+    FastAPI dependency: the acting context when the request is signed in, else None.
+
+    For endpoints guests may use too, but that give signed-in people more —
+    e.g. POST /api/skills/{id}/run: a guest gets a preview, a client with the
+    tool in their package gets the full result (api/services/skill_access.py).
+    A token that IS sent must be valid (401 otherwise), so an expired sign-in
+    isn't silently treated as a guest.
+
+    Args:
+        credentials: HTTPAuthorizationCredentials | None, the Authorization header, if any.
+        x_acting_as: str | None, the `X-Acting-As` header (a consultant working on a client).
+
+    Returns:
+        dict | None: {"account", "consultant", "acting", "admin"} (see get_acting_context), or None.
+
+    Example:
+        async def run(ctx: Annotated[dict | None, Depends(get_optional_acting_context)]): ...
+    """
+    if credentials is None:
+        return None
+    token = await get_current_account(credentials)
+    return await get_acting_context(token, x_acting_as)

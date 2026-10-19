@@ -50,6 +50,9 @@ _consents: list[dict] = []               # storage_consents rows
 _load_runs: list[dict] = []              # load_runs rows
 
 _connections: dict[tuple[str, str], dict] = {}   # (account_id, connector) -> data_connections row
+_invites: dict[str, dict] = {}           # email -> consultant_invites row
+_applications: dict[str, dict] = {}      # application id -> consultant_applications row
+_engagements: dict[str, dict] = {}       # engagement id -> consultant_engagements row
 
 
 DEFAULT_CAPACITY = 3   # clients a new consultant takes at once (dim.consultants.capacity)
@@ -894,6 +897,32 @@ async def set_consultant_cal(consultant_id: str, **fields) -> dict | None:
     return dict(row) if row else None
 
 
+async def set_contractor_agreement(consultant_id: str, terms_version: str) -> dict | None:
+    """
+    Record that a consultant agreed to the independent-contractor terms (onboarding).
+
+    Args:
+        consultant_id: str, the consultants row id.
+        terms_version: str, consultants.CONTRACTOR_TERMS_VERSION (which wording they agreed to).
+
+    Returns:
+        dict | None: the updated consultants row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_contractor_agreement(cid, "2026-10-18"))["contractor_terms_version"]
+        '2026-10-18'
+    """
+    if database.pool is None:
+        row = _consultants.get(consultant_id)
+        if row:
+            row.update(contractor_agreed_at=_now(), contractor_terms_version=terms_version)
+        return row
+    row = await database.pool.fetchrow(
+        """UPDATE dim.consultants SET contractor_agreed_at = now(), contractor_terms_version = $2
+           WHERE id = $1 RETURNING *""", uuid.UUID(consultant_id), terms_version)
+    return dict(row) if row else None
+
+
 async def list_all_clients() -> list[dict]:
     """
     Every client plan holder (admins see them all in "Working on").
@@ -987,6 +1016,13 @@ async def delete_account(account_id: str, *, reason: str | None = None, had_paid
         for k in [k for k, t in _tabs.items() if t["account_id"] in ids]:
             _tabs.pop(k)
         _questions[:] = [q for q in _questions if q["account_id"] not in ids]
+        for k in [k for k, app in _applications.items() if app["account_id"] in ids]:
+            _applications.pop(k)
+        for k in [k for k, e in _engagements.items() if e["account_id"] in ids]:
+            _engagements.pop(k)
+        for e in _engagements.values():
+            if e.get("consultant_id") in cids:
+                e["consultant_id"] = None
         return ids
     uids = [uuid.UUID(i) for i in ids]
     async with database.pool.acquire() as conn:
@@ -1332,6 +1368,488 @@ async def list_consultant_requests() -> list[dict]:
 # ── Payments: subscriptions (see api/services/billing.py) ───────────────────
 
 LIVE_STATUSES = ("active", "trialing", "past_due")   # these keep a plan switched on
+
+
+# ── Consultant screening: the invite list and applications ──────────────────
+# (dim.consultant_invites, dim.consultant_applications; the rules live in
+# api/services/consultants.py.)
+
+_APPLICATION_FIELDS = ("services", "experience", "tools", "linkedin_url", "work_sample_url", "project_summary")
+
+
+async def get_invite(email: str) -> dict | None:
+    """
+    The invite for an email address, if an admin added one.
+
+    Args:
+        email: str, any letter case.
+
+    Returns:
+        dict | None: {"email", "invited_by", "note", "created_at"}, or None.
+
+    Example:
+        >>> (await get_invite("Kim@Example.com"))["email"]
+        'kim@example.com'
+    """
+    email = email.lower()
+    if database.pool is None:
+        return _invites.get(email)
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultant_invites WHERE email = $1", email)
+    return dict(row) if row else None
+
+
+async def add_invite(email: str, admin_id: str, note: str | None = None) -> dict:
+    """
+    Put an email on the consultant invite list (adding it again updates the note).
+
+    Args:
+        email: str, the person's email (stored lowercase).
+        admin_id: str, the admin adding it.
+        note: str | None, a private note for admins ("Met at the data meetup").
+
+    Returns:
+        dict: the consultant_invites row.
+
+    Example:
+        >>> (await add_invite("kim@example.com", my_id, "Referred by Ana"))["note"]
+        'Referred by Ana'
+    """
+    email = email.lower()
+    if database.pool is None:
+        row = {"email": email, "invited_by": admin_id, "note": note,
+               "created_at": _invites.get(email, {}).get("created_at") or _now()}
+        _invites[email] = row
+        return row
+    row = await database.pool.fetchrow(
+        """INSERT INTO dim.consultant_invites (email, invited_by, note) VALUES ($1, $2, $3)
+           ON CONFLICT (email) DO UPDATE SET note = EXCLUDED.note
+           RETURNING *""", email, uuid.UUID(admin_id), note)
+    return dict(row)
+
+
+async def remove_invite(email: str) -> bool:
+    """
+    Take an email off the invite list (an existing consultant is NOT affected).
+
+    Args:
+        email: str, any letter case.
+
+    Returns:
+        bool: True if there was an invite to remove.
+
+    Example:
+        >>> await remove_invite("kim@example.com")
+        True
+    """
+    email = email.lower()
+    if database.pool is None:
+        return _invites.pop(email, None) is not None
+    done = await database.pool.execute("DELETE FROM dim.consultant_invites WHERE email = $1", email)
+    return done.endswith(" 1")
+
+
+async def list_invites() -> list[dict]:
+    """
+    Every invite, newest first.
+
+    Returns:
+        list[dict]: consultant_invites rows.
+
+    Example:
+        >>> [i["email"] for i in await list_invites()]
+        ['lee@example.com', 'kim@example.com']
+    """
+    if database.pool is None:
+        return sorted(_invites.values(), key=lambda i: i["created_at"], reverse=True)
+    rows = await database.pool.fetch("SELECT * FROM dim.consultant_invites ORDER BY created_at DESC")
+    return [dict(r) for r in rows]
+
+
+def _application_out(row) -> dict:
+    """
+    A consultant_applications row as a plain dict (ids as text, services as a list).
+
+    Args:
+        row: asyncpg.Record | dict, one consultant_applications row.
+
+    Returns:
+        dict: the same row with "id", "account_id" and "decided_by" as str.
+    """
+    out = dict(row)
+    for k in ("id", "account_id", "decided_by"):
+        if out.get(k) is not None:
+            out[k] = str(out[k])
+    out["services"] = list(out.get("services") or [])
+    return out
+
+
+async def create_application(account_id: str, answers: dict) -> dict:
+    """
+    Save a screening application and mark the account's request 'pending'.
+
+    Args:
+        account_id: str, the person applying (their own, signed-in account).
+        answers: dict, the screening answers: services (list of catalog ids),
+            experience (a range id, e.g. "3_5"), tools, linkedin_url,
+            work_sample_url (or None), project_summary. Agreeing to the code of conduct is stamped now.
+
+    Returns:
+        dict: the new consultant_applications row (status 'pending').
+
+    Example:
+        >>> (await create_application(kim_id, {"services": ["data_cleaning"], ...}))["status"]
+        'pending'
+    """
+    fields = {k: answers.get(k) for k in _APPLICATION_FIELDS}
+    if database.pool is None:
+        row = {"id": str(uuid.uuid4()), "account_id": account_id, "status": "pending", **fields,
+               "agreed_conduct_at": _now(), "submitted_at": _now(), "decided_at": None, "decided_by": None,
+               "denial_reason": None, "decision_note": None, "reapply_after": None}
+        _applications[row["id"]] = row
+        await request_consultant(account_id)
+        return row
+    async with database.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO dim.consultant_applications
+                       (account_id, services, experience, tools, linkedin_url, work_sample_url,
+                        project_summary, agreed_conduct_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+                   RETURNING *""",
+                uuid.UUID(account_id), fields["services"], fields["experience"], fields["tools"],
+                fields["linkedin_url"], fields["work_sample_url"], fields["project_summary"])
+            await conn.execute(
+                """UPDATE dim.accounts SET consultant_request = 'pending', consultant_requested_at = now(),
+                          consultant_decided_at = NULL, consultant_decided_by = NULL
+                   WHERE id = $1""", uuid.UUID(account_id))
+    return _application_out(row)
+
+
+async def latest_application(account_id: str) -> dict | None:
+    """
+    The person's most recent application (None if they never applied).
+
+    Args:
+        account_id: str.
+
+    Returns:
+        dict | None: a consultant_applications row.
+
+    Example:
+        >>> (await latest_application(kim_id))["status"]
+        'denied'
+    """
+    if database.pool is None:
+        mine = [a for a in _applications.values() if a["account_id"] == account_id]
+        return max(mine, key=lambda a: a["submitted_at"]) if mine else None
+    row = await database.pool.fetchrow(
+        """SELECT * FROM dim.consultant_applications WHERE account_id = $1
+           ORDER BY submitted_at DESC LIMIT 1""", uuid.UUID(account_id))
+    return _application_out(row) if row else None
+
+
+async def get_application(application_id: str) -> dict | None:
+    """
+    One application by its id.
+
+    Args:
+        application_id: str, the consultant_applications id.
+
+    Returns:
+        dict | None: the row, or None (also for text that isn't an id).
+
+    Example:
+        >>> (await get_application(app_id))["account_id"] == kim_id
+        True
+    """
+    if database.pool is None:
+        return _applications.get(application_id)
+    try:
+        key = uuid.UUID(application_id)
+    except ValueError:
+        return None
+    row = await database.pool.fetchrow("SELECT * FROM dim.consultant_applications WHERE id = $1", key)
+    return _application_out(row) if row else None
+
+
+async def list_applications() -> list[dict]:
+    """
+    Every application, each with how many times that person has applied.
+
+    Returns:
+        list[dict]: consultant_applications rows plus "times_applied" (int),
+        newest first.
+
+    Example:
+        >>> [(a["status"], a["times_applied"]) for a in await list_applications()]
+        [('pending', 2), ('denied', 2)]
+    """
+    if database.pool is None:
+        rows = sorted(_applications.values(), key=lambda a: a["submitted_at"], reverse=True)
+        counts: dict[str, int] = {}
+        for a in rows:
+            counts[a["account_id"]] = counts.get(a["account_id"], 0) + 1
+        return [{**a, "times_applied": counts[a["account_id"]]} for a in rows]
+    rows = await database.pool.fetch(
+        """SELECT a.*, count(*) OVER (PARTITION BY a.account_id) AS times_applied
+           FROM dim.consultant_applications a ORDER BY a.submitted_at DESC""")
+    return [_application_out(r) for r in rows]
+
+
+async def decide_application(application_id: str, *, approved: bool, admin_id: str, denial_reason: str | None,
+                             decision_note: str | None, reapply_after: date | None) -> dict | None:
+    """
+    Save an admin's decision on one application (and mirror it on the account).
+
+    Args:
+        application_id: str, the consultant_applications id.
+        approved: bool, True = approve, False = deny.
+        admin_id: str, the admin deciding.
+        denial_reason: str | None, a DENIAL_REASONS id (denials only).
+        decision_note: str | None, optional, shown to the person.
+        reapply_after: date | None, denied: the first day they may apply again.
+
+    Returns:
+        dict | None: the updated application, or None if it doesn't exist.
+
+    Example:
+        >>> (await decide_application(app_id, approved=False, admin_id=me, denial_reason="work_sample",
+        ...                           decision_note=None, reapply_after=date(2027, 1, 18)))["status"]
+        'denied'
+    """
+    status = "approved" if approved else "denied"
+    if database.pool is None:
+        row = _applications.get(application_id)
+        if row is None:
+            return None
+        row.update(status=status, decided_at=_now(), decided_by=admin_id, denial_reason=denial_reason,
+                   decision_note=decision_note, reapply_after=reapply_after)
+    else:
+        rec = await database.pool.fetchrow(
+            """UPDATE dim.consultant_applications
+                  SET status = $2, decided_at = now(), decided_by = $3, denial_reason = $4,
+                      decision_note = $5, reapply_after = $6
+                WHERE id = $1 RETURNING *""",
+            uuid.UUID(application_id), status, uuid.UUID(admin_id), denial_reason, decision_note, reapply_after)
+        if rec is None:
+            return None
+        row = _application_out(rec)
+    await decide_consultant_request(row["account_id"], approved, admin_id)
+    return row
+
+
+# ── Consultant payouts and engagements (api/services/consulting_billing.py) ───
+
+_ENGAGEMENT_FIELDS = ("status", "cancel_at_period_end", "current_period_end", "stripe_subscription_id",
+                      "stripe_checkout_id", "stripe_payment_intent_id", "ended_reason")
+
+
+async def set_consultant_payouts(consultant_id: str, *, stripe_account_id: str | None = None,
+                                 ready: bool | None = None) -> dict | None:
+    """
+    Save a consultant's Stripe Connect account and/or whether it can receive payouts.
+
+    Args:
+        consultant_id: str, the consultants row id.
+        stripe_account_id: str | None, "acct_..." (None = leave as is).
+        ready: bool | None, True = payouts_ready_at now (if not set yet), False = clear it,
+            None = leave as is.
+
+    Returns:
+        dict | None: the updated consultants row, or None if it doesn't exist.
+
+    Example:
+        >>> (await set_consultant_payouts(cid, stripe_account_id="acct_1", ready=True))["payouts_ready_at"] is not None
+        True
+    """
+    if database.pool is None:
+        row = _consultants.get(consultant_id)
+        if row is None:
+            return None
+        if stripe_account_id is not None:
+            row["stripe_account_id"] = stripe_account_id
+        if ready is True and not row.get("payouts_ready_at"):
+            row["payouts_ready_at"] = _now()
+        elif ready is False:
+            row["payouts_ready_at"] = None
+        return row
+    row = await database.pool.fetchrow(
+        """UPDATE dim.consultants
+              SET stripe_account_id = COALESCE($2, stripe_account_id),
+                  payouts_ready_at = CASE WHEN $3::boolean IS NULL THEN payouts_ready_at
+                                          WHEN $3 THEN COALESCE(payouts_ready_at, now())
+                                          ELSE NULL END
+            WHERE id = $1 RETURNING *""", uuid.UUID(consultant_id), stripe_account_id, ready)
+    return dict(row) if row else None
+
+
+def _engagement_out(row) -> dict:
+    """A consultant_engagements row as a plain dict (ids as text, amounts as float)."""
+    out = dict(row)
+    for k in ("id", "account_id", "consultant_id"):
+        if out.get(k) is not None:
+            out[k] = str(out[k])
+    for k in ("amount_usd", "platform_fee_percent", "hours_per_week"):
+        if out.get(k) is not None:
+            out[k] = float(out[k])
+    out["services"] = list(out.get("services") or [])
+    return out
+
+
+async def create_engagement(*, account_id: str, consultant_id: str | None, kind: str, amount_usd: float,
+                            platform_fee_percent: float, status: str, hours_per_week: float | None = None,
+                            services: list[str] | None = None, billing_interval: str | None = None,
+                            terms_accepted: bool = False, stripe_checkout_id: str | None = None,
+                            stripe_subscription_id: str | None = None,
+                            current_period_end: datetime | None = None) -> dict:
+    """
+    Record a consultant purchase: a one-time setup, or ongoing help (retainer).
+
+    Args:
+        account_id: str, the client (plan holder).
+        consultant_id: str | None, their consultant.
+        kind: str, "setup" or "retainer".
+        amount_usd: float, the price (once for setup; per period for a retainer).
+        platform_fee_percent: float, the platform's share, as charged.
+        status: str, "pending" until Stripe confirms; "paid" (setup) or "active" in test mode.
+        hours_per_week: float | None, retainer only (pricing.help_hours of `services`).
+        services: list[str] | None, retainer only: the services they need help with.
+        terms_accepted: bool, ticked "cancel any time, paid to the end of the period" (stamped now).
+        billing_interval: str | None, retainer only ("month" or "year").
+        stripe_checkout_id: str | None, the Checkout session ("cs_...").
+        stripe_subscription_id: str | None, the retainer's subscription ("sub_...").
+        current_period_end: datetime | None, when the paid period ends.
+
+    Returns:
+        dict: the new consultant_engagements row.
+
+    Example:
+        >>> (await create_engagement(account_id=a, consultant_id=c, kind="setup", amount_usd=300,
+        ...                          platform_fee_percent=20, status="pending"))["kind"]
+        'setup'
+    """
+    row = {"account_id": account_id, "consultant_id": consultant_id, "kind": kind, "amount_usd": amount_usd,
+           "platform_fee_percent": platform_fee_percent, "status": status, "hours_per_week": hours_per_week,
+           "billing_interval": billing_interval, "stripe_checkout_id": stripe_checkout_id,
+           "stripe_subscription_id": stripe_subscription_id, "current_period_end": current_period_end,
+           "cancel_at_period_end": False, "services": list(services or []),
+           "terms_accepted_at": _now() if terms_accepted else None, "ended_reason": None,
+           "stripe_payment_intent_id": None}
+    if database.pool is None:
+        row.update(id=str(uuid.uuid4()), created_at=_now(), updated_at=_now())
+        _engagements[row["id"]] = row
+        return row
+    rec = await database.pool.fetchrow(
+        """INSERT INTO dim.consultant_engagements
+               (account_id, consultant_id, kind, amount_usd, platform_fee_percent, status, hours_per_week,
+                services, billing_interval, stripe_checkout_id, stripe_subscription_id, current_period_end,
+                terms_accepted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN now() END) RETURNING *""",
+        uuid.UUID(account_id), uuid.UUID(consultant_id) if consultant_id else None, kind, amount_usd,
+        platform_fee_percent, status, hours_per_week, list(services or []), billing_interval, stripe_checkout_id,
+        stripe_subscription_id, current_period_end, terms_accepted)
+    return _engagement_out(rec)
+
+
+async def find_engagement(*, engagement_id: str | None = None, stripe_checkout_id: str | None = None,
+                          stripe_subscription_id: str | None = None,
+                          stripe_payment_intent_id: str | None = None) -> dict | None:
+    """
+    One engagement, by its id, its Checkout session or its Stripe subscription.
+
+    Returns:
+        dict | None: the row, or None.
+    """
+    if database.pool is None:
+        return next((e for e in _engagements.values()
+                     if (engagement_id and e["id"] == engagement_id)
+                     or (stripe_checkout_id and e.get("stripe_checkout_id") == stripe_checkout_id)
+                     or (stripe_subscription_id and e.get("stripe_subscription_id") == stripe_subscription_id)
+                     or (stripe_payment_intent_id and e.get("stripe_payment_intent_id") == stripe_payment_intent_id)),
+                    None)
+    if engagement_id:
+        rec = await database.pool.fetchrow("SELECT * FROM dim.consultant_engagements WHERE id = $1",
+                                           uuid.UUID(engagement_id))
+    elif stripe_checkout_id:
+        rec = await database.pool.fetchrow("SELECT * FROM dim.consultant_engagements WHERE stripe_checkout_id = $1",
+                                           stripe_checkout_id)
+    elif stripe_subscription_id:
+        rec = await database.pool.fetchrow(
+            "SELECT * FROM dim.consultant_engagements WHERE stripe_subscription_id = $1", stripe_subscription_id)
+    elif stripe_payment_intent_id:
+        rec = await database.pool.fetchrow(
+            "SELECT * FROM dim.consultant_engagements WHERE stripe_payment_intent_id = $1", stripe_payment_intent_id)
+    else:
+        return None
+    return _engagement_out(rec) if rec else None
+
+
+async def update_engagement(engagement_id: str, **fields) -> dict | None:
+    """
+    Change an engagement's status, period end, cancel flag or Stripe ids.
+
+    Args:
+        engagement_id: str, the consultant_engagements id.
+        **fields: any of _ENGAGEMENT_FIELDS.
+
+    Returns:
+        dict | None: the updated row, or None if it doesn't exist.
+
+    Example:
+        >>> (await update_engagement(eid, status="paid"))["status"]
+        'paid'
+    """
+    fields = {k: v for k, v in fields.items() if k in _ENGAGEMENT_FIELDS}
+    if database.pool is None:
+        row = _engagements.get(engagement_id)
+        if row:
+            row.update(fields, updated_at=_now())
+        return row
+    if not fields:
+        return await find_engagement(engagement_id=engagement_id)
+    sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+    rec = await database.pool.fetchrow(
+        f"UPDATE dim.consultant_engagements SET {sets}, updated_at = now() WHERE id = $1 RETURNING *",
+        uuid.UUID(engagement_id), *fields.values())
+    return _engagement_out(rec) if rec else None
+
+
+async def list_consultant_engagements(consultant_id: str) -> list[dict]:
+    """
+    Every engagement a consultant is paid for (all their clients), newest first.
+
+    Args:
+        consultant_id: str, the consultants row id.
+
+    Returns:
+        list[dict]: consultant_engagements rows.
+    """
+    if database.pool is None:
+        return sorted((e for e in _engagements.values() if e.get("consultant_id") == consultant_id),
+                      key=lambda e: e["created_at"], reverse=True)
+    rows = await database.pool.fetch(
+        "SELECT * FROM dim.consultant_engagements WHERE consultant_id = $1 ORDER BY created_at DESC",
+        uuid.UUID(consultant_id))
+    return [_engagement_out(r) for r in rows]
+
+
+async def list_engagements(account_id: str) -> list[dict]:
+    """
+    A client's consultant purchases, newest first.
+
+    Args:
+        account_id: str, the client (plan holder).
+
+    Returns:
+        list[dict]: consultant_engagements rows.
+    """
+    if database.pool is None:
+        return sorted((e for e in _engagements.values() if e["account_id"] == account_id),
+                      key=lambda e: e["created_at"], reverse=True)
+    rows = await database.pool.fetch(
+        "SELECT * FROM dim.consultant_engagements WHERE account_id = $1 ORDER BY created_at DESC",
+        uuid.UUID(account_id))
+    return [_engagement_out(r) for r in rows]
 
 
 async def set_stripe_customer(account_id: str, customer_id: str) -> None:

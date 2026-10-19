@@ -527,6 +527,133 @@ def plan_from_lookup_key(key: str) -> tuple[str, str] | None:
     return (plan_id, interval) if plan_id in SUBSCRIPTIONS_BY_ID and interval in INTERVALS else None
 
 
+# ── Consultant help: a one-time SETUP, or ONGOING help (monthly or yearly) ─────
+# A "done for you" client pays their consultant through the platform (Stripe
+# Connect: Stripe sends the consultant their share, the platform keeps
+# platform_fee_percent — api/services/consulting_billing.py).
+#   * SETUP: a fixed fee for getting everything in place (connecting sources,
+#     cleaning, loading, the first dashboard).
+#   * ONGOING HELP: priced by WHAT the client needs help with, not a level they
+#     pick (so nobody just picks the cheapest):
+#       Data Cleaning and/or Data Engineering   core_hours a week (10): the bulk —
+#                                               files and QuickBooks / Xero to clean and load
+#       each other tool picked                  service_hours a week (2.5): Exploration &
+#                                               Analysis, Visualization, Science & ML
+#       AI                                      0: the client asks it themselves
+#     Data Strategy & Discovery is NOT here: it's consulting only, booked and
+#     paid by the hour ($80) on Cal.com.
+#     ...capped at max_hours (20). Cloud-database clients usually skip the core
+#     block (nothing to clean or load). A month = hours x 52 / 12 weeks x
+#     help_rate_usd; a year = 10 months (like the tools).
+# Hourly sessions booked on Cal.com (CONSULTING_RATE_PER_HOUR_USD, $80) are
+# separate and still paid to the consultant directly.
+# These numbers live in dim.consulting_prices (Admin -> Prices -> "Consultant
+# help"); the defaults below are used until it's saved once, or without a database.
+CORE_HELP_SERVICES = ("data_cleaning", "data_engineering")
+LIGHT_HELP_SERVICES = ("data_exploration_analysis", "data_visualization",
+                       "data_science_ml")
+WEEKS_PER_MONTH = 52 / 12                # 4.33: a month's share of the year's weeks
+ANNUAL_MONTHS = 10                       # a year of ongoing help costs 10 months
+CONSULTING_DEFAULTS: dict[str, float] = {
+    "help_rate_usd": 20.0,               # per hour: the tool does most of the work
+    "setup_usd": 300.0,                  # one time (about 15 hours x $20)
+    "core_hours": 10.0,                  # Data Cleaning / Data Engineering, a week
+    "service_hours": 2.5,                # each other service, a week
+    "max_hours": 20.0,                   # never more than this a week
+    "platform_fee_percent": 20.0,        # the platform's share (not taken for admins)
+}
+CONSULTING: dict[str, float] = dict(CONSULTING_DEFAULTS)   # the live numbers (price_store.load)
+
+
+def apply_consulting_prices(values: dict) -> None:
+    """
+    Make these the live consultant-help numbers (from dim.consulting_prices).
+
+    Args:
+        values: dict, any of CONSULTING_DEFAULTS' keys; others are ignored.
+
+    Example:
+        >>> apply_consulting_prices({"help_rate_usd": 25})
+        >>> CONSULTING["help_rate_usd"]
+        25.0
+    """
+    CONSULTING.update({k: float(v) for k, v in values.items() if k in CONSULTING_DEFAULTS and v is not None})
+
+
+def help_hours(service_ids: list[str]) -> float:
+    """
+    Hours a week of ongoing help for the services a client needs help with.
+
+    Args:
+        service_ids: list[str], the services picked (AI and unknown ids count 0).
+
+    Returns:
+        float: core_hours when Data Cleaning or Data Engineering is picked, plus
+        service_hours per other service — at most max_hours.
+
+    Example:
+        >>> help_hours(["data_cleaning", "data_engineering", "data_visualization"])
+        12.5
+        >>> help_hours(["data_visualization", "data_science_ml"])     # cloud data: no core block
+        5.0
+    """
+    picked = set(service_ids)
+    hours = CONSULTING["core_hours"] if picked & set(CORE_HELP_SERVICES) else 0.0
+    hours += CONSULTING["service_hours"] * len(picked & set(LIGHT_HELP_SERVICES))
+    return min(hours, CONSULTING["max_hours"])
+
+
+def retainer_price_usd(hours_per_week: float, interval: str) -> float:
+    """
+    Ongoing help's price for one billing period: a month, or a year (= ANNUAL_MONTHS months).
+
+    Args:
+        hours_per_week: float, from help_hours.
+        interval: str, "month" or "year".
+
+    Returns:
+        float: dollars per period, to the cent.
+
+    Example:
+        >>> retainer_price_usd(10, "month"), retainer_price_usd(10, "year")    # $20/hour
+        (866.67, 8666.7)
+    """
+    monthly = round(hours_per_week * WEEKS_PER_MONTH * CONSULTING["help_rate_usd"], 2)
+    return round(monthly * ANNUAL_MONTHS, 2) if interval == "year" else monthly
+
+
+def setup_usd() -> float:
+    """The one-time setup fee."""
+    return CONSULTING["setup_usd"]
+
+
+def consulting_catalog() -> dict:
+    """
+    What a consultant's help costs, for the website (Get Started and Plan & billing).
+
+    Returns:
+        dict: {"setup_usd", "hourly_usd", "core_hours", "service_hours", "max_hours",
+        "core_services", "light_services", "annual_months", "session_rate_usd",
+        "min_monthly_usd" (the smallest ongoing help: one light service)}.
+
+    Example:
+        >>> consulting_catalog()["min_monthly_usd"]      # 2.5 hours a week at $20
+        216.67
+    """
+    return {
+        "setup_usd": CONSULTING["setup_usd"],
+        "hourly_usd": CONSULTING["help_rate_usd"],
+        "core_hours": CONSULTING["core_hours"],
+        "service_hours": CONSULTING["service_hours"],
+        "max_hours": CONSULTING["max_hours"],
+        "core_services": list(CORE_HELP_SERVICES),
+        "light_services": list(LIGHT_HELP_SERVICES),
+        "annual_months": ANNUAL_MONTHS,
+        "session_rate_usd": consulting_rate(),   # hourly Cal.com sessions, paid to the consultant directly
+        "min_monthly_usd": retainer_price_usd(CONSULTING["service_hours"], "month"),
+    }
+
+
 def subscription_catalog() -> list[dict]:
     """
     List every priced item as a plain dict, with the yearly saving worked out for the UI.

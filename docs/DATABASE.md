@@ -32,6 +32,10 @@ erDiagram
     teams ||--o{ accounts : "members (team_id)"
     consultants |o--|| accounts : "signs in as"
     consultants ||--o{ accounts : "manages (consultant_id)"
+    accounts ||--o{ consultant_applications : "applies to be a consultant (screening)"
+    accounts ||--o{ consultant_invites : "an admin invites (invited_by)"
+    accounts ||--o{ consultant_engagements : "pays their consultant (setup / ongoing help)"
+    consultants ||--o{ consultant_engagements : "is paid for"
     accounts ||--o{ subscriptions : "pays for"
     accounts ||--o{ usage_events : "downloads"
     consultants |o--o{ usage_events : "done on the client's behalf"
@@ -118,6 +122,10 @@ erDiagram
         text free_booking_url "their free 30-min Cal.com link"
         text paid_booking_url "their paid session link"
         text calcom_webhook_secret "signs their own webhook"
+        timestamptz contractor_agreed_at "onboarding: independent-contractor terms"
+        text contractor_terms_version
+        text stripe_account_id UK "Stripe Connect Express (payouts)"
+        timestamptz payouts_ready_at
         timestamptz deactivated_at "an admin switched them off"
         uuid deactivated_by "the admin"
         text deactivation_reason
@@ -125,6 +133,62 @@ erDiagram
         uuid reactivated_by "the admin"
         timestamptz created_at
         timestamptz updated_at "trigger"
+    }
+    consultant_invites {
+        text email PK "lowercase; may apply (invite-only mode)"
+        uuid invited_by FK "the admin"
+        text note "for admins only"
+        timestamptz created_at
+    }
+    consultant_applications {
+        uuid id PK
+        uuid account_id FK "the applicant"
+        text status "pending | approved | denied"
+        text_array services "catalog ids they can deliver"
+        text experience "lt_1 | 1_3 | 3_5 | 5_10 | 10_plus"
+        text tools
+        text linkedin_url "required: linkedin.com/in/..."
+        text work_sample_url "optional portfolio / sample"
+        text project_summary
+        timestamptz agreed_conduct_at "code of conduct"
+        timestamptz submitted_at
+        timestamptz decided_at
+        uuid decided_by FK "the admin"
+        text denial_reason "fixed list (they see it)"
+        text decision_note "personal feedback (required to deny)"
+        date reapply_after "denied: first day to apply again"
+    }
+    consultant_engagements {
+        uuid id PK
+        uuid account_id FK "the client"
+        uuid consultant_id FK
+        text kind "setup | retainer"
+        numeric hours_per_week "from the services (retainer)"
+        text_array services "what they get help with (retainer)"
+        text billing_interval "month | year (retainer)"
+        numeric amount_usd
+        numeric platform_fee_percent "as charged"
+        text status "pending | paid | refunded | active | ..."
+        text ended_reason "client | consultant_deactivated | consultant_left | account_deleted"
+        timestamptz terms_accepted_at "billing terms ticked"
+        text stripe_payment_intent_id "setup (refunds)"
+        bool cancel_at_period_end
+        timestamptz current_period_end
+        text stripe_subscription_id UK
+        text stripe_checkout_id UK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    consulting_prices {
+        bool id PK "one row"
+        numeric setup_usd
+        numeric help_rate_usd
+        numeric core_hours "Cleaning / Engineering, once"
+        numeric service_hours "each other service"
+        numeric max_hours
+        numeric platform_fee_percent
+        timestamptz updated_at
+        uuid updated_by FK "the admin"
     }
     plan_prices {
         text plan_id PK "pricing.SUBSCRIPTIONS id"
@@ -276,8 +340,12 @@ erDiagram
 
 | Table | One row per | Written by | Notes |
 |---|---|---|---|
-| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `team_role` = `owner` (the team's admin: billing, people, roles), `developer` (uploads, connects and loads data, edits dashboards) or `member` (**view only**); a team holds `TEAM_MAX_PEOPLE` (5) people, owner included, and one person is on one team (`api/services/teams.py`). `trial_used_at` = when their one free trial started (`api/services/offers.py`). `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the "work as a consultant" request and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. `is_tester` = an admin made them a **tester** (Admin → Testers): packages switch on with no charge even when Stripe is live, and downloads are free (`billing.charges_real_money`). `updated_at` = last time anything about the account changed (the `dim.touch_updated_at` trigger; a sign-in alone doesn't count). `mfa_secret` (encrypted) / `mfa_enabled_at` / `mfa_recovery_codes` (hashes) = two-step sign-in (`api/services/mfa.py`). `hipaa_status` (`pending` / `approved` / `denied`) with `hipaa_requested_at`, `hipaa_organization`, `hipaa_npi`, `hipaa_note`, `hipaa_decided_at` / `_by`, `hipaa_decision_note` = a request to store health information, confirmed by an admin (`api/services/hipaa.py`; a NAICS 62 sign-up asks automatically; storing is paused while pending). `is_healthcare` = HIPAA approved: their data access is audited. `failed_logins` / `login_locked_until` = the sign-in lockout: wrong passwords in a row, and when the lock ends after `LOGIN_MAX_ATTEMPTS` (3) of them, for `LOGIN_LOCK_MINUTES` (15). A successful sign-in or a password reset clears both (`api/services/login_guard.py`). |
-| `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `active` = false when an admin **deactivated** them (Admin → Consultants): they can't be picked or open clients and sign in as a client; their clients moved to a consultant with room (`consultants.deactivate`). `deactivated_at` / `_by` / `deactivation_reason` and `reactivated_at` / `_by` keep the latest of each. `updated_at` is set by the `dim.touch_updated_at` trigger. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. |
+| `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `team_role` = `owner` (the team's admin: billing, people, roles), `developer` (uploads, connects and loads data, edits dashboards) or `member` (**view only**); a team holds `TEAM_MAX_PEOPLE` (5) people, owner included, and one person is on one team (`api/services/teams.py`). `trial_used_at` = when their one free trial started (`api/services/offers.py`). `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the status of their LATEST consultant application (`dim.consultant_applications` has the answers and history) and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. `is_tester` = an admin made them a **tester** (Admin → Testers): packages switch on with no charge even when Stripe is live, and downloads are free (`billing.charges_real_money`). `updated_at` = last time anything about the account changed (the `dim.touch_updated_at` trigger; a sign-in alone doesn't count). `mfa_secret` (encrypted) / `mfa_enabled_at` / `mfa_recovery_codes` (hashes) = two-step sign-in (`api/services/mfa.py`). `hipaa_status` (`pending` / `approved` / `denied`) with `hipaa_requested_at`, `hipaa_organization`, `hipaa_npi`, `hipaa_note`, `hipaa_decided_at` / `_by`, `hipaa_decision_note` = a request to store health information, confirmed by an admin (`api/services/hipaa.py`; a NAICS 62 sign-up asks automatically; storing is paused while pending). `is_healthcare` = HIPAA approved: their data access is audited. `failed_logins` / `login_locked_until` = the sign-in lockout: wrong passwords in a row, and when the lock ends after `LOGIN_MAX_ATTEMPTS` (3) of them, for `LOGIN_LOCK_MINUTES` (15). A successful sign-in or a password reset clears both (`api/services/login_guard.py`). |
+| `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `active` = false when an admin **deactivated** them (Admin → Consultants): they can't be picked or open clients and sign in as a client; their clients moved to a consultant with room (`consultants.deactivate`). `deactivated_at` / `_by` / `deactivation_reason` and `reactivated_at` / `_by` keep the latest of each. `updated_at` is set by the `dim.touch_updated_at` trigger. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. `contractor_agreed_at` / `contractor_terms_version` = onboarding: when they agreed to the independent-contractor terms (paid directly by clients, their own taxes) and which wording (`consultants.CONTRACTOR_TERMS_VERSION`; a new version asks again). `stripe_account_id` / `payouts_ready_at` = the consultant's Stripe Connect Express account (onboarding) and when Stripe said it can receive transfers — how clients' setup and ongoing-help payments reach them (`api/services/consulting_billing.py`; admins don't need one). |
+| `dim.consultant_invites` | email allowed to apply to be a consultant | **Admin → Consultant invites** (`consultants.invite`) | Checked only while `CONSULTANT_APPLICATIONS=invite` (the default). Removing an invite stops new applications only — never removes a consultant. `note` is for admins. |
+| `dim.consultant_applications` | consultant screening application (one per try) | **Settings → Account → Work as a consultant** (`consultants.apply`); the admin's decision (`consultants.decide`) | The answers: `services`, `experience` (a range: `lt_1`, `1_3`, `3_5`, `5_10`, `10_plus`), `tools`, `linkedin_url` (required, a linkedin.com/in/ profile), optional `work_sample_url` (portfolio), `project_summary`, `agreed_conduct_at` (code of conduct). A denial sets `denial_reason` (a fixed list, `consultants.DENIAL_REASONS`, shown to them), `decision_note` (the admin's personal feedback — required to deny, also shown to them), and `reapply_after` = 3, 6 or 12 months later — they can't apply again before that day. `accounts.consultant_request` mirrors the latest row's status. Deleted with the account. |
+| `dim.consultant_engagements` | thing a client paid their consultant for through the platform | **Plan & billing → Your consultant** (`consulting_billing.start_checkout`), then the **Stripe webhook** | `kind` = `setup` (once, `paid` when paid, `refunded` after a full refund in Stripe) or `retainer` (ongoing help for the `services` picked; `hours_per_week` worked out from them by `pricing.help_hours`; `billing_interval`; a Stripe subscription whose `status` follows Stripe's). `terms_accepted_at` = the billing terms ticked. `ended_reason` = why it ended (`client`, or early: `consultant_deactivated` / `consultant_left` — refund the unused time — or `account_deleted`). Paid by Stripe Connect destination charges: the consultant's share goes to `consultants.stripe_account_id`; `platform_fee_percent` is what the platform kept. Never unlocks tools. Hourly Cal.com sessions aren't here. Deleted with the client's account. |
+| `dim.consulting_prices` | (one row) | the `db/schema.sql` seed, then **Admin → Prices → Consultant help** (`price_store.set_consulting_prices`) | What a consultant's help costs: `setup_usd`, `help_rate_usd`, `core_hours` (Data Cleaning / Engineering, counted once), `service_hours` (each other service), `max_hours`, `platform_fee_percent`. Read at startup into `pricing.CONSULTING`; each checkout sends Stripe its own price, so nothing needs syncing. |
 | `dim.teams` | business | business signup | `accounts.team_id` links members. |
 | `dim.subscriptions` | client subscription (a package of tools, or All tools) | **Stripe webhook** (`api/services/billing.py`); in test mode (or for a tester), checkout switches it on at once | The tools are the `items` list (`plan_id` from `pricing.py`, plus Stripe's item id). One billing interval for all of them. `active`, `trialing`, `past_due` keep it on. The tools on sale are in `pricing.py`; their prices in `dim.plan_prices`. `cancel_feedback` / `cancel_comment` / `canceled_at` = why and when they canceled in Stripe's portal (Stripe's reason codes). |
 | `dim.plan_prices` | tool or bundle on sale | the `db/schema.sql` seed, then **Admin → Prices** (`api/services/price_store.py`) | **The one place a price is changed.** Saving updates Stripe first (a new Stripe price under the same lookup key; subscribers keep theirs), then this row, then the running site. The API reads the table at startup; after editing it by hand in Supabase, run `python scripts/sync_stripe.py` and restart the API. No row = the default in `pricing.py`. `trial_days` = a free trial on a first package with this tool (0 = none; Stripe runs it). |

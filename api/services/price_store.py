@@ -16,6 +16,11 @@ dim.plan_prices (db/schema.sql), so you can change them without touching code:
   set_price(plan, m, a, admin) change one plan's monthly and annual price (and
                                its free-trial days): Stripe first (when it's on),
                                then the table, then the running site
+  consulting_prices()          a consultant's help: setup fee, hourly rate, hours
+                               rule, platform fee (dim.consulting_prices, ONE row)
+  set_consulting_prices(v, a)  change them. No Stripe step: each consultant
+                               checkout sends Stripe the price it works out
+                               (api/services/consulting_billing.py)
 
 WHY STRIPE FIRST
 ----------------
@@ -46,6 +51,7 @@ log = logging.getLogger(__name__)
 
 # In-memory fallback (development only): plan_id -> {"monthly_usd", "annual_usd", "updated_at", "updated_by"}.
 _prices: dict[str, dict] = {}
+_consulting: dict = {}            # dim.consulting_prices (memory path)
 
 MIN_PRICE_USD = 0.50          # Stripe's smallest card charge in US dollars
 MAX_MONTHLY_USD = 10_000.0    # a typo guard ("1900" for "19.00"), not a business rule
@@ -80,6 +86,7 @@ async def load() -> int:
             return 0
         rows = {r["plan_id"]: (float(r["monthly_usd"]), float(r["annual_usd"])) for r in found}
         trials = {r["plan_id"]: int(r["trial_days"] or 0) for r in found}
+    await _load_consulting()
     pricing.apply_prices({pid: p for pid, p in rows.items() if pid in pricing.SUBSCRIPTIONS_BY_ID})
     pricing.TRIAL_DAYS.clear()
     pricing.TRIAL_DAYS.update({pid: d for pid, d in trials.items() if d})
@@ -234,3 +241,80 @@ async def set_price(plan_id: str, monthly_usd: float, annual_usd: float, admin: 
     else:
         pricing.TRIAL_DAYS.pop(plan_id, None)
     return {"prices": await list_prices(), "stripe": {"enabled": billing.stripe_enabled(), "changes": changes}}
+
+
+# ── A consultant's help (dim.consulting_prices) ───────────────────────────────
+
+async def _load_consulting() -> None:
+    """Read dim.consulting_prices into pricing.CONSULTING (defaults if the table isn't there yet)."""
+    if database.pool is None:
+        pricing.apply_consulting_prices(_consulting)
+        return
+    try:
+        row = await database.pool.fetchrow("SELECT * FROM dim.consulting_prices WHERE id")
+    except Exception as exc:   # table missing before the schema is re-run
+        log.warning("Couldn't read dim.consulting_prices (%s) — using pricing.CONSULTING_DEFAULTS.", exc)
+        return
+    if row:
+        pricing.apply_consulting_prices(dict(row))
+
+
+async def consulting_prices() -> dict:
+    """
+    The live consultant-help numbers, with the defaults and when they were last changed.
+
+    Returns:
+        dict: {"values": pricing.CONSULTING, "defaults": pricing.CONSULTING_DEFAULTS,
+        "updated_at": ISO text | None, "example": {"hours", "monthly_usd"} for Data
+        Cleaning + Data Engineering + one more service}.
+    """
+    await _load_consulting()
+    updated = None
+    if database.pool is None:
+        updated = _consulting.get("updated_at")
+    else:
+        try:
+            row = await database.pool.fetchrow("SELECT updated_at FROM dim.consulting_prices WHERE id")
+            updated = row["updated_at"] if row else None
+        except Exception:
+            updated = None
+    hours = pricing.help_hours(["data_cleaning", "data_engineering", "data_visualization"])
+    return {"values": dict(pricing.CONSULTING), "defaults": dict(pricing.CONSULTING_DEFAULTS),
+            "updated_at": updated.isoformat() if updated else None,
+            "example": {"hours": hours, "monthly_usd": pricing.retainer_price_usd(hours, "month")}}
+
+
+async def set_consulting_prices(values: dict, admin: dict) -> dict:
+    """
+    Change what a consultant's help costs (Admin -> Prices -> "Consultant help").
+
+    Takes effect for NEW purchases at once (each checkout sends Stripe its own
+    price); running ongoing help keeps the price it started at.
+
+    Args:
+        values: dict, the CONSULTING_DEFAULTS keys to change.
+        admin: dict, the admin's accounts row.
+
+    Returns:
+        dict: consulting_prices().
+
+    Raises:
+        HTTPException: 400 when max_hours is below core_hours.
+    """
+    merged = {**pricing.CONSULTING, **{k: float(v) for k, v in values.items() if v is not None}}
+    if merged["max_hours"] < merged["core_hours"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="The weekly maximum can't be less than the Data Cleaning / Engineering hours.")
+    keys = list(pricing.CONSULTING_DEFAULTS)
+    if database.pool is None:
+        _consulting.update({k: merged[k] for k in keys}, updated_at=datetime.now(timezone.utc),
+                           updated_by=str(admin["id"]))
+    else:
+        await database.pool.execute(
+            f"""INSERT INTO dim.consulting_prices (id, {", ".join(keys)}, updated_at, updated_by)
+                VALUES (true, {", ".join(f"${i + 1}" for i in range(len(keys)))}, now(), ${len(keys) + 1})
+                ON CONFLICT (id) DO UPDATE SET {", ".join(f"{k} = EXCLUDED.{k}" for k in keys)},
+                    updated_at = now(), updated_by = EXCLUDED.updated_by""",
+            *[merged[k] for k in keys], uuid.UUID(str(admin["id"])))
+    pricing.apply_consulting_prices(merged)
+    return await consulting_prices()

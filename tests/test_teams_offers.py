@@ -136,7 +136,8 @@ def test_the_owner_removes_a_colleague():
 def test_the_schema_seed_matches_the_default_sales():
     """db/schema.sql seeds dim.seasonal_sales with offers.DEFAULT_SALES (switched off)."""
     sql = Path("db/schema.sql").read_text(encoding="utf-8")
-    block = sql[sql.index("INSERT INTO dim.seasonal_sales"):sql.index("ON CONFLICT (id) DO NOTHING")]
+    start = sql.index("INSERT INTO dim.seasonal_sales")
+    block = sql[start:sql.index("ON CONFLICT (id) DO NOTHING", start)]
     seeded = [{"id": i, "name": n, "starts_on": s, "ends_on": e, "percent_off": int(p)}
               for i, n, s, e, p in re.findall(r"\('(\w+)', '([^']+)', '([\d-]+)', '([\d-]+)', (\d+)\)", block)]
     assert seeded == list(offers.DEFAULT_SALES)

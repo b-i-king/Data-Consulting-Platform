@@ -11,6 +11,9 @@ Consultant endpoints (consultants only — everyone else gets 403).
                                    and my Cal.com webhook (URL path + secret)
     PUT  /api/consultant/settings  change my capacity (1 to 10) and/or my links
     POST /api/consultant/settings/webhook-secret   make (or replace) my webhook secret
+    POST /api/consultant/settings/contractor-agreement   agree to the independent-contractor terms (onboarding)
+    POST /api/consultant/settings/payouts           connect (or finish) my Stripe payout account -> Stripe's page
+    POST /api/consultant/settings/payouts/dashboard my Stripe Express dashboard (payouts, tax forms)
 
 CAL.COM, PER CONSULTANT
 -----------------------
@@ -37,7 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from api.core.security import get_current_account
 from api.models.accounts import ConsultantSettingsIn, SignupIn
 from api.routers.accounts import create_client_account
-from api.services import account_store, consultants, mfa
+from api.services import account_store, consulting_billing, consultants, mfa
 from api.services.entitlements import is_admin
 
 router = APIRouter(prefix="/consultant")
@@ -184,10 +187,15 @@ async def _settings_out(consultant: dict) -> dict:
 
     Returns:
         dict: {"load", "max_capacity", "free_booking_url", "paid_booking_url",
-        "webhook": {"path", "secret"}, "setup_needed"} — setup_needed is True
-        until the free booking link is saved (the onboarding nudge).
+        "webhook": {"path", "secret"}, "onboarding": consultants.onboarding(...),
+        "setup_needed"} — setup_needed is True until every REQUIRED onboarding
+        step is done (the workspace's "Finish your onboarding" nudge).
     """
     count = await account_store.count_clients(str(consultant["id"]))
+    account = await account_store.get_account(str(consultant["account_id"])) or {}
+    payouts = await consulting_billing.payouts_status(consultant, account)
+    consultant = await account_store.get_consultant(str(consultant["id"])) or consultant   # payouts may have changed
+    steps = consultants.onboarding(consultant, account, mfa.is_on(account))
     return {
         "load": consultants.load({**consultant, "client_count": count}),
         "max_capacity": consultants.MAX_CAPACITY,
@@ -197,7 +205,9 @@ async def _settings_out(consultant: dict) -> dict:
         # shown only to this consultant (it signs their own webhook).
         "webhook": {"path": f"/api/consultations/calcom-webhook/{consultant['id']}",
                     "secret": consultant.get("calcom_webhook_secret")},
-        "setup_needed": not consultant.get("free_booking_url"),
+        "onboarding": steps,
+        "payouts": payouts,
+        "setup_needed": not steps["done"],
     }
 
 
@@ -260,3 +270,64 @@ async def new_webhook_secret(token: Annotated[dict, Depends(get_current_account)
     consultant = await _me(token)
     row = await account_store.set_consultant_cal(str(consultant["id"]), calcom_webhook_secret=secrets.token_urlsafe(32))
     return await _settings_out(row)
+
+
+@router.post("/settings/contractor-agreement")
+async def agree_to_contractor_terms(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/consultant/settings/contractor-agreement — "I agree" to the independent-contractor terms.
+
+    One onboarding step: they're not employees, clients pay them directly
+    through their own Cal.com + payment tool, and they pay their own taxes
+    (consultants.CONTRACTOR_TERMS). The time and the terms' version are saved.
+
+    Args:
+        token: dict, the decoded login token (injected by `get_current_account`).
+
+    Returns:
+        dict: the refreshed settings (see `_settings_out`), with that step done.
+
+    Raises:
+        HTTPException: 401 / 403 as above.
+
+    Example:
+        POST /api/consultant/settings/contractor-agreement
+        -> 200 {"onboarding": {"contractor_agreed_at": "2026-10-18T...", ...}, ...}
+    """
+    consultant = await _me(token)
+    row = await account_store.set_contractor_agreement(str(consultant["id"]), consultants.CONTRACTOR_TERMS_VERSION)
+    return await _settings_out(row)
+
+
+@router.post("/settings/payouts")
+async def connect_payouts(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/consultant/settings/payouts — connect (or finish) my Stripe payout account.
+
+    Onboarding step: clients pay the platform for setup and ongoing help, and
+    Stripe sends my share to this account (consulting_billing). Stripe asks for
+    identity, bank and tax details on its own page. Test mode: done at once.
+
+    Returns:
+        dict: {"url": Stripe's page (None in test mode), "ready": bool}.
+
+    Raises:
+        HTTPException: 400 for an admin (nothing to connect); 401 / 403 as above.
+    """
+    consultant = await _me(token)
+    account = await account_store.get_account(str(consultant["account_id"])) or {}
+    return await consulting_billing.start_payouts(consultant, account)
+
+
+@router.post("/settings/payouts/dashboard")
+async def payouts_dashboard(token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/consultant/settings/payouts/dashboard — open my Stripe Express dashboard.
+
+    Returns:
+        dict: {"url"} (a one-time link).
+
+    Raises:
+        HTTPException: 409 before a payout account is connected.
+    """
+    return await consulting_billing.payouts_dashboard(await _me(token))

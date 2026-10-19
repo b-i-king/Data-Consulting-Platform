@@ -278,10 +278,65 @@ request then carries `X-Acting-As: <client id>`.
 
 **Who is a consultant (no access codes).** The `ADMIN_EMAILS` addresses are
 admins and consultants from the start; the first one is the default consultant.
-Anyone else ticks "I'd like to work as a consultant" (at sign-up, or in
-Settings) and waits: an admin approves or denies in the workspace's **Admin**
-panel (`api/routers/admin.py`). Approval creates their `dim.consultants` row at
-once. Nobody can make themselves a consultant.
+Anyone else goes through **screening** (`api/services/consultants.py`) and an
+admin approves or denies in the workspace's **Admin** panel
+(`api/routers/admin.py`). Approval creates their `dim.consultants` row at once.
+Nobody can make themselves a consultant.
+
+**Consultant screening.**
+
+1. **Invite only (to start).** With `CONSULTANT_APPLICATIONS=invite` (the
+   default), only an email an admin added under **Admin → Consultant invites**
+   (`dim.consultant_invites`) can apply. The admin sends the person the sign-up
+   link themselves (a "Copy the sign-up link" button). `open` lets anyone with
+   an account apply.
+2. **Account first.** There's no consultant choice at sign-up. The person signs
+   up as a client, then applies from **Settings → Account → Work as a consultant**.
+3. **The application** (`dim.consultant_applications`, one row per try): the
+   services they can deliver (of the seven), their hands-on data experience as a
+   range (less than 1 year, 1–3, 3–5, 5–10, 10+), tools, their **LinkedIn
+   profile (required** — how we confirm a real, verifiable person; only a
+   `linkedin.com/in/...` address is accepted), an optional portfolio / work
+   sample, a project they delivered (100+ characters), and the **code of
+   conduct** ticked (`consultants.CODE_OF_CONDUCT`:
+   confidentiality, client data only on the platform, honest about skills, no
+   taking clients off the platform, two-step sign-in on).
+4. **Review** (the Admin panel's checklist): identity (the LinkedIn profile is
+   a real person with that name), experience (usually 1–3 years or more, or
+   strong samples), skills that match the services picked, the work sample,
+   a short screening call (15–30 minutes: walk through a project and how they'd
+   protect client data), and conduct.
+5. **Deny with a reason.** A denial needs one reason from a fixed list
+   (`consultants.DENIAL_REASONS` — they see it): couldn't verify identity, not
+   enough experience, skills don't match the services, the work sample didn't
+   show the skills, conduct or confidentiality concerns, incomplete, or not
+   adding consultants for these services right now. **Personal feedback is
+   required** too (at least 20 characters, `MIN_FEEDBACK_CHARS`), in the
+   admin's own words. Above both, the person reads `HUMAN_REVIEW_NOTE`: a real
+   person read the application, the decision is a judgment call — subjective,
+   not a score, and not a measure of their worth — and a new application is
+   welcome after the waiting period.
+6. **Waiting period.** A denial sets `reapply_after` = today + **3, 6 or 12
+   months** (3 is the minimum, `MIN_REAPPLY_MONTHS`). Applying again before then
+   is refused with the date ("You can apply again on 01/18/2027."). A new
+   application is a new row, so the Admin panel shows "applied 2 times".
+7. **Onboarding after approval** (Settings → Consultant, `consultants.onboarding`).
+   A checklist: two-step sign-in; a **Stripe payout account** (Stripe
+   Connect — clients pay the platform for setup and ongoing help, and Stripe
+   sends the consultant their share; `api/services/consulting_billing.py`);
+   the **independent-contractor terms**
+   (`CONTRACTOR_TERMS` — they're not employees; clients pay them directly
+   through their own Cal.com paid event and the payment app they choose,
+   Stripe or PayPal; the platform never holds their pay; they pay their own
+   taxes and handle any business license; "I agree" is saved with
+   `CONTRACTOR_TERMS_VERSION`, so changing the wording asks everyone again);
+   the free and paid Cal.com booking links; the Cal.com webhook; and capacity
+   (optional). Until the required steps are done the workspace shows "Finish
+   your onboarding" and their clients see the platform's default links.
+
+Deleting the account deletes its applications (like everything else about the
+person), so in `open` mode someone could start over with a new account; keep
+`invite` mode while that matters.
 
 **Picking a consultant, and capacity.** A "done for you" client picks a
 consultant by first name (or "whoever has room") and a **one-time analysis** or
@@ -294,8 +349,8 @@ else to whoever has the most room, else wait.
 
 **Signing in and up.** Sign-in has an **Account | Consultant** switch at the
 top ("Consultant" is refused unless the account is an approved consultant).
-Sign-up ends with **Signing up as: Client · Request to be a consultant · I'm an
-admin** ("admin" is refused unless the email is in `ADMIN_EMAILS`).
+Sign-up ends with **Signing up as: Client · I'm an admin** ("admin" is refused
+unless the email is in `ADMIN_EMAILS`). Consultants apply after signing up (above).
 
 **Each consultant's Cal.com.** A consultant's free and paid booking links and
 their own webhook secret live on `dim.consultants`. Their clients see their

@@ -155,7 +155,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/billing.py` + `api/routers/billing.py` | Stripe: packages of tools, Checkout, webhook, portal; the AI rule (needs stored data) | Payment changes ([PAYMENTS.md](PAYMENTS.md)) |
 | `api/services/fair_use.py` | Download limit per 24 h and free repeats (one-way data fingerprint) | Changing fair-use rules ([PRICING.md](PRICING.md)) |
 | `api/services/connections.py` + `api/routers/connections.py` | Connectors and how often they refresh (schedule rules, "Refresh now" gap) | Adding a connector or refresh choice |
-| `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), admin approval of consultant requests, deactivating / reactivating consultants, testers, prices, the deletion counts | Consultant and admin features |
+| `api/services/consultants.py` + `api/routers/consultants.py` + `api/routers/admin.py` | Consultants, their clients, the "acting as" access rule, capacity (the fill bars), consultant screening (invite list, the application, denial reasons, the 3+ month waiting period — `web/components/workspace/AdminConsultantRequests.tsx`, `SettingsPanel.tsx` `AskToConsult`), deactivating / reactivating consultants, testers, prices, the deletion counts | Consultant and admin features |
 | `web/components/workspace/AdminPanel.tsx` (+ `AdminPrices.tsx`, `AdminTesters.tsx`) | The Admin panel: requests, consultants (deactivate / reactivate), prices, testers, account deletions | Admin screens |
 | `web/lib/types.ts` | Response shapes | Any API response change |
 | `web/components/wizard/Wizard.tsx` | Step order + state | Adding/reordering steps (give a new step an address in `web/lib/routes.ts`) |
@@ -175,6 +175,8 @@ services the client chose are offered; the rest are badges from
 | `web/components/explore/TimeBar.tsx` | Floating range + comparison panels, short labels | Changing the time controls |
 | `web/components/workspace/Workspace.tsx` | Signed-in workspace and left pane | Changing the workspace |
 | `api/services/entitlements.py` | Services on an account's plan (one-off services, live subscriptions, consultants) | Changing who gets what |
+| `api/services/consulting_billing.py` + `web/components/billing/ConsultantHelp.tsx` (+ `web/components/workspace/AdminConsultingPrices.tsx`) | Paying a consultant through the platform: setup fee and ongoing help priced by the services picked (Stripe Connect payouts, destination charges, `dim.consultant_engagements`, `dim.consulting_prices`); the rules for switching / losing a consultant and refunds | Consultant prices or payouts ([PRICING.md](PRICING.md), [PAYMENTS.md](PAYMENTS.md)) |
+| `api/services/skill_access.py` + `web/components/explore/SkillPreview.tsx` | The server's paid-tool rule: full skill results only with the tool in the package; otherwise one small preview per tool per visit (`SKILL_PREVIEW_HOURS`), then 402 | Changing what a preview shows or how often ([PRICING.md](PRICING.md)) |
 | `api/services/validation.py` + `web/lib/validation.ts` | Signup rules (names, business names, emails) — server + browser copies | Changing what the form accepts (change both) |
 | `api/services/locations.py` + `api/data/locations.json` | City search for the location picker | Rebuild the list with `scripts/build_locations.py` |
 | `web/components/auth/LocationPicker.tsx` | Type-ahead city picker (signup only) | Changing the location field |

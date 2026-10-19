@@ -104,6 +104,8 @@ export interface IntakeOptions {
   subscriptions: Subscription[];
   /** Consulting after the free 30-minute first consultation (default $80). */
   consulting_rate_per_hour_usd: number;
+  /** A consultant's one-time setup fee and ongoing-help prices (pricing.consulting_catalog). */
+  consulting?: ConsultingCatalog;
   /** The default consultant ("I'd like Brandon to do this for me"); null when none is set up. */
   consultant: { name: string } | null;
   /** Every consultant and how full they are (the "pick your consultant" fill bars). */
@@ -127,8 +129,60 @@ export interface ConsultantLoad {
   is_default: boolean;
 }
 
-/** The choice at the bottom of the sign-up form. */
-export type SignupAs = "client" | "consultant" | "admin";
+/** The choice at the bottom of the sign-up form. (Consultants apply AFTER signing up.) */
+export type SignupAs = "client" | "admin";
+
+/** Why an application wasn't approved (consultants.DENIAL_REASONS; the applicant sees the text). */
+export type DenialReason =
+  | "identity_unverified" | "not_enough_experience" | "skills_mismatch" | "work_sample" | "conduct" | "incomplete" | "not_adding";
+
+/** Hands-on data experience on the application (consultants.EXPERIENCE_RANGES). */
+export type ExperienceRange = "lt_1" | "1_3" | "3_5" | "5_10" | "10_plus";
+
+/** POST /api/accounts/consultant-request — the consultant screening application. */
+export interface ConsultantApplicationInput {
+  /** Service ids they can deliver (of the seven, at least one). */
+  services: string[];
+  /** Hands-on data experience, a range id ("" until picked). */
+  experience: ExperienceRange | "";
+  /** "SQL, pandas, Power BI". */
+  tools: string;
+  /** REQUIRED: their LinkedIn profile (https://www.linkedin.com/in/...). */
+  linkedin_url: string;
+  /** Optional: a portfolio, GitHub, a report or a dashboard, https:// ("" = none). */
+  work_sample_url: string;
+  /** A data project they delivered (100+ characters). */
+  project_summary: string;
+  /** The code of conduct; must be true. */
+  agree_conduct: boolean;
+}
+
+/** GET /api/accounts/consultant-application — may I apply, and what happened last time. */
+export interface ConsultantApplicationStatus {
+  can_apply: boolean;
+  /** Why not: a consultant already, an application waiting, the waiting period, or not invited. */
+  blocked: "already" | "pending" | "waiting" | "not_invited" | null;
+  /** Plain-English reason (e.g. "You can apply again on 01/18/2027."). */
+  message: string | null;
+  mode: "invite" | "open";
+  invited: boolean;
+  /** Waiting period: the first day they may apply again (YYYY-MM-DD). */
+  reapply_after: string | null;
+  latest: {
+    status: "pending" | "approved" | "denied";
+    submitted_at: string;
+    decided_at: string | null;
+    denial_reason: DenialReason | null;
+    denial_reason_text: string | null;
+    /** The admin's personal feedback. */
+    decision_note: string | null;
+    /** With a denial: a real person decided, and it's a judgment call. */
+    human_review_note: string | null;
+  } | null;
+  code_of_conduct: string[];
+  /** The experience choices, in order. */
+  experience_ranges: { id: ExperienceRange; label: string }[];
+}
 
 /**
  * GET/PUT /api/consultant/settings — a consultant's own Settings page:
@@ -143,8 +197,100 @@ export interface ConsultantSettings {
   paid_booking_url: string | null;
   /** path: add the API address in front for Cal.com's "Subscriber URL"; secret: null until made. */
   webhook: { path: string; secret: string | null };
-  /** True until the free booking link is saved (the "finish setting up" nudge). */
+  /** The onboarding checklist after approval. */
+  onboarding: ConsultantOnboarding;
+  /** Stripe payout account (clients' setup and ongoing-help payments reach them through it). */
+  payouts: { needed: boolean; connected: boolean; ready: boolean; test_mode: boolean };
+  /** True until every REQUIRED onboarding step is done (the "finish your onboarding" nudge). */
   setup_needed: boolean;
+}
+
+/** What a consultant's help costs (GET /api/intake/options "consulting", pricing.consulting_catalog). */
+export interface ConsultingCatalog {
+  /** The one-time setup fee. */
+  setup_usd: number;
+  /** Ongoing help's hourly rate (the tool does most of the work). */
+  hourly_usd: number;
+  /** Hours a week when Data Cleaning and/or Data Engineering is picked (counted once). */
+  core_hours: number;
+  /** Hours a week for each other service picked. */
+  service_hours: number;
+  /** Never more than this a week. */
+  max_hours: number;
+  core_services: string[];
+  light_services: string[];
+  /** A year of ongoing help costs this many months. */
+  annual_months: number;
+  /** Hourly sessions booked on the consultant's Cal.com (paid to them directly). */
+  session_rate_usd: number;
+  /** The smallest ongoing help (one other service), a month. */
+  min_monthly_usd: number;
+}
+
+/** One thing a client paid their consultant for (dim.consultant_engagements). */
+export interface ConsultingEngagement {
+  id: string;
+  kind: "setup" | "retainer";
+  hours_per_week: number | null;
+  /** Ongoing help: the services they get help with. */
+  services: string[];
+  /** Why it ended: "client", or early because the consultant left / was deactivated. */
+  ended_reason: "client" | "consultant_deactivated" | "consultant_left" | "account_deleted" | null;
+  consultant_name: string | null;
+  billing_interval: "month" | "year" | null;
+  amount_usd: number;
+  status: string;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+  created_at: string | null;
+}
+
+/** GET /api/billing/consulting — Plan & billing -> "Your consultant". */
+export interface ConsultingOverview {
+  catalog: ConsultingCatalog;
+  /** What they can pick for ongoing help (tools in their package + Strategy & Discovery), with the hours each adds. */
+  services: { id: string; name: string; hours: number }[];
+  consultant: { name: string } | null;
+  can_buy: boolean;
+  /** Why not (no consultant chosen, or they're still setting up payouts). */
+  reason: string | null;
+  engagements: ConsultingEngagement[];
+  /** The running ongoing help, if any. */
+  retainer: ConsultingEngagement | null;
+  /** Ongoing help that ended early because their consultant left or was deactivated. */
+  ended: ConsultingEngagement | null;
+  /** "Cancel any time; paid to the end of the period..." — must be accepted before paying. */
+  cancel_terms: string;
+  test_mode: boolean;
+}
+
+/** Admin -> Prices -> "Consultant help" (GET/PUT /api/admin/consulting-prices). */
+export interface ConsultingPrices {
+  values: ConsultingPriceValues;
+  defaults: ConsultingPriceValues;
+  updated_at: string | null;
+  /** Data Cleaning + Data Engineering + one more service, at these numbers. */
+  example: { hours: number; monthly_usd: number };
+}
+export interface ConsultingPriceValues {
+  setup_usd: number;
+  help_rate_usd: number;
+  core_hours: number;
+  service_hours: number;
+  max_hours: number;
+  platform_fee_percent: number;
+}
+
+/** A newly approved consultant's onboarding (consultants.onboarding). */
+export interface ConsultantOnboarding {
+  steps: { id: "two_step" | "contractor" | "payouts" | "free_link" | "paid_link" | "webhook" | "capacity"; label: string; done: boolean; required: boolean }[];
+  /** Every required step is done. */
+  done: boolean;
+  /** The independent-contractor terms (pay and taxes), one point per item. */
+  contractor_terms: string[];
+  contractor_terms_version: string;
+  /** ISO date-time, or null until they agree. */
+  contractor_agreed_at: string | null;
 }
 
 /** How a consultant helps: one analysis of everything sent, or ongoing monthly help. */
@@ -160,6 +306,34 @@ export interface ConsultantRequest {
   status: "pending" | "approved" | "denied";
   requested_at: string | null; // ISO date-time
   decided_at: string | null;
+  /** The screening answers and decision (null for a request from before screening existed). */
+  application: {
+    services: string[];
+    experience: ExperienceRange;
+    /** "3–5 years". */
+    experience_label: string;
+    tools: string;
+    linkedin_url: string;
+    work_sample_url: string | null;
+    project_summary: string;
+    submitted_at: string | null;
+    /** How many times this person has applied (2+ = applied again after a denial). */
+    times_applied: number;
+    denial_reason: DenialReason | null;
+    decision_note: string | null;
+    /** Denied: the first day they may apply again (YYYY-MM-DD). */
+    reapply_after: string | null;
+  } | null;
+}
+
+/** Admin panel: an email that may apply to be a consultant (while applications are invite-only). */
+export interface ConsultantInvite {
+  email: string;
+  /** Private note for admins. */
+  note: string | null;
+  created_at: string | null;
+  /** They already made an account with this email. */
+  has_account: boolean;
 }
 
 /** Admin panel: one consultant, active or not, with their lifecycle dates (ISO date-times). */
@@ -172,6 +346,14 @@ export interface TeamConsultant extends ConsultantLoad {
   deactivated_at: string | null;
   deactivation_reason: string | null;
   reactivated_at: string | null;
+  /** When they agreed to the independent-contractor terms (null = not yet). */
+  contractor_agreed_at: string | null;
+  /** They agreed to the CURRENT wording (false after the terms change). */
+  contractor_terms_current: boolean;
+  /** Every required onboarding step is done. */
+  onboarding_done: boolean;
+  /** The required onboarding steps still left (labels). */
+  onboarding_left: string[];
 }
 
 /** Why someone deleted their account (the optional pick in the delete dialog). */
@@ -199,6 +381,17 @@ export interface AdminPanelData {
   notice?: string;
   /** HIPAA requests waiting for a decision. */
   hipaa_waiting?: number;
+  /** Who may apply to be a consultant: invited emails only, or anyone with an account. */
+  applications_mode: "invite" | "open";
+  invites: ConsultantInvite[];
+  /** The reasons an admin can give when denying (the applicant sees the text). */
+  denial_reasons: { id: DenialReason; text: string }[];
+  /** Waiting periods (months) to choose from when denying; the first is the minimum. */
+  reapply_choices: number[];
+  /** A denial's personal feedback must be at least this long. */
+  min_feedback_chars: number;
+  /** What the applicant reads above a denial (a real person decided; it's subjective). */
+  human_review_note: string;
   /** Why clients canceled their package (last 12 months), from Stripe's portal. */
   cancellations?: { total: number; by_reason: Record<string, number>; comments: { at: string | null; reason: string | null; comment: string }[] };
 }
@@ -758,6 +951,14 @@ export interface SkillResult {
   artifacts: Record<string, string>;
   data: Record<string, unknown>;
   runtime_seconds: number;
+  /** True when the tool isn't in the package: a small preview (no charts, tables or downloads). */
+  preview?: boolean;
+  /** The service the preview is of, e.g. "data_visualization". */
+  preview_service?: string;
+  /** "This is a one-time preview of ... Add ... to your package ...". */
+  preview_note?: string;
+  /** How much the full result has that the preview doesn't show. */
+  preview_hidden?: { findings: number; tables: number; charts: number; files: number };
 }
 
 // build-dashboard's `data` payload (see data_skills/build-dashboard/skill.py)
@@ -1064,7 +1265,7 @@ export interface SignupInput {
   /** The consultant picked by name (empty = the server picks one with room). */
   consultant_id?: string | null;
   consultant_plan?: ConsultantPlan;
-  /** Who is signing up: a client, a REQUEST to be a consultant, or an admin (ADMIN_EMAILS only). */
+  /** Who is signing up: a client, or an admin (ADMIN_EMAILS only). Consultants apply after signing up. */
   signup_as?: SignupAs;
   /** The Terms of Service + Privacy Policy box; required for your own sign-up. */
   accept_terms?: boolean;

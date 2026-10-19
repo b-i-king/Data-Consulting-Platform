@@ -225,6 +225,33 @@ def sync_plan(stripe, plan: pricing.Subscription, dry: bool = False, log=print) 
     }
 
 
+def sync_consulting(stripe, dry: bool = False, log=print) -> list[dict]:
+    """
+    Make the two products a consultant's help is sold under (api/services/consulting_billing.py).
+
+    "Consultant setup" and "Ongoing help from your consultant". There are no
+    fixed prices: each checkout sends Stripe the price worked out from
+    dim.consulting_prices and the services picked (`price_data`), so changing
+    them in Admin -> Prices needs no sync.
+
+    Args:
+        stripe: The configured `stripe` module (or a test double with the same API).
+        dry: If True, only log what would change.
+        log: Callable that receives one message string per change.
+
+    Returns:
+        list[dict]: [{"key", "stripe_product_id"}, ...].
+    """
+    return [
+        {"key": "consult_setup", "stripe_product_id": ensure_product(
+            stripe, "consult_setup", "Consultant setup",
+            "Your consultant connects, cleans and loads your data and builds your first dashboard.", dry, log)},
+        {"key": "consult_retainer", "stripe_product_id": ensure_product(
+            stripe, "consult_retainer", "Ongoing help from your consultant",
+            "Your consultant keeps your data, dashboards and answers up to date, every week.", dry, log)},
+    ]
+
+
 def coupon_id(sale: dict) -> str:
     """The Stripe coupon id for a seasonal sale: dcp_sale_<id>_<percent>."""
     return f"dcp_sale_{sale['id']}_{int(sale['percent_off'])}"

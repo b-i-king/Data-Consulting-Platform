@@ -14,6 +14,13 @@ import type {
   DeviceSessions,
   MfaSetup,
   AdminPanelData,
+  ConsultantApplicationInput,
+  ConsultantApplicationStatus,
+  ConsultingEngagement,
+  ConsultingOverview,
+  ConsultingPrices,
+  ConsultingPriceValues,
+  DenialReason,
   AdminPerson,
   AdminPrices,
   AdminSales,
@@ -65,7 +72,7 @@ import type {
   Quote,
   SignupInput,
 } from "./types";
-import { deviceId } from "./session";
+import { deviceId, loadSession } from "./session";
 
 // A trailing "/" is removed, so ".../" + "/api/..." never becomes "//api/...".
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/+$/, "");
@@ -325,15 +332,69 @@ export async function deleteMyAccount(
 export const chooseConsultant = (token: string, consultantId: string | null, plan: ConsultantPlan) =>
   postJson<MyServices>("/api/accounts/consultant", { consultant_id: consultantId, consultant_plan: plan }, token);
 
-/** "I'd like to work as a consultant" — an admin approves or denies. */
-export async function requestConsultantRole(token: string): Promise<Account> {
-  const res = await apiFetch(`${API_URL}/api/accounts/consultant-request`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+/** Onboarding: a new consultant agrees to the independent-contractor terms (their pay, their taxes). */
+export const agreeToContractorTerms = (token: string) =>
+  postJson<ConsultantSettings>("/api/consultant/settings/contractor-agreement", {}, token);
+
+/** Plan & billing -> "Your consultant": prices, their consultant, what was bought. */
+export async function getConsulting(token: string): Promise<ConsultingOverview> {
+  const res = await apiFetch(`${API_URL}/api/billing/consulting`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/**
+ * Pay a consultant for SETUP (once) or ONGOING HELP for the services picked (the
+ * hours and price are worked out on the server) -> a Stripe Checkout URL (null in
+ * test mode). `accept_terms` = ticked the billing terms (required).
+ */
+export const startConsultingCheckout = (
+  token: string,
+  choice: { kind: "setup"; accept_terms: boolean } |
+    { kind: "retainer"; services: string[]; interval: "month" | "year"; accept_terms: boolean },
+) => postJson<{ url: string | null; activated: boolean; test_mode: boolean; hours_per_week: number | null; amount_usd: number }>(
+  "/api/billing/consulting/checkout", choice, token);
+
+/** Admins: what a consultant's help costs (setup, rate, hours rule, platform fee). */
+export async function getConsultingPrices(token: string): Promise<ConsultingPrices> {
+  const res = await apiFetch(`${API_URL}/api/admin/consulting-prices`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: change them (only the numbers sent). New purchases use them at once. */
+export async function setConsultingPrices(token: string, values: Partial<ConsultingPriceValues>): Promise<ConsultingPrices> {
+  const res = await apiFetch(`${API_URL}/api/admin/consulting-prices`, {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(values),
   });
   await raiseForStatus(res);
   return res.json();
 }
+
+/** End ongoing help when the paid period ends. */
+export const cancelConsultingHelp = (token: string) =>
+  postJson<ConsultingEngagement>("/api/billing/consulting/cancel", {}, token);
+
+/** Consultants: connect (or finish) the Stripe payout account -> Stripe's page (null in test mode). */
+export const startPayouts = (token: string) =>
+  postJson<{ url: string | null; ready: boolean }>("/api/consultant/settings/payouts", {}, token);
+
+/** Consultants: a one-time link to their Stripe Express dashboard (payouts, tax forms). */
+export const openPayoutsDashboard = (token: string) =>
+  postJson<{ url: string }>("/api/consultant/settings/payouts/dashboard", {}, token);
+
+/** May I apply to be a consultant? (invited, waiting period, last decision and its reason) */
+export async function getConsultantApplication(token: string): Promise<ConsultantApplicationStatus> {
+  const res = await apiFetch(`${API_URL}/api/accounts/consultant-application`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Send the consultant screening application — an admin approves or denies. */
+export const requestConsultantRole = (token: string, answers: ConsultantApplicationInput) =>
+  postJson<Account>("/api/accounts/consultant-request", answers, token);
 
 // ── Admin (api/routers/admin.py) ──────────────────────────────────────────────
 
@@ -471,11 +532,26 @@ export async function removeTeamMember(token: string, memberId: string): Promise
   return res.json();
 }
 
-/** Admins: approve or deny one request; returns the refreshed panel. */
-export async function decideConsultantRequest(token: string, accountId: string, decision: "approve" | "deny"): Promise<AdminPanelData> {
-  const res = await apiFetch(`${API_URL}/api/admin/consultant-requests/${encodeURIComponent(accountId)}/${decision}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+/**
+ * Admins: approve or deny one application; returns the refreshed panel.
+ * Denying needs a reason (the applicant sees it) and a waiting period (3, 6 or 12 months).
+ */
+export const decideConsultantRequest = (
+  token: string,
+  accountId: string,
+  decision: "approve" | "deny",
+  details: { denial_reason?: DenialReason; note?: string; wait_months?: number } = {},
+) => postJson<AdminPanelData>(`/api/admin/consultant-requests/${encodeURIComponent(accountId)}/${decision}`, details, token);
+
+/** Admins: let an email apply to be a consultant (the note is for admins only). */
+export const addConsultantInvite = (token: string, email: string, note?: string) =>
+  postJson<AdminPanelData>("/api/admin/consultant-invites", { email, note: note || null }, token);
+
+/** Admins: take an email off the invite list (an application already sent is kept). */
+export async function removeConsultantInvite(token: string, email: string): Promise<AdminPanelData> {
+  const res = await apiFetch(`${API_URL}/api/admin/consultant-invites/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
   });
   await raiseForStatus(res);
   return res.json();
@@ -686,9 +762,19 @@ const choiceFields = (c: CleaningInput) => ({
   transforms: JSON.stringify(c.transforms ?? {}),
 });
 
+/** The sign-in headers when someone is signed in in this tab, else none (a guest). */
+const optionalAuth = (): Record<string, string> => {
+  const s = loadSession();
+  return s ? authHeaders(s.token) : {};
+};
+
 /**
  * Run a data skill (data_skills/<id>/skill.py) on the files kept in memory,
  * cleaned with the user's choices. `groupId` picks which cleaned table to use.
+ * Signed in, it sends the sign-in (and "working on" client): the server gives
+ * the FULL result only when the tool is in that account's package — otherwise a
+ * small preview (`result.preview`), once per tool per visit, then a 402 error
+ * (api/services/skill_access.py).
  */
 export async function runSkill(
   skillId: string,
@@ -698,6 +784,7 @@ export async function runSkill(
 ): Promise<SkillResult> {
   const res = await apiFetch(`${API_URL}/api/skills/${encodeURIComponent(skillId)}/run`, {
     method: "POST",
+    headers: optionalAuth(),
     body: filesForm(input.files, { params: JSON.stringify(params), group_id: String(groupId), ...choiceFields(input) }),
   });
   await raiseForStatus(res);
@@ -731,6 +818,7 @@ export async function compareOverTime(input: CleaningInput, spec: {
 }): Promise<CompareResult> {
   const res = await apiFetch(`${API_URL}/api/compare/over-time`, {
     method: "POST",
+    headers: optionalAuth(),   // needs sign-in and Data Visualization in the package
     body: filesForm(input.files, { spec: JSON.stringify(spec), ...choiceFields(input) }),
   });
   await raiseForStatus(res);

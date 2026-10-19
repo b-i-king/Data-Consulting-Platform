@@ -21,7 +21,8 @@
 
 import { useEffect, useState } from "react";
 import { getConsultants } from "@/lib/api";
-import type { ConsultantLoad, ConsultantPage, ConsultantPlan } from "@/lib/types";
+import { fmtUsd } from "@/lib/format";
+import type { ConsultantLoad, ConsultantPage, ConsultantPlan, ConsultingCatalog } from "@/lib/types";
 
 const PAGE_SIZE = 8;
 
@@ -54,8 +55,8 @@ export function LoadBar({ load }: { load: Pick<ConsultantLoad, "percent" | "full
 }
 
 export const PLAN_LABELS: Record<ConsultantPlan, { title: string; note: string }> = {
-  one_time: { title: "One-time analysis", note: "Your consultant works through everything you sent, once." },
-  monthly: { title: "Monthly help", note: "Ongoing: your consultant keeps your data, dashboards and analysis up to date." },
+  one_time: { title: "One-time setup", note: "Your consultant connects, cleans and loads your data and builds your first dashboard." },
+  monthly: { title: "Ongoing help", note: "Your consultant keeps your data, dashboards and answers up to date, every week." },
 };
 
 /** The slide-in panel: a paginated, searchable list of consultants. */
@@ -174,6 +175,8 @@ export default function ConsultantPicker(props: {
   onChange: (id: string | null) => void;
   plan: ConsultantPlan;
   onPlan: (p: ConsultantPlan) => void;
+  /** Prices to show under each choice (pricing.consulting_catalog); none = no prices shown. */
+  catalog?: ConsultingCatalog;
   /** Open the consultant panel straight away (when "I need a consultant" was just chosen). */
   autoOpen?: boolean;
 }) {
@@ -205,6 +208,13 @@ export default function ConsultantPicker(props: {
               <span>
                 <span className="font-semibold">{PLAN_LABELS[p].title}</span>
                 <span className="block text-xs text-ink-muted">{PLAN_LABELS[p].note}</span>
+                {props.catalog && (
+                  <span className="mt-1 block font-mono text-xs">
+                    {p === "one_time"
+                      ? `${fmtUsd(props.catalog.setup_usd)} once`
+                      : `from ${fmtUsd(props.catalog.min_monthly_usd)}/month, by what you need help with`}
+                  </span>
+                )}
               </span>
             </label>
           ))}

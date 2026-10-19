@@ -29,7 +29,7 @@ import { useEffect, useState } from "react";
 import { getQuote } from "@/lib/api";
 import { categoryColor } from "@/lib/categories";
 import { fmtUsd } from "@/lib/format";
-import type { BillingInterval, ConsultantLoad, ConsultantPlan, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
+import type { ConsultingCatalog, BillingInterval, ConsultantLoad, ConsultantPlan, Quote, Service, Subscription, SubscriptionChoice } from "@/lib/types";
 import PackageBuilder, { packageTotal } from "@/components/billing/PackageBuilder";
 import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { QuoteSummary } from "./ServiceConfirm";
@@ -55,6 +55,8 @@ export default function StepServices(props: {
   subscription: SubscriptionChoice | null;
   onSubscription: (s: SubscriptionChoice | null) => void;
   consultingRate: number;
+  /** A consultant's setup fee and ongoing-help prices (options.consulting). */
+  consultingCatalog?: ConsultingCatalog;
   path: NextPath | null;
   onPath: (p: NextPath) => void;
   consultants: ConsultantLoad[];
@@ -201,8 +203,9 @@ export default function StepServices(props: {
             <h2 className="mb-1 font-semibold">Your consultant</h2>
             <p className="mb-4 text-sm text-ink-muted">
               No new platform to learn: your consultant signs in to your account and does the cleaning, dashboards and
-              analysis for you — every tool included. It starts with a free 30-minute consultation; after that,
-              consulting is {fmtUsd(props.consultingRate)}/hour.
+              analysis for you — every tool included. It starts with a free 30-minute consultation. Then choose a
+              one-time setup or ongoing weekly help (you&apos;ll pay for it in Plan &amp; billing after creating your
+              account); extra hourly sessions are {fmtUsd(props.consultingRate)}/hour.
             </p>
             <ConsultantPicker
               consultants={props.consultants}
@@ -210,6 +213,7 @@ export default function StepServices(props: {
               onChange={props.onConsultantId}
               plan={props.consultantPlan}
               onPlan={props.onConsultantPlan}
+              catalog={props.consultingCatalog}
               // Choosing "Help from a consultant" slides the consultant panel in.
               autoOpen={!props.consultantId}
             />
@@ -295,7 +299,9 @@ export default function StepServices(props: {
             <p className="rounded-xl bg-consultant-soft p-3">
               <strong>{PLAN_LABELS[props.consultantPlan].title}</strong> with {consultantName ?? "whoever has room"}. Your
               consultant will reach out for your free 30-minute consultation; after that, consulting is{" "}
-              {fmtUsd(props.consultingRate)}/hour. On the next page you can share your cleaned data with them.
+              {fmtUsd(props.consultingRate)}/hour. After creating your account, pay for{" "}
+              {props.consultantPlan === "one_time" ? "the setup" : "ongoing help"} in Plan &amp; billing. On the next
+              page you can share your cleaned data with them.
             </p>
           )}
           <QuoteSummary quote={quote} />

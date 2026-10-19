@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from api.core.config import get_settings
 from api.main import app
 from api.services import account_store, ai_assistant, entitlements
+from tests.consultant_helpers import apply_as_consultant
 
 client = TestClient(app)
 PW = "Correct-horse-9"
@@ -99,8 +100,9 @@ def test_admins_have_no_limit_and_can_simulate():
 
 def test_a_consultant_uses_the_clients_allowance():
     _signup("boss@example.com")
-    asked = _signup("kim@example.com", consultant_request=True, first_name="Kim")
+    asked = _signup("kim@example.com", first_name="Kim")
     admin = client.post("/api/accounts/signin", json={"email": "boss@example.com", "password": PW}).json()["access_token"]
+    assert apply_as_consultant(client, _h(admin), asked["access_token"], "kim@example.com").status_code == 200
     assert client.post(f"/api/admin/consultant-requests/{asked['account']['id']}/approve", headers=_h(admin)).status_code == 200
     kim = client.post("/api/accounts/signin", json={"email": "kim@example.com", "password": PW}).json()["access_token"]
     kim_id = next(c["id"] for c in client.get("/api/accounts/consultants").json()["consultants"] if c["name"] == "Kim")

@@ -67,10 +67,51 @@ before real clients use it — at these prices it stays pennies a month.
 | First consultation (any service except Data Strategy & Discovery) | **Free, 30 minutes** | Booked through `BOOKING_URL` |
 | Consulting after that | **$80 / hour** (`CONSULTING_RATE_PER_HOUR_USD`) | Booked and paid on Cal.com (`PAID_BOOKING_URL`), shown once the consultant confirms the free call happened |
 | Data Strategy & Discovery | **$80 / hour from the first hour** | Same paid Cal.com link (it *is* the consulting) |
-| "Done for you" (a consultant does the work) | Free 30-minute call, then hourly or a package | Hours, or a package price agreed on the call |
+| "Done for you": **setup** | **$300 once** (about 15 hours × $20) | Plan & billing → "Your consultant" (Stripe; the consultant's share is sent to them automatically) |
+| "Done for you": **ongoing help** | **By the services picked**, at $20/hour: Data Cleaning / Data Engineering 10 hrs a week (once), each other tool 2.5 (Exploration & Analysis, Visualization, Science & ML), AI 0 — 17.5 at most today — e.g. Cleaning + Engineering + Visualization = 12.5 hrs = **$1,083.33 a month**; a year = 10 months | Same: a Stripe subscription; cancel any time, it runs (and is paid) to the end of the period |
 
 Code: `consultation_terms()` and `consulting_rate()` in `pricing.py`; every
 service card shows its terms ("Free 30-minute consultation, then $80/hour").
+
+### Paying a consultant through the platform: setup and ongoing help
+
+Why two rates: $80/hour is hands-on consulting (Cal.com sessions). Setup and
+ongoing help are **tool-assisted** — the platform does most of the work and the
+consultant monitors it and answers questions — so they're priced at
+**$20/hour**.
+
+- **Setup:** **$300**, once (about 15 hours).
+- **Ongoing help is priced by WHAT the client needs help with**, not a level
+  they pick (so nobody just picks the cheapest):
+
+  | Picked | Hours a week |
+  |---|---|
+  | Data Cleaning and/or Data Engineering (files, QuickBooks / Xero: the bulk) | **10** (counted once) |
+  | each of Exploration & Analysis, Visualization, Science & ML | **+2.5** |
+  | Strategy & Discovery | not offered: consulting only, $80/hour on Cal.com |
+  | AI | 0 (the client asks it themselves) |
+  | the most | **20** |
+
+  A month = hours × 52 ÷ 12 × $20; a year = 10 months. Cloud-database clients
+  usually skip Cleaning / Engineering (nothing to clean or load). Only tools in
+  the client's package can be picked. The
+  consultant may help beyond these hours at their discretion.
+- **Platform fee: 20%** of each payment stays with the platform; Stripe sends
+  the rest to the consultant (Stripe Connect). None when the consultant is an
+  admin — it's all yours.
+- **All six numbers live in the database** (`dim.consulting_prices`) and are
+  changed in **Admin → Prices → "Consultant help"** — no code, no Stripe sync
+  (each checkout sends Stripe its own price). New purchases use them at once;
+  running ongoing help keeps the price it started at.
+- **The rules:** the client accepts the billing terms before paying (cancel any
+  time, paid to the end of the period, no refunds for unused time except when
+  the consultant becomes unavailable; setup isn't refundable once started).
+  One ongoing help at a time — to change it, end it and choose again when it
+  ends. Switching consultant waits until ongoing help has ended. A consultant
+  deactivated or leaving ends their clients' ongoing help at once (refund the
+  unused time in Stripe). Details: [PAYMENTS.md](PAYMENTS.md).
+- Code: `pricing.help_hours`, `pricing.retainer_price_usd`,
+  `api/services/consulting_billing.py`, `api/services/price_store.py`.
 
 ## Subscriptions: build your own package (monthly or annual)
 
@@ -234,6 +275,26 @@ Code: `api/services/entitlements.py`.
   tool's "Add to my package" opens Plan & billing with that tool ticked.
 - In a business, the team **owner** holds the package; team members share it
   but can't change it.
+
+**The server enforces this, not just the screen** (`api/services/skill_access.py`,
+`POST /api/skills/{id}/run`). A tool's FULL result goes only to a signed-in
+request whose account (or, for a consultant, whose client) has that tool in
+its package. Everyone else — guests in Get Started included — gets a
+**preview**:
+
+- **one per tool per visit**: a "visit" is the same IP address within
+  `SKILL_PREVIEW_HOURS` (default 8). A second try at the same tool (any of its
+  skills) is refused with 402 "Add <tool> to your package…". A run that fails
+  (too few rows, a bad option) doesn't use the preview up.
+- **small on purpose**: the one-line summary and the first finding — for the
+  dashboard (Data Visualization), the first 4 headline KPIs instead. No charts,
+  no tables, no data behind them, nothing to download; the preview says how
+  much the full result has ("3 charts and 2 tables").
+- Data Cleaning skills are never limited. Downloading still needs an account.
+- "Compare over time" (beta, on the Dashboard page) has no preview: it needs
+  sign-in and Data Visualization (403 otherwise).
+- Previews are counted in memory per server process (like the request
+  limits): a restart, or a second Render instance, counts separately.
 
 ## What is recorded
 
