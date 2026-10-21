@@ -1,5 +1,6 @@
 """
-partners — the home page's "Partners" carousel: who may appear, and how.
+partners — the home page's "Trusted by" carousel: who may appear, and how.
+(In the code these businesses are "partners"; on screen the row is "Trusted by".)
 
 A business on a paid plan can ask to have its logo on the home page, linked
 to its website (a little promotion, and social proof for the platform). The
@@ -261,7 +262,7 @@ async def status_for(account: dict) -> dict:
     if days == 0:
         missing.append("A paid plan (Starter or above).")
     elif days < MIN_PAID_DAYS:
-        missing.append(f"Your plan has been live {days} day{'s' if days != 1 else ''}; partners need "
+        missing.append(f"Your plan has been live {days} day{'s' if days != 1 else ''}; listed businesses need "
                        f"{MIN_PAID_DAYS}. You can apply in {MIN_PAID_DAYS - days} more.")
     row = await account_store.get_partner(hid)
     application = None
@@ -282,14 +283,14 @@ async def apply(account: dict, website_url: str, linkedin_url: str | None, logo_
             logo; 403 not eligible yet (the reasons); 413 logo too big.
     """
     if not agreed:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Please confirm you've read the partner requirements.")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Please confirm you've read the listing requirements.")
     info = await status_for(account)
     if not info["eligible"]:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail=" ".join(info["missing"]))
     site = normalize_website(website_url)
     if not own_domain(site):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            detail="Partners need their own website domain (e.g. yourbusiness.com), not a free page "
+                            detail="Listed businesses need their own website domain (e.g. yourbusiness.com), not a free page "
                                    "on a site builder or a social network.")
     linkedin = (linkedin_url or "").strip() or None
     if linkedin and not LINKEDIN_COMPANY.match(linkedin):
@@ -319,7 +320,7 @@ async def withdraw(account: dict) -> dict:
     holder = await entitlements.plan_holder(account)
     row = await account_store.get_partner(str(holder["id"]))
     if not row or not await account_store.set_partner_status(row["id"], "withdrawn"):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="There's no partner application to withdraw.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="There's no listing to withdraw.")
     return await status_for(account)
 
 

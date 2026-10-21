@@ -95,7 +95,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
 | `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only); "Sign in with Supabase" reads through the Management API | Cloud integrations |
 | `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
-| `api/services/partners.py` + `api/routers/partners.py` | The home page's "Partnered with" carousel: who may apply, the logo turned into a small WebP, admin approval, shown only while paid | Partner rules ([ARCHITECTURE.md](ARCHITECTURE.md) 2b) |
+| `api/services/partners.py` + `api/routers/partners.py` | The home page's "Trusted by" carousel: who may apply, the logo turned into a small WebP, admin approval, shown only while paid | Partner rules ([ARCHITECTURE.md](ARCHITECTURE.md) 2b) |
 | `web/components/home/PartnerCarousel.tsx`, `ThemedLogo.tsx`, `web/components/workspace/PartnerCard.tsx`, `AdminPartners.tsx` | The carousel; each logo drawn as a silhouette in the theme's colors; the business's application (Settings → Account); the admin review and "Add a company you work with" | How partners look and apply |
 | `web/lib/faq.ts` + `web/components/FaqSection.tsx` | The FAQ: home page (with Google's FAQ markup) and Settings → Help & FAQ | Changing a question or answer |
 | `web/components/SiteMenu.tsx` | The header's ☰ menu: Sign in (or Help & FAQ), the home page's sections, the legal pages | Header links |

@@ -228,7 +228,8 @@
    becomes a row you scroll sideways instead. */
 @keyframes partner-slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .partner-track { animation: partner-slide var(--partner-speed, 40s) linear infinite; }
-.partner-strip:hover .partner-track, .partner-strip:focus-within .partner-track { animation-play-state: paused; }
+.partner-strip:hover .partner-track, .partner-strip:focus-within .partner-track,
+.partner-strip[data-paused] .partner-track { animation-play-state: paused; }   /* data-paused: the Pause button */
 @media (prefers-reduced-motion: reduce) {
   .partner-strip { overflow-x: auto; }
   .partner-track { animation: none; }

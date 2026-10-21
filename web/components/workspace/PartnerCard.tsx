@@ -1,8 +1,8 @@
 "use client";
 
-// ── Partner program (Settings -> Account, business accounts) ─────────────────
-// A business can ask to have its logo in the home page's "Partnered with"
-// carousel, linked to its website (api/services/partners.py). The card shows
+// ── "Trusted by" listing (Settings -> Account, business accounts) ────────────
+// A business can ask to have its logo in the home page's "Trusted by"
+// row ("Trusted by"), linked to its website (api/services/partners.py). The card shows
 // the rules FIRST, then:
 //   * not eligible yet -> what's missing (e.g. "You can apply in 12 more days");
 //   * eligible         -> the form: website, LinkedIn company page (optional),
@@ -39,7 +39,7 @@ export default function PartnerCard({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getMyPartner(token).then(setInfo).catch((e) => setError(e instanceof Error ? e.message : "Couldn't load the partner program."));
+    getMyPartner(token).then(setInfo).catch((e) => setError(e instanceof Error ? e.message : "Couldn't load your listing."));
   }, [token]);
 
   // Their own logo isn't public until approved, so it's fetched with their sign-in.
@@ -84,9 +84,9 @@ export default function PartnerCard({ token }: { token: string }) {
 
   return (
     <Card>
-      <h3 className="font-semibold">Partner program</h3>
+      <h3 className="font-semibold">&ldquo;Trusted by&rdquo; listing</h3>
       <p className="mt-1 text-sm text-ink-muted">
-        Show your logo in the home page&apos;s &ldquo;Partnered with&rdquo; row, linked to your website.
+        Show your logo in the home page&apos;s &ldquo;Trusted by&rdquo; row, linked to your website.
       </p>
       {info && (
         <details className="mt-3 text-sm">

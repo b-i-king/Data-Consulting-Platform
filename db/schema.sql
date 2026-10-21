@@ -366,7 +366,7 @@ CREATE INDEX IF NOT EXISTS idx_consultant_applications_account
 CREATE INDEX IF NOT EXISTS idx_consultant_applications_pending
     ON dim.consultant_applications (submitted_at) WHERE status = 'pending';
 
--- ── dim.partners: businesses shown in the home page's "Partners" carousel ──
+-- ── dim.partners: businesses shown in the home page's "Trusted by" carousel ──
 -- One row per partner (api/services/partners.py): a business account that
 -- applied (source 'platform', account_id set), or a company an ADMIN added
 -- by hand: a client they work with and invoice directly, with no account
