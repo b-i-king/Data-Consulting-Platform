@@ -15,7 +15,7 @@ Code: `api/services/pricing.py`. Rates: environment variables (see `.env.example
 | Data Visualization | Package | from $500 | Optional |
 | Data Engineering | Package | from $750 | Yes |
 | Data Science & Machine Learning | Package | from $1,500 | Yes |
-| AI | Early access | No charge yet | No — shown with an "Early access" badge |
+| AI | Free questions + add-on | Free monthly questions; more with the AI add-on ($29/month) | No — launched 10/2026 (set `available=False` in `pricing.py` to make a service "Early access" again) |
 
 Each service is also a **skill category**: the skills behind it
 (`data_skills/catalog.json`) appear as "What's included" chips on its card.
@@ -115,8 +115,17 @@ consultant monitors it and answers questions — so they're priced at
 
 ## Subscriptions: build your own package (monthly or annual)
 
-Clients pick the **tools** they need; each has a fixed monthly and annual
-price and the total is the **sum**. **All tools** is a cheaper bundle. Code:
+Clients pick a **bundle** (Starter, Growth, Pro), or build their own from the
+**tools**; each item has a fixed monthly and annual price and the total is the
+**sum**. Bundles are cheaper than the same tools one by one. **No double
+purchases** (`normalize_selection`): at most one bundle (picking another
+switches to it), a bundle's tools are never charged again, and tools it
+doesn't cover can be added on (Starter + Data Science & ML). When what's
+picked costs more than a bundle covering it, the selector offers that bundle
+(`selection_price` → `cheaper_bundle`). A client's whole package is **one
+row** in `dim.subscriptions` (its items in one JSON column), however many
+tools it has; `dim.plan_prices` is the catalog (one row per item on sale,
+about ten in all — not per client). Code:
 `SUBSCRIPTIONS`, `normalize_selection()` and `selection_price()` in
 `api/services/pricing.py`; the selector is `web/components/billing/PackageBuilder.tsx`.
 
@@ -145,13 +154,17 @@ one item per tool ([PAYMENTS.md](PAYMENTS.md)).
 | Data Cleaning (`data_cleaning`) | $19 | $190 | **Base** — in every package; downloads included |
 | Data Exploration & Analysis (`data_exploration_analysis`) | $19 | $190 | |
 | Dashboards (`data_visualization`) | $19 | $190 | |
-| Data Engineering (`data_engineering`) | $39 | $390 | Managed storage when it launches |
+| Data Engineering (`data_engineering`) | $39 | $390 | Managed storage, scheduled QuickBooks / Xero syncs, ER diagrams |
 | Data Science & Machine Learning (`data_science_ml`) | $39 | $390 | |
-| AI (`ai`) | $29 | $290 | **Add-on: needs Data Engineering** (it answers questions from stored data); grayed out until Data Engineering is picked; **free until it launches** |
-| **All tools** (`all_tools`, bundle) | **$99** | **$990** | Every tool, AI included at launch — $65/month less than picking all six |
+| AI (`ai`) | $29 | $290 | **Add-on: needs Data Engineering** (it answers questions from stored data); grayed out until Data Engineering is picked; charged like the other tools since launch (10/2026) |
+| **Starter** (`starter`, bundle) | **$19** | **$190** | Data Cleaning + Dashboards — $19/month less than one by one ($38) |
+| **Growth** (`growth`, bundle) | **$49** | **$490** | + Exploration & Analysis, Data Engineering, AI — $76/month less ($125) |
+| **Pro** (`all_tools`, bundle) | **$99** | **$990** | Every tool, Data Science & ML included — $65/month less ($164) |
 
-Examples: Data Cleaning + Dashboards = $38/month. All six tools picked
-separately = $164/month, so the selector suggests All tools ($99).
+Examples: Data Cleaning + Dashboards = $38/month one by one, so the selector
+suggests Starter ($19). Cleaning + Exploration + Dashboards = $57 → Growth
+($49). Starter + Data Science & ML = $58 (an add-on; Pro, $99, isn't cheaper).
+A cloud-database client who only needs Dashboards takes Starter.
 
 **Default prices.** Annual = 10 × monthly ("2 months free", 17% off); the
 Prices card shows how many months free each annual price gives. **Changing tools**
@@ -194,6 +207,13 @@ many small downloads costs more, never less. On top of that
   the window costs $0.00 (it still counts toward the limit). "The same data"
   is decided by a one-way fingerprint (SHA-256) of the table, stored in
   `usage_events.data_fingerprint` — never the data itself.
+
+## Business tools (QuickBooks, Xero, Wave) come with a paid plan
+
+Connecting a business tool needs **any paid plan**: the tools' free API
+allowances are shared by every client, so free accounts upload an export
+instead (same analysis). Details and the "spots" rule: [CONNECTORS.md](CONNECTORS.md).
+Data from Xero can't be used with the AI or Data Science & ML tools (Xero's terms).
 
 ## Connected data: how often it refreshes
 

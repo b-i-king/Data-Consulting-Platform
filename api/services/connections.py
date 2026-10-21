@@ -50,15 +50,19 @@ CONNECTORS: dict[str, dict] = {
     "quickbooks": {"name": "QuickBooks Online", "kind": "business_tool", "available": False, "stores_data": True,
                    "sign_in": True, "live": True,
                    "about": "Income, expenses, what customers owe you, top customers — live from QuickBooks, nothing "
-                            "stored. Storing it on your schedule (for history and trends) comes with Data Engineering."},
+                            "stored. Comes with any paid plan (on the free plan, upload an export). Storing it on your "
+                            "schedule (for history and trends) comes with Data Engineering."},
     "xero": {"name": "Xero", "kind": "business_tool", "available": False, "stores_data": True,
              "sign_in": True, "live": True,
              "about": "Income, expenses, what customers owe you, top customers — live from Xero, nothing stored. "
-                      "Storing it on your schedule (for history and trends) comes with Data Engineering."},
+                      "Comes with any paid plan (on the free plan, upload an export). Cleaning, exploring and "
+                      "dashboards only: Xero's terms rule out AI and machine learning on its data. Storing it on "
+                      "your schedule (for history and trends) comes with Data Engineering."},
     "wave": {"name": "Wave", "kind": "business_tool", "available": False, "stores_data": True,
              "sign_in": True, "live": True,
              "about": "Sales, what customers owe you, top customers — live from Wave invoices, nothing stored "
-                      "(Wave's API doesn't share expenses). Needs Wave Pro. Storing it on your schedule comes with "
+                      "(Wave's API doesn't share expenses). Needs Wave Pro, and any paid plan here (on the free plan, "
+                      "upload an export). Storing it on your schedule comes with "
                       "Data Engineering."},
     "supabase": {"name": "Supabase / PostgreSQL database", "kind": "cloud_storage", "available": True, "stores_data": False,
                  "sign_in": False, "live": False,

@@ -353,3 +353,38 @@ def test_update_the_most_recent_upload_replaces_it():
     assert after["records"] < before
     bad = client.post("/api/warehouse/preview", headers=h, files=_files(), data={"replace_source": "other.csv"})
     assert bad.status_code == 400 and "most recent" in bad.json()["detail"]
+
+
+def test_records_storage_packs_and_unpacks_without_losing_anything():
+    """
+    The database stores ONE row per record line (fact.records: its numbers together in
+    `metrics`) and each field ONCE (fact.fields). Packing a plan and unpacking it gives
+    back every number, detail and fingerprint (warehouse_store._pack / _unpack).
+    """
+    import json
+
+    import pandas as pd
+
+    from api.services import unified, warehouse_store
+    from api.services.warehouse_loader import build_plan
+
+    sales = pd.read_csv("samples/sales.csv").head(300)
+    rows = build_plan(sales, "sales.csv").rows
+    records, fields, numbers = warehouse_store._pack(rows)
+    assert len(records) == rows[["record_id", "line_number"]].drop_duplicates().shape[0] < len(rows)
+    assert [f["field_name"] for f in fields] == ["quantity", "unit_price", "line_amount"]   # described once each
+    assert sum(numbers.values()) == len(rows)
+    # Through JSON, as the database stores it.
+    stored = [{**r, "metrics": json.loads(json.dumps(r["metrics"]))} for r in records]
+    back = pd.DataFrame(warehouse_store._unpack(stored, {f["field_name"]: f for f in fields}),
+                        columns=unified.UNIFIED_COLUMNS)
+    key = ["record_id", "line_number", "field_name"]
+    a = rows.sort_values(key).reset_index(drop=True)
+    b = back.sort_values(key).reset_index(drop=True)
+    cols = key + ["metric_type", "metric_unit", "source_field"]
+    assert a[cols].astype(str).values.tolist() == b[cols].astype(str).values.tolist()
+    assert (a["metric_value"].astype(float) - b["metric_value"].astype(float)).abs().max() < 1e-9
+    assert a["row_hash"].tolist() == b["row_hash"].tolist()                      # same fingerprints
+    # A line with no numbers comes back as its one NO_METRIC row.
+    empty = warehouse_store._unpack([{**stored[0], "metrics": {}}], {})
+    assert [r["field_name"] for r in empty] == [unified.NO_METRIC]

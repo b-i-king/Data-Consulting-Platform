@@ -18,50 +18,69 @@ trust. Prefer the **simplest model that beats the baseline**.
 
 ## Procedure
 
-### 1. Frame the problem
-- **Target**: one column, one row = one unit (customer, week, order).
-- **Type**: regression (how much), classification (yes/no, which), or
-  time-series forecast (how much, when).
-- **Decision**: what the client will do with a prediction, and how wrong is
-  "too wrong" (this picks the metric).
+Every run writes an **analysis report** (`markdown_analysis_report`, Markdown):
+each step below, what it decided and why, and how long it took.
 
-### 2. Guard against leakage
-Remove any column that would not be known **at prediction time** (e.g.
-`cancel_date` when predicting churn). For time data, split by time — never
-shuffle the future into the training set.
+### 1. Preprocessing
+- Frame the task: **regression** (a number with more than 10 values) or
+  **classification** (a category).
+- Numbers: fill gaps with the median, then scale.
+- Categories: fill gaps with the most common value, then **one-hot encode**
+  (safe whether or not the categories have an order). The data is assumed
+  cleaned already (Data Cleaning runs first).
+
+### 2. Feature engineering
+- Leave out ID-like columns, the target, and anything in `exclude` (leakage:
+  columns only known after the fact).
+- Drop **constant** and **near-constant** columns (one value on 99%+ of rows).
+- Group the numbers that move together and keep **one per group** — Spearman
+  rank correlation, then hierarchical clustering (every pair in a group has
+  |rho| >= 0.9), the method from the owner's dissertation. The keeper is the
+  one most related to a number target (else the first). They'd affect the
+  prediction the same way, so the rest are dropped.
+- Optional **PCA** (`pca=true`): compress to the components keeping 95% of the variance.
 
 ### 3. Split
-- Cross-sectional: `train_test_split(test_size=0.2, stratify=y for classes)`.
-- Time series: last 20% of the timeline (or last full season) as test;
-  `TimeSeriesSplit` for cross-validation.
+- Hold out **20%** for the final test — the newest 20% when `date_column` is
+  given, otherwise random (stratified for categories).
+- Cross-validation on the rest:
+  - **leave-one-out** for small data (60 training rows or fewer);
+  - **stratified k-fold** (categories) or **k-fold** (numbers) otherwise, with
+    **K chosen**: try 3, 5, 10 with the fast linear model and keep the smallest
+    K after which the score changes by 0.01 or less (else the largest tried).
 
-### 4. Baseline first
-| Problem | Baseline |
-|---|---|
-| Regression | predict the training mean / median |
-| Classification | predict the most common class |
-| Forecast | last value, or same period last year (seasonal naive) |
+### 4. Training (cheapest first)
+1. Baseline: the most common category / the median.
+2. Logistic / linear regression.
+3. Gradient boosting.
 
-### 5. Models (in this order)
-1. Linear / logistic regression (`Pipeline` with `StandardScaler`,
-   `OneHotEncoder(handle_unknown="ignore")`).
-2. Gradient boosting (`HistGradientBoostingRegressor/Classifier`).
-Use 5-fold CV (or `TimeSeriesSplit`); keep the more complex model only if it
-beats the simple one by a margin that matters to the business.
+Skewed categories (the rarest under 35% of rows) are **weighted** — the same
+effect as oversampling the rare ones, without copying rows.
 
-### 6. Metrics
-- Regression/forecast: MAE (in dollars/units the client understands), MAPE if
-  no zeros.
-- Classification: precision, recall, ROC AUC; for imbalanced data, PR AUC and
-  a confusion matrix at the chosen threshold.
+Pick the best by cross-validated **F1** (macro: every category counts, even
+rare ones) for categories, **R²** for numbers; report each with its spread
+across folds (± standard deviation). For numbers also report **RMSE**, and
+check the linear model's errors look normal (D'Agostino-Pearson) — if not, its
+exact numbers are less reliable. The baseline is the yardstick.
 
-### 7. Explain
-Permutation importance (`sklearn.inspection.permutation_importance`) for the
-top drivers. Describe them as associations, not causes.
+**Thorough mode** (`thorough=true`, off by default to keep compute low): also
+try a **Random Forest** and **tune gradient boosting** with a small grid search
+(learning rate × leaf count, 4 settings, 3-fold inside the training rows) —
+usually the most accurate, at about 5× the compute.
 
-### 8. Report
-`outputs/models/<client>-<target>.md`: question, data used, baseline vs model
-metric, top drivers, limits, and "how to use this" in two sentences.
+### 5. Feature importance
+Permutation importance on the test rows: shuffle one column at a time and
+measure how much worse the model gets. It shuffles the original columns, so it
+stays readable with PCA. Associations, not causes.
+
+### 6. Test & summary
+- The chosen model on the held-out 20%.
+- End with **example predictions**: 10 test rows, predicted vs. actual.
+- People see **accuracy** (categories) or the **typical error** (numbers), a
+  verdict against guessing, and a **recommendation** (the top drivers to watch).
+- F1, R², ROC AUC and the cross-validation scores are in the report.
+- Always end with the disclaimer: these are recommendations based on the data
+  analyzed, assuming it's accurate and complete; patterns, not causes.
 
 ## Wording for clients
 "On weeks we held back for testing, the forecast was off by about $420 on
@@ -88,4 +107,6 @@ Input: one table.
 | `features` | columns | auto | Columns to use (default: all usable) |
 | `exclude` | columns | auto | Columns to leave out (e.g. ones only known after the fact) |
 | `date_column` | column | auto | If given, test on the most recent 20% (time split) |
+| `pca` | bool | no | Compress the features with PCA (keeps 95% of the variance) |
+| `thorough` | bool | no | Also try Random Forest and tune gradient boosting (several times the compute) |
 | `max_rows` | int | 50000 | Sample at most this many rows (keeps runs fast) |

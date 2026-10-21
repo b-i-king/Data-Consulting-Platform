@@ -220,3 +220,16 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Partners carousel (components/home/PartnerCarousel.tsx) ──────────────────
+   The logo row slides left forever: the list is drawn twice, and the track
+   moves by exactly half its width, so the loop is seamless. Hovering or
+   tabbing into it pauses it. With "reduce motion" on, it doesn't move — it
+   becomes a row you scroll sideways instead. */
+@keyframes partner-slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.partner-track { animation: partner-slide var(--partner-speed, 40s) linear infinite; }
+.partner-strip:hover .partner-track, .partner-strip:focus-within .partner-track { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .partner-strip { overflow-x: auto; }
+  .partner-track { animation: none; }
+}

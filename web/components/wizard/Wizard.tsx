@@ -228,11 +228,11 @@ export default function Wizard() {
     else setServiceIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
     setPendingAdd(null);
   };
-  // What the preview unlocks: the package being built, plus project interests.
+  // What the preview unlocks: the services of the package being built (a bundle's
+  // or each tool's), plus project interests.
   const previewServices = useMemo(
-    () => Array.from(new Set([...serviceIds, ...(subscription?.plans.includes("all_tools")
-      ? (options?.services ?? []).map((s) => s.id)
-      : subscription?.plans ?? [])])),
+    () => Array.from(new Set([...serviceIds, ...(subscription?.plans ?? []).flatMap(
+      (id) => (options?.subscriptions ?? []).find((p) => p.id === id)?.service_ids ?? [id])])),
     [serviceIds, subscription, options],
   );
   const go = (n: StepId) => {

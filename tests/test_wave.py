@@ -17,9 +17,19 @@ from fastapi.testclient import TestClient
 
 from api.core.config import get_settings
 from api.main import app
-from api.services import account_store, business_tools, entities, oauth, unified, warehouse_store
+from api.services import account_store, business_tools, entities, entitlements, oauth, unified, warehouse_store
 
 client = TestClient(app)
+
+
+async def _always_paid(_account):
+    return True
+
+
+@pytest.fixture(autouse=True)
+def paid_plan(monkeypatch):
+    """Business tools need a paid plan; these tests are about other rules, so every test account counts as paid."""
+    monkeypatch.setattr(entitlements, "has_paid_plan", _always_paid)
 PW = "Correct-horse-9"
 GQL = business_tools.WAVE_GQL
 

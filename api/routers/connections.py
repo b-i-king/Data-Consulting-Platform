@@ -38,7 +38,7 @@ from fastapi.responses import RedirectResponse, Response
 from api.core.config import get_settings
 from api.core.security import get_acting_context
 from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn, WaveTokenIn
-from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, hipaa, oauth, sync, teams
+from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, hipaa, integration_slots, oauth, sync, teams, xero_guard
 from api.services.pricing import refresh_catalog
 
 router = APIRouter(prefix="/connections")
@@ -315,6 +315,13 @@ def _max_connections(provider: str) -> int:
             "wave": s.wave_max_connections}.get(provider, 10 ** 6)
 
 
+async def _require_paid(ctx: dict, connector: str) -> None:
+    """402 unless the client has a paid plan (admins always may): business tools come with a paid plan."""
+    if not ctx.get("admin") and not await entitlements.has_paid_plan(ctx["account"]):
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED,
+                            detail=integration_slots.paid_only_message(oauth.PROVIDERS[connector]["name"]))
+
+
 async def _slot_free(provider: str, account_id: str) -> bool:
     """
     May this client connect the tool? Yes if they already have it (reconnecting
@@ -323,7 +330,10 @@ async def _slot_free(provider: str, account_id: str) -> bool:
     mine = await account_store.get_integration(account_id, provider)
     if mine and mine.get("status") == "connected":
         return True
-    return await account_store.count_connected(provider) < _max_connections(provider)
+    if await account_store.count_connected(provider) < _max_connections(provider):
+        return True
+    # Full: first release spots held by accounts whose paid plan ended.
+    return (await integration_slots.free_unpaid_slots(provider)) > 0
 
 
 def _full(provider: str) -> HTTPException:
@@ -378,7 +388,7 @@ async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_cont
 
     Returns the provider's sign-in address; the website sends the browser
     there. The connection is saved on the CLIENT (a consultant may connect
-    for a client they manage). Free with any plan: the live quick look stores
+    for a client they manage). QuickBooks, Xero and Wave come with a paid plan (402 otherwise: they share the tools' free API allowance); Supabase is free. The live quick look stores
     nothing. `return_to=start` sends them back to Get Started instead of the
     workspace.
 
@@ -387,13 +397,15 @@ async def authorize(connector: str, ctx: Annotated[dict, Depends(get_acting_cont
 
     Raises:
         HTTPException: 404 unknown; 503 when the platform's keys for it aren't set;
-            403 for a team colleague; 409 when the tool's connection limit is reached.
+            402 for QuickBooks / Xero / Wave without a paid plan; 403 for a team colleague; 409 when the tool's connection limit is reached.
     """
     if connector not in oauth.PROVIDERS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     holder = await _holder_only(ctx)
-    if connector in ("xero", "quickbooks", "wave") and not await _slot_free(connector, holder):
-        raise _full(connector)
+    if connector in integration_slots.BUSINESS_TOOLS and oauth.configured(connector):   # not set up: 503 below
+        await _require_paid(ctx, connector)                       # 402 on the free plan
+        if not await _slot_free(connector, holder):
+            raise _full(connector)
     consultant = str(ctx["consultant"]["id"]) if ctx["acting"] else None
     await audit.record(ctx, "connect", {"tool": connector})   # healthcare clients only
     return {"url": oauth.authorize_url(connector, holder, consultant, return_to)}
@@ -407,6 +419,7 @@ async def _live(ctx: dict, connector: str) -> tuple[dict, dict, business_tools.C
     """
     if connector not in ("quickbooks", "xero", "wave"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
+    await _require_paid(ctx, connector)   # a plan that ended stops using the shared allowance at once
     holder = await entitlements.plan_holder_id(ctx["account"])
     row, creds = await oauth.load(holder, connector)
     return row, creds, await business_tools.meter_for(connector, row, creds)
@@ -476,6 +489,10 @@ async def live_dataset(connector: str, id: str, ctx: Annotated[dict, Depends(get
     finally:
         await _save_meter(row, meter)
     await audit.record(ctx, "view_live", {"tool": connector, "dataset": id})   # healthcare clients only
+    if connector == "xero":
+        # Send exactly these bytes, and remember their fingerprint: AI and ML are off for Xero data.
+        r = {**r, "csv": r["csv"].encode("utf-8") if isinstance(r["csv"], str) else r["csv"]}
+        xero_guard.remember(r["csv"])
     return _csv_response(r, f"{r['name']}.csv")
 
 
@@ -585,18 +602,6 @@ async def disconnect(connector: str, ctx: Annotated[dict, Depends(get_acting_con
     if connector not in connections.CONNECTORS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown connector.")
     holder = await _holder_only(ctx)
-    row = await account_store.get_integration(holder, connector)
-    creds = oauth.unpack(row["credentials_encrypted"]) if row and row.get("credentials_encrypted") else None
-    if creds:
-        try:
-            if connector == "xero":
-                _, fresh = await oauth.load(holder, connector)
-                await business_tools.xero_remove_connection(fresh["tokens"]["access_token"],
-                                                            fresh["extra"].get("connection_id"))
-                creds = fresh
-            await oauth.revoke(connector, creds["tokens"])
-        except HTTPException:
-            pass   # already revoked on their side: just delete ours
-    await account_store.delete_integration(holder, connector)
+    await integration_slots.release(holder, connector)
     await audit.record(ctx, "disconnect", {"tool": connector})
     return {"connectors": connections.connector_list(await account_store.list_connections(holder))}

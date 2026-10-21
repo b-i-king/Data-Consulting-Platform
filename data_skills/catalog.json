@@ -68,7 +68,9 @@
       "name": "Data Science & Machine Learning",
       "skills": [
         { "id": "predictive-modeling", "label": "Forecasts & predictive models", "source": "project", "primary": true },
-        { "id": "multivariate-analysis", "label": "Multi-factor (multivariate) analysis", "source": "rosehill" }
+        { "id": "multivariate-analysis", "label": "Multi-factor (multivariate) analysis", "source": "rosehill" },
+        { "id": "reorder-planning", "label": "Just-in-time purchasing (reorder planning)", "source": "project" },
+        { "id": "segmentation", "label": "Customer segments (K-means groups)", "source": "project" }
       ]
     },
     {

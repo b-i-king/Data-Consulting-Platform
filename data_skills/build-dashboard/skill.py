@@ -494,8 +494,10 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         metrics.append(AVG)
     # Industry KPIs this table can compute (industry_metrics.json); none = generic only.
     found = industry_mod.plan(data, industry_code) if industry_code else []
+    industry_sources: dict[str, list[str]] = {}   # industry KPI -> the real columns it adds up (lineage)
     for spec in found:
         m = spec["id"]
+        industry_sources[m] = list(spec.get("sources") or [])
         specs[m] = {k: spec[k] for k in ("agg", "column", "num", "den", "den_agg", "scale") if k in spec}
         specs[m].setdefault("scale", 1)
         labels[m], metric_agg[m] = spec["label"], spec["agg"]
@@ -655,6 +657,9 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         "days_of_data": int((anchor.normalize() - first.normalize()).days + 1),
         "comparison_short_labels": _time.COMPARISON_SHORT,
         "ranges": ranges, "breakdown": breakdown,
+        # How each number is worked out, in SQL terms (the "How this was calculated"
+        # panel: components/explore/QueryPanel.tsx builds the full query from it).
+        "lineage": _lineage(metrics, specs, labels, kpi_column, value_column, date_col, industry_sources),
     })
     artifacts = {}
     if include_html:
@@ -665,6 +670,98 @@ def run(df: pd.DataFrame, date_column=None, kpi_column=None, value_column=None, 
         tables={f"kpis_{range}": [{"kpi": labels[m], **v} for m, v in ranges[range]["kpis"].items()]},
         artifacts=artifacts, data=payload,
     )
+
+
+def _quote(col: str) -> str:
+    """A column name as SQL writes it: "order date" (double quotes, inner quotes doubled)."""
+    return '"' + str(col).replace('"', '""') + '"'
+
+
+def _lineage(metrics: list[str], specs: dict, labels: dict, kpi_column: str | None, value_column: str | None,
+             date_col: str, industry_sources: dict[str, list[str]] | None = None) -> dict:
+    """
+    How each metric is worked out, written as the SQL that would give the same number.
+
+    The dashboard is computed with pandas, not a database, so this is the
+    EQUIVALENT query — for checking the numbers (transparency), not a log of
+    what ran. The website adds the table, the date range, the filters and the
+    grouping for the chart on screen (QueryPanel.tsx).
+
+    Args:
+        metrics: list[str], the metric ids.
+        specs: dict, metric id -> {"agg", "column"} or a ratio / distinct spec (_totals).
+        labels: dict, metric id -> its label.
+        kpi_column, value_column, date_col: the columns the dashboard was built from.
+        industry_sources: dict | None, industry KPI -> the real columns it adds up
+            (industry.plan "sources"); its helper columns are named in a note.
+
+    Returns:
+        dict: {"date_column", "metrics": {id: {"label", "expression", "where", "pandas",
+        "pandas_where", "fields", "note"}}} — "expression" e.g. 'SUM("amount")' and its
+        pandas twin "pandas" (on a group `g`, e.g. 'g["amount"].sum()'); "where" /
+        "pandas_where" an extra condition (a KPI type) or None; "fields" the source
+        columns it reads; "note" a plain-words remark or None.
+
+    Example:
+        >>> _lineage(["amount"], {"amount": {"agg": "sum", "column": "amount"}}, {"amount": "Amount"},
+        ...          None, "amount", "order_date")["metrics"]["amount"]["expression"]
+        'SUM("amount")'
+    """
+    sql_agg = {"sum": "SUM", "mean": "AVG", "count": "COUNT"}
+    pd_agg = {"sum": "sum", "mean": "mean", "count": "count"}
+
+    def pd_col(col):
+        """The pandas twin of column(): g["amount"], or None for "every row" (COUNT(*) -> len(g))."""
+        sql, _ = column(col)
+        return None if sql == "*" else f'g[{repr(sql[1:-1].replace(chr(34) * 2, chr(34)))}]'
+
+    def column(col):
+        """A metric's column, or what the made-up ones stand for: (SQL, source fields)."""
+        if col == ROWS:
+            return "*", []
+        if col in (TOTAL,) or (isinstance(col, str) and col.startswith("__kpi_")):
+            return (_quote(value_column), [value_column]) if value_column else ("*", [])
+        return _quote(col), [col]
+
+    out = {}
+    for m in metrics:
+        spec, where, pd_where, fields = specs[m], None, None, []
+        if m.startswith("__kpi_") and kpi_column:
+            where = f"{_quote(kpi_column)} = '{str(labels[m]).replace(chr(39), chr(39) * 2)}'"
+            pd_where = f"df[{kpi_column!r}] == {str(labels[m])!r}"
+            fields.append(kpi_column)
+        if spec["agg"] in sql_agg:
+            col, used = column(spec["column"])
+            agg = "COUNT" if col == "*" else sql_agg[spec["agg"]]
+            expr = f"{agg}({col})"
+            g = pd_col(spec["column"])
+            pexpr = "len(g)" if g is None else f"{g}.{pd_agg[spec['agg']]}()"
+        elif spec["agg"] == "distinct":
+            col, used = column(spec["den"])
+            expr = f"COUNT(DISTINCT {col})"
+            pexpr = f"{pd_col(spec['den'])}.nunique()"
+        else:   # ratio: numerator ÷ denominator
+            num, used_n = column(spec["num"])
+            den, used_d = column(spec["den"])
+            den_sql = (f"COUNT(DISTINCT {den})" if spec.get("den_agg") == "nunique"
+                       else "COUNT(*)" if den == "*" else f"SUM({den})")
+            expr = f"SUM({num}) / NULLIF({den_sql}, 0)"
+            gd = pd_col(spec["den"])
+            den_pd = (f"{gd}.nunique()" if spec.get("den_agg") == "nunique" else "len(g)" if gd is None
+                      else f"{gd}.sum()")
+            pexpr = f"{pd_col(spec['num'])}.sum() / {den_pd}"
+            used = used_n + used_d
+        if spec.get("scale", 1) != 1:
+            expr = f"{spec['scale']} * {expr}"
+            pexpr = f"{spec['scale']} * ({pexpr})"
+        note = None
+        if industry_sources and m in industry_sources:
+            used = industry_sources[m]
+            note = ("An industry KPI. Its parts (the columns ending in \"num\" / \"den\" above) are worked out "
+                    "row by row by adding up: " + ", ".join(used) + ".")
+        out[m] = {"label": labels.get(m, m), "expression": expr, "where": where, "pandas": pexpr,
+                  "pandas_where": pd_where, "fields": list(dict.fromkeys([*fields, *used])), "note": note}
+    return {"date_column": date_col, "metrics": out}
 
 
 def _subtitle(kpi_row: list[str], labels: dict, dims: list[str], sector: str | None) -> str:

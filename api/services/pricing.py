@@ -113,9 +113,10 @@ SERVICES: tuple[Service, ...] = (
     Service(
         id="data_visualization",
         name="Data Visualization",
-        description="We create dynamic dashboards and visually compelling reports using platforms "
-                    "like Tableau, Power BI, or custom solutions, making complex data "
-                    "understandable and driving informed action across all departments.",
+        description="Interactive dashboards built from your data inside the platform — KPI cards, "
+                    "trends, breakdowns and filters — so complex data drives informed action. "
+                    "Need Tableau, Power BI or another BI tool? Your consultant builds it with you "
+                    "as a consulting project.",
         pricing_model="package",
         starting_price_usd=500.0,   # PLACEHOLDER
         automated=False,
@@ -149,15 +150,17 @@ SERVICES: tuple[Service, ...] = (
     Service(
         id="ai",
         name="AI",
-        description="Ask questions about your data in plain English and get answers from built-in "
-                    "data models — with the math shown, so you can trust the result.",
-        pricing_model="early_access",
-        starting_price_usd=0.0,
+        description="Ask Beacon questions about your data in plain English and get answers with the "
+                    "math shown, so you can trust the result. Free questions every month; more with "
+                    "the AI add-on.",
+        pricing_model="package",
+        starting_price_usd=0.0,     # free questions for everyone; more with the AI add-on (SUBSCRIPTIONS)
         automated=True,
         requires_consultant=False,
         includes=("Plain-English questions", "Answers with the calculation shown",
                   "Learns your business terms"),
-        available=False,            # flip to True when the AI feature launches
+        # Launched (10/2026). Set available=False to put a service back to
+        # "Early access" (shown, never charged).
     ),
 )
 
@@ -249,13 +252,32 @@ class Subscription:
 
 # DEFAULT PRICES — the live ones are in dim.plan_prices (Admin -> Prices).
 # Annual = 10 × monthly ("2 months free"). Order = order on the site: the
-# bundle first (shown wide, so it stands out), then the six tools.
+# three BUNDLES first (cheaper than the same tools picked one by one), then the
+# six tools for "build your own". A bundle replaces the tools it covers (never
+# paid twice — normalize_selection); tools it doesn't cover can be added on.
+#   Starter $19  Cleaning + Dashboards                                (one by one: $38)
+#   Growth  $49  + Exploration & Analysis, Data Engineering, AI       (one by one: $125)
+#   Pro     $99  every tool (All tools)                               (one by one: $164)
 SUBSCRIPTIONS: tuple[Subscription, ...] = (
     Subscription(
-        id="all_tools", kind="bundle", name="All tools",
-        description="Every tool, including AI when it launches — at a lower price than picking them all.",
+        id="starter", kind="bundle", name="Starter",
+        description="Clean your data and see it on dashboards — the essentials for a small business.",
+        service_ids=("data_cleaning", "data_visualization"), monthly_usd=19.0, annual_usd=190.0,
+        includes=("Data Cleaning", "Dashboards", "Downloads included"),
+    ),
+    Subscription(
+        id="growth", kind="bundle", name="Growth",
+        description="Store and sync your data (QuickBooks, Xero, files), explore it, and ask Beacon about it.",
+        service_ids=("data_cleaning", "data_exploration_analysis", "data_visualization", "data_engineering", "ai"),
+        monthly_usd=49.0, annual_usd=490.0,
+        includes=("Everything in Starter", "Exploration & Analysis", "Data Engineering (storage and syncs)",
+                  "More Beacon questions"),
+    ),
+    Subscription(
+        id="all_tools", kind="bundle", name="Pro (all tools)",
+        description="Every tool, including machine learning — the lowest price for everything.",
         service_ids=(), monthly_usd=99.0, annual_usd=990.0,
-        includes=("All six tools", "Downloads included", "AI included at launch", "Cancel anytime"),
+        includes=("Everything in Growth", "Data Science & Machine Learning", "Downloads included", "Cancel anytime"),
     ),
     Subscription(
         id="data_cleaning", base=True, name="Data Cleaning",
@@ -271,28 +293,31 @@ SUBSCRIPTIONS: tuple[Subscription, ...] = (
     ),
     Subscription(
         id="data_visualization", name="Dashboards",
-        description="Interactive KPI dashboards and charts from your data.",
+        description="Interactive KPI dashboards and charts from your data, with the query behind every chart.",
         service_ids=("data_visualization",), monthly_usd=19.0, annual_usd=190.0,
-        includes=("KPI dashboards with filters", "Charts from your data", "Shareable reports"),
+        includes=("KPI dashboards with filters", "The SQL / pandas behind each chart", "Downloadable dashboard"),
     ),
     Subscription(
         id="data_engineering", name="Data Engineering",
-        description="ER diagrams, data dictionaries and — when it launches — managed storage of your data.",
+        description="Store your data with us, sync QuickBooks / Xero on a schedule, plus ER diagrams and data dictionaries.",
         service_ids=("data_engineering",), monthly_usd=39.0, annual_usd=390.0,
-        includes=("ER diagrams and data dictionaries", "Managed storage (coming soon)", "Unlocks the AI add-on"),
+        includes=("Managed storage of your data", "Scheduled QuickBooks / Xero syncs",
+                  "ER diagrams and data dictionaries", "Unlocks the AI add-on"),
     ),
     Subscription(
         id="data_science_ml", name="Data Science & Machine Learning",
-        description="Predictive models, segmentation and sample-size checks.",
+        description="Predictive models with a step-by-step analysis report, top drivers and a recommendation.",
         service_ids=("data_science_ml",), monthly_usd=39.0, annual_usd=390.0,
-        includes=("Predictive models", "Customer segments", "Plain-English results"),
+        includes=("Predictive models, documented step by step", "Top drivers and recommendations",
+                  "Just-in-time purchasing (when to reorder, how much)", "Customer segments"),
     ),
     Subscription(
         id="ai", name="AI", requires=("data_engineering",),
         # Also needs data already STORED (fact.account_data): billing.ai_ready checks it at checkout.
-        description="Ask questions about your stored data in plain English. Needs Data Engineering and stored data.",
+        description="More Beacon questions about your stored data (everyone gets free ones). Needs Data Engineering.",
         service_ids=("ai",), monthly_usd=29.0, annual_usd=290.0,
-        includes=("Plain-English questions", "Answers with the math shown", "Requires stored data (Data Engineering)"),
+        includes=("200 questions a month (20 free without it)", "Answers with the math shown",
+                  "Requires stored data (Data Engineering)"),
     ),
 )
 SUBSCRIPTIONS_BY_ID = {s.id: s for s in SUBSCRIPTIONS}
@@ -370,7 +395,7 @@ def billable(plan_id: str) -> bool:
     Tell whether a subscription item is charged today.
 
     The bundle is always billable. A tool is billable only when every service it
-    unlocks is available; an item whose service is not launched yet (AI) is free
+    unlocks is available; an item whose service is not launched yet (available=False) is free
     until it launches.
 
     Args:
@@ -385,22 +410,40 @@ def billable(plan_id: str) -> bool:
     Example:
         >>> billable("data_cleaning")
         True
-        >>> billable("ai")   # while AI is early access
-        False
+        >>> billable("ai")   # launched; False again if its service is set available=False
+        True
     """
     plan = SUBSCRIPTIONS_BY_ID[plan_id]
     return plan.kind == "bundle" or all(SERVICES_BY_ID[s].available for s in plan.service_ids)
 
 
+def covered_tools(plan_id: str) -> set[str]:
+    """
+    The tools a bundle already includes (so they're never bought twice); {} for a tool.
+
+    Example:
+        >>> sorted(covered_tools("starter"))
+        ['data_cleaning', 'data_visualization']
+    """
+    plan = SUBSCRIPTIONS_BY_ID.get(plan_id)
+    if plan is None or plan.kind != "bundle":
+        return set()
+    services = set(plan_services(plan_id)) | ({s.id for s in SERVICES} if not plan.service_ids else set())
+    return {t.id for t in SUBSCRIPTIONS if t.kind == "tool" and set(t.service_ids) <= services}
+
+
 def normalize_selection(plan_ids: list[str]) -> list[str]:
     """
-    Check a "build your own" selection and return it in catalog order.
+    Check a selection (a bundle, tools, or a bundle + add-on tools) and return it in catalog order.
 
-    Rules:
+    Rules (NO DOUBLE PURCHASES):
     - every id must be a known Subscription id;
-    - the bundle replaces everything else (the result is just ["all_tools"]);
-    - Data Cleaning (the base) is always added;
-    - an item's requirements must be picked too (AI needs Data Engineering).
+    - at most ONE bundle: if several are picked, the biggest is kept;
+    - Pro (All tools) replaces everything else (the result is just ["all_tools"]);
+    - any other bundle drops the tools it already covers; tools it doesn't cover
+      stay as add-ons (Starter + Data Science & ML);
+    - without a bundle, Data Cleaning (the base) is always added;
+    - an item's requirements must be picked or covered (AI needs Data Engineering).
     Duplicates are removed.
 
     Args:
@@ -425,11 +468,18 @@ def normalize_selection(plan_ids: list[str]) -> list[str]:
     unknown = [p for p in plan_ids if p not in SUBSCRIPTIONS_BY_ID]
     if unknown:
         raise ValueError(f"Unknown tool(s): {', '.join(unknown)}.")
-    if BUNDLE in plan_ids:
-        return [BUNDLE]
-    chosen = set(plan_ids) | {BASE}
+    bundles = [p for p in plan_ids if SUBSCRIPTIONS_BY_ID[p].kind == "bundle"]
+    if bundles:
+        keep = max(bundles, key=lambda b: (len(covered_tools(b)), SUBSCRIPTIONS_BY_ID[b].monthly_usd))
+        if keep == BUNDLE:
+            return [BUNDLE]
+        chosen = {keep} | {p for p in plan_ids if SUBSCRIPTIONS_BY_ID[p].kind == "tool"
+                           and p not in covered_tools(keep)}
+    else:
+        chosen = set(plan_ids) | {BASE}
+    have = set().union(*(covered_tools(p) or {p} for p in chosen))
     for pid in chosen:
-        missing = [r for r in SUBSCRIPTIONS_BY_ID[pid].requires if r not in chosen]
+        missing = [r for r in SUBSCRIPTIONS_BY_ID[pid].requires if r not in have]
         if missing:
             names = ", ".join(SUBSCRIPTIONS_BY_ID[m].name for m in missing)
             raise ValueError(f"{SUBSCRIPTIONS_BY_ID[pid].name} needs {names}.")
@@ -452,7 +502,9 @@ def selection_price(plan_ids: list[str], interval: str) -> dict:
     Returns:
         dict: {"interval", "plan_ids" (normalized list), "lines" (one
             {"id", "name", "amount_usd", "note"} per item), "total_usd",
-            "bundle_usd" (bundle price on this interval), "bundle_cheaper" (bool)}.
+            "bundle_usd" (Pro's price on this interval), "bundle_cheaper" (bool: a
+            bundle covering everything picked costs less), "cheaper_bundle"
+            ({"id", "name", "amount_usd"} of the cheapest such bundle, or None)}.
 
     Raises:
         ValueError: if `interval` is not "month" or "year", or the selection is
@@ -475,8 +527,13 @@ def selection_price(plan_ids: list[str], interval: str) -> dict:
                       "note": "" if billable(pid) else "Free until it launches"})
     total = round(sum(l["amount_usd"] for l in lines), 2)
     bundle = price(SUBSCRIPTIONS_BY_ID[BUNDLE])
+    # The cheapest bundle that covers everything picked, if it costs less.
+    wanted = set().union(*(covered_tools(p) or {p} for p in picked))
+    cheaper = sorted((b for b in SUBSCRIPTIONS if b.kind == "bundle" and wanted <= covered_tools(b.id)
+                      and price(b) < total and b.id not in picked), key=price)
+    best = ({"id": cheaper[0].id, "name": cheaper[0].name, "amount_usd": price(cheaper[0])} if cheaper else None)
     return {"interval": interval, "plan_ids": picked, "lines": lines, "total_usd": total,
-            "bundle_usd": bundle, "bundle_cheaper": picked != [BUNDLE] and total > bundle}
+            "bundle_usd": bundle, "bundle_cheaper": best is not None, "cheaper_bundle": best}
 
 
 def lookup_key(plan_id: str, interval: str) -> str:
@@ -677,8 +734,9 @@ def subscription_catalog() -> list[dict]:
         (15.83, 38.0, 17)
     """
     out = []
-    all_tools_month = sum(s.monthly_usd for s in SUBSCRIPTIONS if s.kind == "tool")
     for s in SUBSCRIPTIONS:
+        covers = covered_tools(s.id)
+        one_by_one = sum(t.monthly_usd for t in SUBSCRIPTIONS if t.id in covers)
         full_year = s.monthly_usd * 12
         out.append({
             **asdict(s),
@@ -687,8 +745,9 @@ def subscription_catalog() -> list[dict]:
             "annual_per_month_usd": round(s.annual_usd / 12, 2),
             "annual_savings_usd": round(full_year - s.annual_usd, 2),
             "annual_savings_pct": round((full_year - s.annual_usd) / full_year * 100) if full_year else 0,
-            # Bundle only: how much less than picking every tool separately (per month).
-            "bundle_savings_month_usd": round(all_tools_month - s.monthly_usd, 2) if s.kind == "bundle" else 0,
+            # Bundle only: the tools it includes, and how much less than picking them one by one (per month).
+            "covers": [t.id for t in SUBSCRIPTIONS if t.id in covers],
+            "bundle_savings_month_usd": round(one_by_one - s.monthly_usd, 2) if s.kind == "bundle" else 0,
             "trial_days": TRIAL_DAYS.get(s.id, 0),
         })
     return out
@@ -866,6 +925,9 @@ def build_quote(service_ids: list[str], runtime_seconds: float | None = None) ->
             amount = cost["amount_usd"]
             note = (f"{cost['billable_minutes']:g} billable minute(s) × "
                     f"${cost['rate_per_minute_usd']:.2f}/min")
+        elif svc.pricing_model == "package" and not svc.starting_price_usd:
+            amount = 0.0      # AI: free questions every month, more with the add-on
+            note = "Free questions every month; more with the AI add-on (needs Data Engineering)."
         elif svc.pricing_model == "package":
             amount = svc.starting_price_usd
             note = "Starting price — final price depends on scope."

@@ -20,10 +20,20 @@ from fastapi.testclient import TestClient
 
 from api.core.config import get_settings
 from api.main import app
-from api.services import account_store, business_tools, entities, oauth, sync, unified, warehouse_store
+from api.services import account_store, business_tools, entities, entitlements, oauth, sync, unified, warehouse_store
 from api.services.warehouse_loader import build_plan
 
 client = TestClient(app)
+
+
+async def _always_paid(_account):
+    return True
+
+
+@pytest.fixture(autouse=True)
+def paid_plan(monkeypatch):
+    """Business tools need a paid plan; these tests are about other rules, so every test account counts as paid."""
+    monkeypatch.setattr(entitlements, "has_paid_plan", _always_paid)
 PW = "Correct-horse-9"
 QB = "https://sandbox-quickbooks.api.intuit.com/v3/company/9130"
 XERO = business_tools.XERO_API

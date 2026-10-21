@@ -38,7 +38,8 @@ const nextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob:",
+              // Partner logos come from our API (/api/partners/{id}/logo), so it's allowed for images too.
+              `img-src 'self' data: blob: ${API}`,
               "font-src 'self' data:",
               `connect-src 'self' ${API}`,
               "frame-ancestors 'self'",

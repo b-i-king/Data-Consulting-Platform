@@ -21,6 +21,7 @@ import type { Account, BusinessContext, WarehouseCounts } from "@/lib/types";
 import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 import { AskToConsult, DeleteAccount, UpdateLatestUpload } from "./SettingsPanel";
+import PartnerCard from "./PartnerCard";
 import HipaaCard from "./HipaaCard";
 import { ActivityLogCard, DevicesCard, TwoStepCard } from "./SecurityPanel";
 import TeamPanel from "./TeamPanel";
@@ -88,6 +89,7 @@ export default function AccountPanel(props: {
           <DevicesCard token={props.token} />
         </>
       )}
+      {!props.acting && a.account_type === "business" && props.canChange && <PartnerCard token={props.token} />}
       {!props.acting && a.account_type === "business" && props.canChange && (
         <HipaaCard token={props.token} onChanged={props.onRefreshAccount} />
       )}

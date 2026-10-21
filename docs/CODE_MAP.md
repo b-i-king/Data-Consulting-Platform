@@ -95,6 +95,12 @@ services the client chose are offered; the rest are badges from
 | `api/services/combine.py` | Stack (union) or join tables of one upload before loading | Changing how tables are combined |
 | `api/services/cloud_sources.py` | A client's own Supabase / PostgreSQL: encrypted login, list tables, read one (read-only); "Sign in with Supabase" reads through the Management API | Cloud integrations |
 | `api/services/oauth.py` | "Connect" sign-in (OAuth 2.0) for QuickBooks, Xero, Supabase: the state ticket, code swap, token refresh, encrypted saving | Adding a sign-in integration |
+| `api/services/partners.py` + `api/routers/partners.py` | The home page's "Partnered with" carousel: who may apply, the logo turned into a small WebP, admin approval, shown only while paid | Partner rules ([ARCHITECTURE.md](ARCHITECTURE.md) 2b) |
+| `web/components/home/PartnerCarousel.tsx`, `ThemedLogo.tsx`, `web/components/workspace/PartnerCard.tsx`, `AdminPartners.tsx` | The carousel; each logo drawn as a silhouette in the theme's colors; the business's application (Settings → Account); the admin review and "Add a company you work with" | How partners look and apply |
+| `web/lib/faq.ts` + `web/components/FaqSection.tsx` | The FAQ: home page (with Google's FAQ markup) and Settings → Help & FAQ | Changing a question or answer |
+| `web/components/SiteMenu.tsx` | The header's ☰ menu: Sign in (or Help & FAQ), the home page's sections, the legal pages | Header links |
+| `api/services/integration_slots.py` | Business tools come with a paid plan; frees spots held by ended plans when a tool is full; Disconnect | Who may connect QuickBooks / Xero / Wave ([CONNECTORS.md](CONNECTORS.md)) |
+| `api/services/xero_guard.py` | Keeps Xero data away from AI and ML (Xero's terms): fingerprints the Xero files the API sends; the AI endpoint and ML / AI skills refuse them | What's off for Xero data |
 | `api/services/business_tools.py` | QuickBooks, Xero and Wave read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |
 | `web/components/workspace/QuickLook.tsx` | The live quick look card (income, expenses, owed, by month, top customers) | How the quick look looks |
 | `api/services/ai_assistant.py` + `api/routers/ai.py` | Beacon, the AI assistant: free / premium monthly allowance, admins unlimited, consultants use the client's; optional Google Gemini planner (schema only) | AI limits and models |
@@ -111,7 +117,7 @@ services the client chose are offered; the rest are badges from
 | `api/services/dashboards.py` + `api/routers/dashboards.py` | Business context, suggested questions by industry, the client's own dashboard tabs, the question log | Dashboards built around the business |
 | `api/services/warehouse_store.py` + `api/routers/warehouse.py` | Writes an accepted load (RLS, no duplicates); preview / load / summary endpoints | Changing the load or its checks |
 | `scripts/setup_database.py` | Runs db/schema.sql (dim + fact schemas), lists every table and row count | After pulling schema changes |
-| `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (the `fact.account_data` shape) | Changing how data is stored, or adding a source |
+| `api/services/unified.py` | Unified data: field maps, metric descriptions, QuickBooks/file reshape, round trip, no-duplicate load plan (unified rows; stored packed as one row per record line in `fact.records` — `warehouse_store._pack`) | Changing how data is stored, or adding a source |
 | `web/components/explore/EdaReport.tsx` + `web/components/charts/ChartView.tsx` | The EDA report view (sections, charts, tables); ChartView draws any chart a skill returns | Changing the EDA report screen or adding a chart type |
 | `web/components/explore/WarehouseLoad.tsx` | Data Engineering "Load into database": preview, why, accept | Changing the load screen |
 | `web/components/workspace/ConsultationPanel.tsx` | Consultant's Consultations card (confirm the free call) | Changing consultation tracking |

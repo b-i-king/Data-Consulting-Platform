@@ -29,6 +29,7 @@ import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 import AdminConsultantRequests from "./AdminConsultantRequests";
 import AdminHipaa from "./AdminHipaa";
+import AdminPartners from "./AdminPartners";
 import AdminConsultingPrices from "./AdminConsultingPrices";
 import AdminPrices from "./AdminPrices";
 import AdminSales from "./AdminSales";
@@ -184,6 +185,7 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
         </ConfirmDialog>
       )}
 
+      <AdminPartners token={token} />
       <AdminHipaa token={token} />
       <AdminPrices token={token} />
       <AdminConsultingPrices token={token} />

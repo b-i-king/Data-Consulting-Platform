@@ -26,6 +26,8 @@ import ResultTable from "./ResultTable";
 const ALWAYS_INCLUDED = "data_cleaning";
 
 const inputCls = "w-full rounded-xl border border-line bg-surface px-3 py-1.5 text-sm";
+/** Option-name words shown in capitals on the skill form ("pca" -> "PCA"). */
+const ACRONYMS = new Set(["pca", "id", "kpi", "sql", "csv", "ml", "ai", "url"]);
 const EXT: Record<string, [string, string]> = {
   markdown: ["md", "text/markdown"],
   sql: ["sql", "text/plain"],
@@ -41,7 +43,11 @@ function ParamField(props: {
   onChange: (v: string) => void;
 }) {
   const { param, columns } = props;
-  const label = props.name.replace(/_/g, " ");
+  // "max_rows" -> "max rows"; short acronyms stay upper-case ("pca" -> "PCA").
+  const label = props.name
+    .split("_")
+    .map((w) => (ACRONYMS.has(w) ? w.toUpperCase() : w))
+    .join(" ");
   let control;
   if (param.type === "column") {
     control = (

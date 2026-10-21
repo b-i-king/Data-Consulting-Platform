@@ -6,7 +6,7 @@ It creates two **schemas** (a schema is a folder of tables inside the database):
 | Schema | Holds | Tables |
 |---|---|---|
 | **`dim`** — the platform | Who signed up, consultants, teams, what each account pays for, consultations, download billing, storage consent, the load log, connector schedules | `accounts`, `consultants`, `teams`, `subscriptions`, `consultations`, `usage_events`, `storage_consents`, `load_runs`, `data_connections` |
-| **`fact`** — client data | Clients' own business data, only for Data Engineering clients who said "store my data" | `account_data` (every client's data, one row per metric), `field_map` (shared lookup: field names and metric descriptions) |
+| **`fact`** — client data | Clients' own business data, only for Data Engineering clients who said "store my data" | `records` (every client's data, one row per record line) + `fields` (each field described once; `account_data` is a view of both), `field_map` (shared lookup: field names and metric descriptions) |
 
 Supabase keeps its own sign-in tables (and the passwords) in its built-in
 `auth` schema; `dim.accounts.auth_user_id` points there.
@@ -20,7 +20,7 @@ python scripts/setup_database.py --check    # only lists (changes nothing)
 
 Every statement is safe to re-run. Rule of thumb: **`dim` never holds client
 data** (uploaded files are processed in memory). Client data lives only in
-`fact.account_data`, only for clients who choose managed storage — see
+`fact.records`, only for clients who choose managed storage — see
 ARCHITECTURE.md → "Managed storage". The `fact` design is explained in
 [DATA_MODEL.md](DATA_MODEL.md).
 
@@ -34,6 +34,7 @@ erDiagram
     consultants ||--o{ accounts : "manages (consultant_id)"
     accounts ||--o{ consultant_applications : "applies to be a consultant (screening)"
     accounts ||--o{ consultant_invites : "an admin invites (invited_by)"
+    accounts |o--o| partners : "a business's logo on the home page (none: added by an admin)"
     accounts ||--o{ consultant_engagements : "pays their consultant (setup / ongoing help)"
     consultants ||--o{ consultant_engagements : "is paid for"
     accounts ||--o{ subscriptions : "pays for"
@@ -52,9 +53,9 @@ erDiagram
     accounts ||--o{ sessions : "signed-in devices (3 at most)"
     accounts ||--o{ audit_log : "healthcare: who touched the data"
     consultants |o--o{ data_connections : "set up on the client's behalf"
-    accounts ||--o{ account_data : "fact: stored data"
-    consultants |o--o{ account_data : "loaded by"
-    field_map ||..o{ account_data : "fact: names + describes"
+    accounts ||--o{ records : "fact: stored data (one row per record line)"
+    consultants |o--o{ records : "loaded by"
+    field_map ||..o{ records : "fact: names + describes (via fields)"
 
     accounts {
         uuid id PK
@@ -133,6 +134,23 @@ erDiagram
         uuid reactivated_by "the admin"
         timestamptz created_at
         timestamptz updated_at "trigger"
+    }
+    partners {
+        uuid id PK
+        uuid account_id FK "the plan holder; NULL = added by an admin"
+        text source "platform (applied) | admin (added by hand)"
+        text business_name
+        text website_url "where a click on the logo goes"
+        text linkedin_url "optional company page"
+        bytea logo_webp "resized WebP, at most 320 x 160"
+        int logo_width
+        int logo_height
+        text status "pending | approved | rejected | withdrawn"
+        jsonb checks "automatic checks for the admin"
+        text reason "why it was turned down"
+        timestamptz submitted_at
+        timestamptz decided_at
+        uuid decided_by FK "the admin"
     }
     consultant_invites {
         text email PK "lowercase; may apply (invite-only mode)"
@@ -312,7 +330,7 @@ erDiagram
         bool answered
         timestamptz asked_at
     }
-    account_data {
+    records {
         bigint row_id PK
         uuid account_id FK
         text source_name
@@ -333,7 +351,7 @@ erDiagram
     }
 ```
 
-(`account_data` and `field_map` are shown short here; every column is in
+(`records` and `field_map` are shown short here; every column is in
 [DATA_MODEL.md](DATA_MODEL.md).)
 
 ## What each table is for (and who writes it)
@@ -342,6 +360,7 @@ erDiagram
 |---|---|---|---|
 | `dim.accounts` | person who signed up (client or consultant) | signup, "Add a client" (`api/routers/accounts.py`, `consultants.py`) | Business accounts: the **team owner** holds the plan, consultant, billing and stored data for everyone on the team. `team_role` = `owner` (the team's admin: billing, people, roles), `developer` (uploads, connects and loads data, edits dashboards) or `member` (**view only**); a team holds `TEAM_MAX_PEOPLE` (5) people, owner included, and one person is on one team (`api/services/teams.py`). `trial_used_at` = when their one free trial started (`api/services/offers.py`). `interested_services` = "Projects with a consultant" picks — **interest only**, unlocks nothing (subscriptions do); shown to the consultant. `industry_other` = "Other" industry text. `consultant_plan` = one-time analysis or monthly help. Roles: `is_admin` (an `ADMIN_EMAILS` address, set at sign-in) and `is_consultant` (approved); `consultant_request` / `_requested_at` / `_decided_at` / `_decided_by` = the status of their LATEST consultant application (`dim.consultant_applications` has the answers and history) and the admin's decision. `terms_accepted_at` / `terms_version` = the Terms box at sign-up (NULL for accounts made for someone). `password_reset_hash` / `password_reset_expires_at` = "Forgot password" in local mode (a sha256 of the token, 1 hour; Supabase keeps its own). `business_context` = "About your business" (`about`, `goals`, `key_questions`), what dashboards are built around. `is_tester` = an admin made them a **tester** (Admin → Testers): packages switch on with no charge even when Stripe is live, and downloads are free (`billing.charges_real_money`). `updated_at` = last time anything about the account changed (the `dim.touch_updated_at` trigger; a sign-in alone doesn't count). `mfa_secret` (encrypted) / `mfa_enabled_at` / `mfa_recovery_codes` (hashes) = two-step sign-in (`api/services/mfa.py`). `hipaa_status` (`pending` / `approved` / `denied`) with `hipaa_requested_at`, `hipaa_organization`, `hipaa_npi`, `hipaa_note`, `hipaa_decided_at` / `_by`, `hipaa_decision_note` = a request to store health information, confirmed by an admin (`api/services/hipaa.py`; a NAICS 62 sign-up asks automatically; storing is paused while pending). `is_healthcare` = HIPAA approved: their data access is audited. `failed_logins` / `login_locked_until` = the sign-in lockout: wrong passwords in a row, and when the lock ends after `LOGIN_MAX_ATTEMPTS` (3) of them, for `LOGIN_LOCK_MINUTES` (15). A successful sign-in or a password reset clears both (`api/services/login_guard.py`). |
 | `dim.consultants` | consultant | an admin approving their request, or an admin's own sign-in (`consultants.register`) | You never insert it by hand. `active` = false when an admin **deactivated** them (Admin → Consultants): they can't be picked or open clients and sign in as a client; their clients moved to a consultant with room (`consultants.deactivate`). `deactivated_at` / `_by` / `deactivation_reason` and `reactivated_at` / `_by` keep the latest of each. `updated_at` is set by the `dim.touch_updated_at` trigger. `is_default` = the first `ADMIN_EMAILS` address (clients who pick nobody go here first). `capacity` = how many clients at once (default 3, 1–10; the consultant sets it in Settings). `free_booking_url` / `paid_booking_url` = their own Cal.com links (their clients see these instead of `BOOKING_URL` / `PAID_BOOKING_URL`). `calcom_webhook_secret` = made by the app (Settings → "Make my webhook secret"); signs their webhook at `/api/consultations/calcom-webhook/<id>`. `contractor_agreed_at` / `contractor_terms_version` = onboarding: when they agreed to the independent-contractor terms (paid directly by clients, their own taxes) and which wording (`consultants.CONTRACTOR_TERMS_VERSION`; a new version asks again). `stripe_account_id` / `payouts_ready_at` = the consultant's Stripe Connect Express account (onboarding) and when Stripe said it can receive transfers — how clients' setup and ongoing-help payments reach them (`api/services/consulting_billing.py`; admins don't need one). |
+| `dim.partners` | partner in the home page's "Partnered with" row: a business that applied, or a company an admin added | **Settings → Account → Partner program** (`partners.apply`, source `platform`); admins decide — and add companies they work with directly, with no account (`partners.add_by_admin`, source `admin`) — in **Administration → Partner logos to review** | The logo (small WebP), website, optional LinkedIn, status and the automatic checks. A business that applied is shown only while approved AND its plan is paid (checked each time the carousel is built), so canceling takes it down by itself; an admin-added company stays until an admin removes it. Rules: `api/services/partners.py`. |
 | `dim.consultant_invites` | email allowed to apply to be a consultant | **Admin → Consultant invites** (`consultants.invite`) | Checked only while `CONSULTANT_APPLICATIONS=invite` (the default). Removing an invite stops new applications only — never removes a consultant. `note` is for admins. |
 | `dim.consultant_applications` | consultant screening application (one per try) | **Settings → Account → Work as a consultant** (`consultants.apply`); the admin's decision (`consultants.decide`) | The answers: `services`, `experience` (a range: `lt_1`, `1_3`, `3_5`, `5_10`, `10_plus`), `tools`, `linkedin_url` (required, a linkedin.com/in/ profile), optional `work_sample_url` (portfolio), `project_summary`, `agreed_conduct_at` (code of conduct). A denial sets `denial_reason` (a fixed list, `consultants.DENIAL_REASONS`, shown to them), `decision_note` (the admin's personal feedback — required to deny, also shown to them), and `reapply_after` = 3, 6 or 12 months later — they can't apply again before that day. `accounts.consultant_request` mirrors the latest row's status. Deleted with the account. |
 | `dim.consultant_engagements` | thing a client paid their consultant for through the platform | **Plan & billing → Your consultant** (`consulting_billing.start_checkout`), then the **Stripe webhook** | `kind` = `setup` (once, `paid` when paid, `refunded` after a full refund in Stripe) or `retainer` (ongoing help for the `services` picked; `hours_per_week` worked out from them by `pricing.help_hours`; `billing_interval`; a Stripe subscription whose `status` follows Stripe's). `terms_accepted_at` = the billing terms ticked. `ended_reason` = why it ended (`client`, or early: `consultant_deactivated` / `consultant_left` — refund the unused time — or `account_deleted`). Paid by Stripe Connect destination charges: the consultant's share goes to `consultants.stripe_account_id`; `platform_fee_percent` is what the platform kept. Never unlocks tools. Hourly Cal.com sessions aren't here. Deleted with the client's account. |
@@ -356,14 +375,14 @@ erDiagram
 | `dim.consultations` | free first call or paid session | Cal.com webhook, and the consultant's buttons (`api/services/consultations.py`) | Consulting is booked **and paid** on Cal.com. The free call is used up only when a consultant marks a **free** row `completed`; then booking links switch to the paid link (the client's consultant's own, else `PAID_BOOKING_URL`). `consultant_id` = whose Cal.com webhook it came through, so each consultant's sessions can be counted and paid (NULL = the shared webhook). Rows booked before signing up have `account_id` NULL and are matched by `attendee_email`. |
 | `dim.usage_events` | cleaned-file download | download endpoint | Metadata only — never the data. `consultant_id` set when a consultant downloaded for the client. `data_fingerprint` is a one-way hash used for fair use ([PAYMENTS.md](PAYMENTS.md#fair-use)). |
 | `dim.storage_consents` | client's "store my data" | first load (`api/routers/warehouse.py`) | Loading is refused without an active (not withdrawn) row. "Delete stored data" sets `withdrawn_at`. |
-| `dim.load_runs` | load into `fact.account_data` | the load | Metadata only: rows new / updated / unchanged, the accepted preview's fingerprint, status, error, and `column_plan` (how each column was stored — "Use my stored data" uses it to give back the client's own column names). |
-| `dim.data_connections` | integration a client set up | `PUT /api/connections/{connector}/refresh`; `POST /api/connections/supabase` | Business tools (QuickBooks): the refresh schedule and status; pulled data goes to `fact.account_data`. Cloud storage (Supabase database): `credentials_encrypted` = the client's own database login, encrypted (`api/services/cloud_sources.py`); nothing read from it is stored. For a "Connect" sign-in (QuickBooks, Xero, "Sign in with Supabase") it holds the OAuth tokens plus the company / organization / project id, encrypted (`api/services/oauth.py`); `display_name` = the company or project name. `api_calls_day` / `api_calls_count` = API calls made to it today (UTC), so the tools' daily limits are never passed (`CallMeter` in `api/services/business_tools.py`). `sync_state` = the stored sync's progress: per record type, the newest change already stored (`api/services/sync.py`). The customers, vendors and products the sync stores are in `fact.entities` (docs/DATA_MODEL.md). |
+| `dim.load_runs` | load into `fact.records` | the load | Metadata only: rows new / updated / unchanged, the accepted preview's fingerprint, status, error, and `column_plan` (how each column was stored — "Use my stored data" uses it to give back the client's own column names). |
+| `dim.data_connections` | integration a client set up | `PUT /api/connections/{connector}/refresh`; `POST /api/connections/supabase` | Business tools (QuickBooks): the refresh schedule and status; pulled data goes to `fact.records`. Cloud storage (Supabase database): `credentials_encrypted` = the client's own database login, encrypted (`api/services/cloud_sources.py`); nothing read from it is stored. For a "Connect" sign-in (QuickBooks, Xero, "Sign in with Supabase") it holds the OAuth tokens plus the company / organization / project id, encrypted (`api/services/oauth.py`); `display_name` = the company or project name. `api_calls_day` / `api_calls_count` = API calls made to it today (UTC), so the tools' daily limits are never passed (`CallMeter` in `api/services/business_tools.py`). `sync_state` = the stored sync's progress: per record type, the newest change already stored (`api/services/sync.py`). The customers, vendors and products the sync stores are in `fact.entities` (docs/DATA_MODEL.md). |
 | `dim.dashboard_tabs` | one of the client's own dashboard tabs | `POST/PUT/DELETE /api/dashboards/tabs` | A name + saved questions, answered again on the open data each time (`api/services/dashboards.py`). |
 | `dim.api_usage` | API calls the whole app made to one tool in one month | every QuickBooks / Xero read (`CallMeter` in `api/services/business_tools.py`) | Not tied to an account. QuickBooks' free tier allows 500,000 read calls a month for the whole app and blocks every client past it, so the app stops at 90%. |
 | `dim.ai_usage` | AI questions one client (plan holder) asked on one day | each question to the AI assistant (`POST /api/ai/ask`) | The monthly allowance is this month's sum: free 20, premium (AI package) 200 (`AI_FREE_MONTHLY` / `AI_PREMIUM_MONTHLY`); admins have no limit; a consultant's questions count toward the client they work on. Counts only (the text is in `dim.question_log`). |
 | (trigger) `dim.touch_updated_at` | — | `db/schema.sql` | Before any UPDATE of `dim.accounts` or `dim.consultants`, sets `updated_at = now()` when something other than `last_login_at` or the lockout columns changed. |
 | `dim.question_log` | one question asked of the data | `POST /api/questions` (after "Ask your data") | The text only. Questions asked again and again are suggested as dashboard tabs. Only the newest 500 per account are kept (`QUESTION_LOG_KEEP` in `account_store.py`), so it never grows without end. |
-| `fact.account_data` | **one metric** of one record (or one record with no numbers) | the load (`api/services/warehouse_store.py`) | Every client's stored data in one shape. Explained in [DATA_MODEL.md](DATA_MODEL.md). |
+| `fact.records` | **one record line** (its numbers together in `metrics`; `fact.fields` describes each number once; the view `fact.account_data` shows one row per number) | the load (`api/services/warehouse_store.py`) | Every client's stored data in one shape. Explained in [DATA_MODEL.md](DATA_MODEL.md). |
 | `fact.field_map` | source field ("in QuickBooks, `TxnDate` means `transaction_date`") | `db/schema.sql` seed (same pairs as `unified.py`) | Shared by every client: lines names up and says which fields are metrics. |
 
 **Who can see what** is enforced by the API (`get_acting_context`, see
@@ -374,7 +393,7 @@ anything. The API signs in as **`dcp_api`** (role `dcp_app`, made by
 `scripts/setup_database.py`): it can read and write rows of `dim` (an `api_all`
 policy for that role only) but can't skip RLS, so in `fact` it sees one account
 at a time; it can't change tables either. Emails and phone numbers in `fact`
-are encrypted ([SECURITY.md](SECURITY.md)). `fact.account_data`
+are encrypted ([SECURITY.md](SECURITY.md)). `fact.records`
 also has a policy: a login that doesn't bypass RLS sees only the account named
 in `app.account_id` (tested), and the API filters every query by account too.
 
@@ -388,7 +407,7 @@ Workspace ──► entitlements.active_services ──► the picked tools unlo
 ```
 
 The **AI** tool can be added only once the account has data in
-`fact.account_data` (it answers questions about stored data):
+`fact.records` (it answers questions about stored data):
 `billing.ai_ready` checks it at checkout, and the package picker shows AI
 locked until then. Details: [PAYMENTS.md](PAYMENTS.md). Prices: [PRICING.md](PRICING.md).
 
@@ -430,7 +449,7 @@ CREATE TABLE dim.sync_runs (
 ```
 
 Pulled records go through `unified.flatten_quickbooks()` into
-`fact.account_data` with `source_system = 'quickbooks'`. Without managed
+`fact.records` with `source_system = 'quickbooks'`. Without managed
 storage, a QuickBooks sync works like an upload: pulled into memory, joined
 with the client's files ([CONNECTORS.md](CONNECTORS.md)), cleaned, and discarded.
 

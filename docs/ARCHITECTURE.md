@@ -156,7 +156,7 @@ Engineering sync (consent required, like any managed storage).
 
 **Managed storage (opt-in exception): Data Engineering.** ✅ Built. Clients with
 Data Engineering (or their consultant, working for them) can have their cleaned
-data stored in `fact.account_data` (`db/schema.sql`, explained in
+data stored in `fact.records` + `fact.fields` (`db/schema.sql`, explained in
 [DATA_MODEL.md](DATA_MODEL.md)): one shared table for all clients — IDs, dates
 and categories kept as they are, every number one described metric row —
 `account_id` on every row, Row Level Security for isolation. The free cleaning
@@ -201,7 +201,7 @@ flow never writes to it. The design change, and its safeguards:
    The AI *package* (premium) still needs stored data at checkout:
    **AI needs stored data.** The AI tool answers questions about stored data,
    so it can't be added to a package until the account has rows in
-   `fact.account_data` (`billing.ai_ready`).
+   `fact.records` (`billing.ai_ready`).
 9. **Each customer stored once (design change, October 2026).** Customers,
    vendors, products, payees and store locations are client data too. They
    now live ONCE in `fact.entities` (name + details such as email and
@@ -253,6 +253,32 @@ password (`sign_up`, `sign_in_with_password` from Supabase's Python guide) and
 `accounts.password_hash`. Either way the API then issues its own login token,
 as before. Google / Apple sign-in can be added later through Supabase Auth with
 no table changes.
+
+### 2b. Partner logos (a deliberate, small exception)
+
+The home page's "Partnered with" row shows partner businesses' logos, linked
+to their websites (`api/services/partners.py`, `dim.partners`). A logo is NOT
+client data: it's marketing material the business chooses to publish, on
+purpose, to be shown to the public. So it is stored — as a small WebP (at most
+320 x 160 px, usually 5-20 KB), never the original file — together with the
+website and the review status. Rules shown to the business before it applies:
+a business account, a paid plan live for 30+ days, its own website domain, a
+clean and family-friendly logo (a person approves every one), and the logo
+is shown only while the plan is paid. Withdrawing, canceling or deleting the
+account takes it off the page (deleting the account deletes the row).
+Admins can also add a company they work with directly and invoice outside
+the platform (name, website, logo; no account): it's live at once and stays
+until an admin removes it.
+
+**Only the logo, in the site's colors.** Every logo must be just the logo on a
+transparent background: a plain one-color background (a white box) is removed
+automatically — holes inside letters too — and a busy one (a photo, a
+gradient) is refused; empty margins are trimmed. The website then draws each
+logo as a one-color silhouette (a CSS mask filled with the theme's muted text
+color, gold on hover: `web/components/home/ThemedLogo.tsx`), so different
+brands look like one designed row in light and dark, and a black logo never
+disappears on the dark theme. The site's Content Security Policy allows images
+from the API for this (`web/next.config.mjs`, `img-src`).
 
 ### 3. The backend owns the questionnaire
 
@@ -374,7 +400,7 @@ too); Stripe billing is canceled first.
 **Sharing data with the consultant.** Files are never kept after a visit, so on
 the guest flow's "Next steps" a consultant client is offered **Share your data
 with <consultant>**: the Data Engineering load (preview, storage consent, accept)
-into `fact.account_data`. Only then can the consultant open the same data from
+into `fact.records`. Only then can the consultant open the same data from
 their workspace.
 
 **The access rule** (`api/services/consultants.py`, used through
@@ -392,7 +418,7 @@ clients go to), and on `accounts`: `wants_consultant` (boolean) and
 `consultant_id` (NULL unless `wants_consultant` is true — enforced by a CHECK).
 Clients can tick "I'd like a consultant to do this for me" at signup, or the
 consultant creates their account ("Add a client"). **Admins** get every
-service free (AI as a preview), in their own workspace and any client's, and
+service free, in their own workspace and any client's, and
 can open any client. **Everyone else pays for tools**: a consultant working on
 a client gets exactly what that client's package pays for, and needs their own
 package for their own data; a "done for you" client pays for the tools here and
@@ -403,8 +429,9 @@ records who did it). **Client data is still never stored** — the consultant
 works on files the client shares, in the same in-memory way (unless the client
 opts in to managed storage, above).
 
-Consultants also see services that aren't launched yet (AI) as a **preview**,
-so all seven services can be tested; clients still see them as "Early access".
+Consultants also see services that aren't launched yet as a **preview**, so
+every service can be tested; clients see them as "Early access". (AI launched
+in 10/2026, so today all seven are open.)
 
 **Consultations** (`api/services/consultations.py`): the first 30-minute call is
 free, then $80/hour. Booking happens on Cal.com, so the app learns about

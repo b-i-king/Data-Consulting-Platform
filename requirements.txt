@@ -25,6 +25,7 @@ asyncpg>=0.30.0
 
 # Data processing
 pandas>=2.2.0
+pillow>=11.0         # partner logos: check, resize and convert to WebP (api/services/partners.py)
 numpy>=1.26.0
 openpyxl>=3.1.0             # .xlsx / .xlsm read + write
 xlrd>=2.0.1                 # legacy .xls read

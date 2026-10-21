@@ -13,7 +13,7 @@ the way we clean, analyze, and deliver data **consistent and reproducible**,
 whether the work is done by the web app, by you, by Claude, or by a future
 consultant on the team.
 
-All 32 skills live in this folder (editable copies), so the project works the
+All 34 skills live in this folder (editable copies), so the project works the
 same on any machine. Each skill belongs to **exactly one** service category.
 The assignment lives in [`catalog.json`](catalog.json), and
 `tests/test_skills_catalog.py` fails if a skill is missing or listed twice, and
@@ -121,6 +121,8 @@ with a price and an **Add** button.
 | Skill | Source | Use it to… |
 |---|---|---|
 | [`predictive-modeling`](predictive-modeling/README.md) | project | Forecasts and predictive models with baseline, CV, plain-English results |
+| [`reorder-planning`](reorder-planning/README.md) | project | Just-in-time purchasing: per product, the reorder point, the next purchase date and how much to order; when products sell |
+| [`segmentation`](segmentation/README.md) | project | Customer segments: K-means groups of similar customers, products or clients (purchases, spend, days since the last purchase), each named and with a suggested action |
 | [`multivariate-analysis`](multivariate-analysis/README.md) | Rosehill | Controlled effects, multicollinearity, dimensionality reduction |
 
 ### 7. AI — *ask questions about your data*

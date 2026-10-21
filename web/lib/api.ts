@@ -8,6 +8,9 @@
 
 import type {
   Account,
+  PartnerCarouselData,
+  PartnerReview,
+  PartnerStatus,
   AuditEntry,
   HipaaRequest,
   HipaaStatus,
@@ -1089,3 +1092,75 @@ export async function disconnectIntegration(token: string, connector: string): P
   return res.json();
 }
 
+
+// ── Partners (the home page carousel) ─────────────────────────────────────────
+
+/** The carousel: approved partners on a paid plan, and the rules (public). */
+export const getPartners = () => getJson<PartnerCarouselData>("/api/partners");
+
+/** A logo's full address ("/api/partners/..." comes back relative to the API). */
+export const partnerLogoSrc = (logoUrl: string) => `${API_URL}${logoUrl}`;
+
+/** A logo the public can't see yet (the business's own, or one an admin reviews), as a blob: address. */
+export async function getPrivateLogo(token: string, logoUrl: string): Promise<string> {
+  const res = await apiFetch(partnerLogoSrc(logoUrl), { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return URL.createObjectURL(await res.blob());
+}
+
+/** My requirements, whether I can apply now, and my application. */
+export async function getMyPartner(token: string): Promise<PartnerStatus> {
+  const res = await apiFetch(`${API_URL}/api/partners/me`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Apply (or resubmit) with a logo file and the website; an admin reviews it. */
+export async function applyAsPartner(token: string, input: { website: string; linkedin: string; logo: File; agreed: boolean }): Promise<PartnerStatus> {
+  const form = new FormData();
+  form.append("website_url", input.website);
+  form.append("linkedin_url", input.linkedin);
+  form.append("agreed", String(input.agreed));
+  form.append("logo", input.logo, input.logo.name);
+  const res = await apiFetch(`${API_URL}/api/partners/me`, { method: "POST", headers: authHeaders(token), body: form });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Take my logo off the home page. */
+export async function withdrawPartner(token: string): Promise<PartnerStatus> {
+  const res = await apiFetch(`${API_URL}/api/partners/me`, { method: "DELETE", headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: applications to review ("pending"), or all. */
+export async function getPartnerReviews(token: string, status?: string): Promise<{ partners: PartnerReview[] }> {
+  const q = status ? `?status_filter=${encodeURIComponent(status)}` : "";
+  const res = await apiFetch(`${API_URL}/api/partners/admin/list${q}`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: approve, or turn down with a reason the business will see (by the partner's id). */
+export const decidePartner = (token: string, partnerId: string, approve: boolean, reason?: string) =>
+  postJson<{ id: string; status: string }>(`/api/partners/admin/${encodeURIComponent(partnerId)}`,
+    { approve, reason: reason || null }, token);
+
+/** Admins: add a company you work with directly (no account) — it's on the home page at once. */
+export async function addPartnerByAdmin(token: string, input: { name: string; website: string; logo: File }): Promise<void> {
+  const form = new FormData();
+  form.append("business_name", input.name);
+  form.append("website_url", input.website);
+  form.append("logo", input.logo, input.logo.name);
+  const res = await apiFetch(`${API_URL}/api/partners/admin/add`, { method: "POST", headers: authHeaders(token), body: form });
+  await raiseForStatus(res);
+}
+
+/** Admins: take a partner off the list for good. */
+export async function removePartner(token: string, partnerId: string): Promise<void> {
+  const res = await apiFetch(`${API_URL}/api/partners/admin/${encodeURIComponent(partnerId)}`, {
+    method: "DELETE", headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+}

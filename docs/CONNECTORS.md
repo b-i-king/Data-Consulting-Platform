@@ -35,7 +35,7 @@ Settings → **Integrations** has two sections (`api/services/connections.py`):
 - **Business tools — QuickBooks Online and Xero.** ✅ "Connect" sign-in on the
   tool's own site (OAuth 2.0, read-only scopes; `api/services/oauth.py`). Once
   connected, two things work **live, never stored** (`api/services/business_tools.py`):
-  - **Quick look** (free with any plan): income, expenses, net income, what
+  - **Quick look** (included with any paid plan): income, expenses, net income, what
     customers owe, what the business owes, month by month, top customers, for
     any dates. QuickBooks: its own Profit and Loss (by month), Sales by
     Customer and A/R / A/P Aging reports (4 calls). Xero: added up from sales
@@ -61,7 +61,7 @@ Settings → **Integrations** has two sections (`api/services/connections.py`):
   carries on the next day. **Design rule (to keep storage and memory low):** pull only what changed since the
   last sync (QuickBooks Change Data Capture / `MetaData.LastUpdatedTime`), skip
   entities that return no rows, and load page by page — `row_hash` in
-  `fact.account_data` already skips rows whose content didn't change, and an
+  `fact.records` already skips rows whose content didn't change, and an
   empty table is never loaded.
 
 **What clients see as planned** (`COMING_SOON` in `api/services/connections.py`,
@@ -88,7 +88,7 @@ What *is* ready, and what each connector will plug into:
 |---|---|
 | Common pipeline: DataFrame → categorize → clean → preview | ✅ built — a connector only has to return DataFrames |
 | Fuzzy matching for records with no shared ID (`entity_matching.py`) | ✅ built and tested |
-| Table to store synced data (`fact.account_data`, `source_system` = the connector; QuickBooks fields mapped in `fact.field_map`) | ✅ built and tested |
+| Table to store synced data (`fact.records` + `fact.fields`, `source_system` = the connector; QuickBooks fields mapped in `fact.field_map`) | ✅ built and tested |
 | Supabase / PostgreSQL (cloud storage): connect, list tables, read one — encrypted login, read-only | ✅ built and tested |
 | "Sign in with Supabase" (OAuth + Management API, read-only) | ✅ built; tested against Supabase's documented API shapes |
 | QuickBooks and Xero: OAuth sign-in, encrypted tokens (refreshed and rotated), live quick look, open records live | ✅ built; tested against the documented API shapes — test with the sandbox / a real organization once keys are set |
@@ -103,6 +103,38 @@ part of this web app, and your clients can't use them. In this session the
 BigQuery connector was waiting for authorization and several others couldn't
 connect, so they're worth checking in your Claude connector settings if you plan
 to use them for client work.
+
+## Business tools come with a paid plan
+
+QuickBooks, Xero and Wave give the platform ONE free API allowance shared by
+every client (Xero's free plan: 5 connected businesses). So connecting them —
+and reading them live — comes with **any paid plan** (`entitlements.has_paid_plan`:
+a live subscription with any tool; admins and testers count as paid). A free
+account gets 402 with a pointer to the alternative: **download an export from
+the tool and upload it** — the analysis is the same and uses none of the
+shared allowance. Supabase / PostgreSQL stays free (it's the client's own
+database, no shared allowance).
+
+When a tool's spots are full and a paying client connects, spots held by
+accounts whose paid plan ended are released first (Disconnect, including at
+Xero), in `api/services/integration_slots.py`.
+
+## Xero data: no AI and no machine learning
+
+Xero's developer terms (developer.xero.com/xero-developer-platform-terms-conditions,
+clause 7(b)) say API data "cannot be used to train, fine tune, adapt, or
+enhance any AI Models" (predictive analytics included) and can't be passed to
+another company without the user's consent. So for data from Xero — live
+records, or stored data that includes Xero records — the **AI** service
+(Beacon and the AI skills) and the **Data Science & Machine Learning** service
+(predictions, segments, reorder planning, multi-factor analysis) are off.
+Cleaning, exploring and dashboards work as usual.
+
+Enforced on the server (`api/services/xero_guard.py`): the API remembers a
+fingerprint (SHA-256) of every Xero file it sends; `POST /api/ai/ask` and the
+ML / AI skills refuse a matching upload, or one named like the live Xero
+records (`xero.<type>.csv`), with 403. The workspace shows a note instead of
+those tools. QuickBooks and Wave data are not restricted.
 
 ## Two kinds of sources, two jobs
 
@@ -154,7 +186,7 @@ Steps for an OAuth app (QuickBooks, Gusto, Shopify, Square, Stripe):
 3. Store tokens **encrypted** (e.g. Supabase Vault), never in plain columns.
 4. `fetch()` pages through the vendor API into DataFrames.
 5. Run the existing pipeline; for Data Engineering clients, load into the
-   `fact.account_data` with `source_system` = the vendor and `record_id` = the
+   `fact.records` with `source_system` = the vendor and `record_id` = the
    vendor's ID (QuickBooks: `unified.flatten_quickbooks()`).
 6. Schedule re-syncs (daily is plenty for small businesses).
 
@@ -277,7 +309,7 @@ and products**, so:
   what customers still owe on those invoices, and top customers. Expenses and
   "you owe" show as "—": Wave's API doesn't share them (upload an export).
 - **Open records:** invoices (one row per item), customers, products.
-- **Stored sync:** invoices (invoice/sent) into `fact.account_data`, with
+- **Stored sync:** invoices (invoice/sent) into `fact.records`, with
   customers and products in `fact.entities` (`unified.flatten_wave_invoice`,
   `WAVE_FIELD_MAP`, seeded in `fact.field_map` as system `wave`). Only invoices
   changed since the last run are asked for (`modifiedAtAfter`; if Wave refuses

@@ -117,6 +117,15 @@ Use the Chart.js integration patterns below for each chart type.
 
 Use the filter and interactivity implementation patterns below for dropdown filters, date range filters, combined filter logic, sortable tables, and chart updates.
 
+### 6b. Show how each number was calculated
+
+For every metric, return how it's worked out (`data.lineage`): its SQL
+expression (`SUM("amount")`, `COUNT(*)`, `SUM(a) / NULLIF(COUNT(*), 0)`,
+`COUNT(DISTINCT "id")`), any extra condition (a KPI type:
+`"order_type" = 'Delivery'`), and the source fields it reads. The web app's
+"Query" panel turns this into the full equivalent SQL for the chart on screen
+(table, date range, filters, grouping), so anyone can check the numbers.
+
 ### 7. Save and Open
 
 1. Save the dashboard as an HTML file with a descriptive name (e.g., `sales_dashboard.html`)

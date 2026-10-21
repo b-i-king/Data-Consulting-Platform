@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from api.core.security import get_acting_context
-from api.services import ai_assistant, audit
+from api.services import ai_assistant, audit, xero_guard
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms
 from api.services.skills_runner import prepare_input
 from data_skills._core import SkillInputError
@@ -80,6 +80,7 @@ async def ask(
     started = time.perf_counter()
     t = await ai_assistant.check_allowance(ctx, simulate or None)
     datasets = await load_uploads(files)
+    xero_guard.refuse_if_xero(datasets)   # 403: Xero's terms rule out AI on its data
     try:
         df = prepare_input(SKILL, datasets, group_id, missing_strategy, parse_column_actions(column_actions),
                            parse_column_names(column_names), parse_transforms(transforms))

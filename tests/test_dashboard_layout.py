@@ -211,3 +211,53 @@ def test_the_subtitle_describes_this_dashboard_not_your_business():
         assert law["subtitle"].startswith(law["industry"]["name"] + " KPIs: ")
     assert skill._subtitle(["__total__"], {"__total__": "Total amount"}, ["store"], None) == "Total amount over time, by store"
     assert skill._subtitle(["a", "b"], {"a": "Revenue", "b": "NPS score"}, [], None) == "Revenue and NPS score over time"
+
+
+# ── "How this was calculated" (the lineage behind each chart) ─────────────────
+
+def test_every_metric_says_how_it_is_calculated():
+    """Each dashboard metric carries its SQL expression and the fields it reads (QueryPanel.tsx)."""
+    sales = pd.read_csv(Path("samples/sales.csv"))
+    data = skill.run(sales).data
+    lineage = data["lineage"]
+    assert lineage["date_column"] == data["date_column"]
+    assert set(lineage["metrics"]) >= set(data["metrics"])
+    rows = lineage["metrics"]["__rows__"]
+    assert rows["expression"] == "COUNT(*)" and rows["fields"] == []
+    kpi = next(v for k, v in lineage["metrics"].items() if k.startswith("__kpi_"))
+    assert kpi["where"].startswith('"order_type" = ') and kpi["fields"] == ["order_type", "amount"]
+    assert lineage["metrics"]["__avg__"]["expression"] == 'SUM("amount") / NULLIF(COUNT(*), 0)'
+    # The pandas twin of each expression (the panel's "pandas" view).
+    assert rows["pandas"] == "len(g)"
+    assert lineage["metrics"]["__avg__"]["pandas"] == "g['amount'].sum() / len(g)"
+    assert kpi["pandas_where"].startswith("df['order_type'] == ")
+
+
+def test_lineage_of_ratios_distinct_counts_and_industry_kpis():
+    """Ratios divide safely, distinct counts say so, percents show their scale, industry KPIs name real columns."""
+    lin = skill._lineage(
+        ["food", "guests", "cost_pct"],
+        {"food": {"agg": "mean", "column": "food cost", "scale": 1},
+         "guests": {"agg": "distinct", "den": "ticket_id", "scale": 1},
+         "cost_pct": {"agg": "ratio", "num": "m1num", "den": "m1den", "den_agg": "sum", "scale": 100}},
+        {"food": "Food cost", "guests": "Guests", "cost_pct": "Food cost %"},
+        None, "amount", "day", {"cost_pct": ["food_cost", "sales"]})["metrics"]
+    assert lin["food"]["expression"] == 'AVG("food cost")'
+    assert lin["guests"]["expression"] == 'COUNT(DISTINCT "ticket_id")'
+    assert lin["cost_pct"]["expression"] == '100 * SUM("m1num") / NULLIF(SUM("m1den"), 0)'
+    assert lin["cost_pct"]["fields"] == ["food_cost", "sales"] and "food_cost, sales" in lin["cost_pct"]["note"]
+    assert lin["food"]["pandas"] == "g['food cost'].mean()" and lin["guests"]["pandas"] == "g['ticket_id'].nunique()"
+    assert lin["cost_pct"]["pandas"] == "100 * (g['m1num'].sum() / g['m1den'].sum())"
+
+
+def test_the_downloaded_dashboard_fits_phones_in_both_orientations():
+    """The HTML file switches to short time labels when full ones don't fit, and goes one row on short screens."""
+    page = (Path(__file__).resolve().parents[1] / "data_skills" / "build-dashboard" / "templates" / "page.html").read_text(
+        encoding="utf-8")
+    assert "function fit()" in page and "D.range_short_labels" in page and "D.comparison_short_labels" in page
+    assert re.search(r"@media \(max-height: 500px\) \{\s*\.timebar \{ flex-direction: row;", page)
+    assert 'addEventListener("resize", fit)' in page          # turning the phone re-measures
+    # The skill sends the short labels the file needs.
+    res = load_skill("build-dashboard").run(pd.read_csv(Path(__file__).resolve().parents[1] / "samples" / "sales.csv"))
+    assert res.data["range_short_labels"]["last_3_months"] == "3M"
+    assert res.data["comparison_short_labels"]

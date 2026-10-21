@@ -35,6 +35,8 @@ const OVERVIEW = "__overview";
 
 export default function DashboardTabs(props: {
   token: string;
+  /** Show "How this was calculated" on the charts (false for view-only team members). */
+  showQuery?: boolean;
   input: CleaningInput;
   groupId: number;
   /** The open table's columns and types (for suggestions). */
@@ -132,7 +134,7 @@ export default function DashboardTabs(props: {
         props.hasDates ? (
           <Dashboard key={props.groupId} input={props.input} groupId={props.groupId} tabName="Overview"
             industry={info?.naics_sector} businessName={headerName} viewerName={props.viewerName}
-            dataName={prettyDataName(props.dataName)} />
+            dataName={prettyDataName(props.dataName)} showQuery={props.showQuery} />
         ) : (
           <Card>
             <p className="text-sm">

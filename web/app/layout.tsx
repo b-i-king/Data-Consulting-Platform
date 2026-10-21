@@ -89,7 +89,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           className="fixed left-4 top-3 z-50 -translate-y-24 rounded-full bg-brand px-4 py-2 font-semibold text-on-brand shadow-[var(--shadow-card)] focus:translate-y-0">
           Skip to main content
         </a>
-        <header className="sticky top-0 z-10 border-b border-line bg-canvas/80 backdrop-blur">
+        {/* Pinned to the top while scrolling — except on a phone turned sideways
+            (under 500px tall), where it scrolls away to leave room for the content. */}
+        <header className="sticky top-0 z-10 border-b border-line bg-canvas/80 backdrop-blur [@media(max-height:500px)]:static">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
             <Link href="/" className="flex items-center gap-2 font-mono font-semibold tracking-tight">
               <span aria-hidden className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-on-brand">
@@ -101,7 +103,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </span>
               <span className="hidden sm:inline">{SITE_NAME}</span>
             </Link>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <ThemeToggle />
               <HeaderAuth />
             </div>

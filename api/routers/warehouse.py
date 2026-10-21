@@ -45,7 +45,7 @@ from fastapi.responses import StreamingResponse
 from api.core import database
 from api.core.security import get_acting_context
 from api.models.accounts import DeleteStoredIn
-from api.services import account_store, audit, combine, dedupe, entitlements, hipaa, teams, warehouse_store
+from api.services import account_store, audit, combine, dedupe, entitlements, hipaa, teams, warehouse_store, xero_guard
 from api.services.entitlements import plan_holder
 
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
@@ -391,6 +391,9 @@ async def export_stored(ctx: Annotated[dict, Depends(get_acting_context)], sourc
     kind = re.sub(r"\.[A-Za-z0-9]+$", "", source) if source else "all"      # "sales.csv" -> "sales"
     filename = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{name}_{kind}_stored").strip("_").lower() + ".csv"
     body = df.to_csv(index=False).encode("utf-8-sig")
+    stored = (await warehouse_store.summary(holder))["sources"]
+    if any(s["source_system"] == "xero" and (not source or s["source_name"] == source) for s in stored):
+        xero_guard.remember(body)   # includes Xero records: AI and ML are off for this file
     await audit.record(ctx, "export", {"source": source or "all", "rows": len(df)})   # healthcare clients only
     return StreamingResponse(io.BytesIO(body), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})

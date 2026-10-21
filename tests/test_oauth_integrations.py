@@ -19,9 +19,19 @@ from fastapi.testclient import TestClient
 
 from api.core.config import get_settings
 from api.main import app
-from api.services import account_store, business_tools, connections, oauth
+from api.services import account_store, business_tools, connections, entitlements, oauth
 
 client = TestClient(app)
+
+
+async def _always_paid(_account):
+    return True
+
+
+@pytest.fixture(autouse=True)
+def paid_plan(monkeypatch):
+    """Business tools need a paid plan; these tests are about other rules, so every test account counts as paid."""
+    monkeypatch.setattr(entitlements, "has_paid_plan", _always_paid)
 PW = "Correct-horse-9"
 
 
@@ -593,3 +603,78 @@ def test_free_quick_look_covers_the_last_12_months():
     assert date.fromisoformat(look["earliest"]) >= date.today() - timedelta(days=366)
     recent = (date.today() - timedelta(days=30)).isoformat()
     assert client.get(f"/api/connections/xero/quick-look?start={recent}", headers=h).json()["history_limited"] is False
+
+
+# ── Paid plans only, and Xero data stays away from AI / ML ──────────────────
+
+_REAL_HAS_PAID = entitlements.has_paid_plan   # the real check, saved before the paid_plan fixture swaps it
+
+
+def test_business_tools_need_a_paid_plan(monkeypatch):
+    """A free account can't connect QuickBooks / Xero / Wave or read them live (402, pointing to upload); Supabase stays free."""
+    from api.services import integration_slots
+    monkeypatch.setattr(entitlements, "has_paid_plan", _REAL_HAS_PAID)
+    oauth.HTTP_TRANSPORT = httpx.MockTransport(_xero_fake())
+    h = _signup()
+    for tool in ("xero", "quickbooks"):
+        res = client.get(f"/api/connections/{tool}/authorize", headers=h)
+        assert res.status_code == 402 and "paid plan" in res.json()["detail"] and "upload" in res.json()["detail"]
+    assert client.get("/api/connections/supabase/authorize", headers=h).status_code == 200
+    # A tester (or a subscriber) may connect.
+    me = client.get("/api/accounts/me", headers=h).json()
+    account_store._accounts[me["id"]]["is_tester"] = True
+    assert client.get("/api/connections/xero/authorize", headers=h).status_code == 200
+    assert _connect(h, "xero").headers["location"].endswith("connected=1")
+    # The plan ends: live reads stop at once (the shared allowance is for paying clients).
+    account_store._accounts[me["id"]]["is_tester"] = False
+    assert client.get("/api/connections/xero/datasets", headers=h).status_code == 402
+    assert integration_slots.paid_only_message("Xero").startswith("Connecting Xero comes with any paid plan")
+
+
+def test_a_full_tool_frees_spots_held_by_ended_plans(monkeypatch):
+    """When Xero's spots are full, an account whose paid plan ended gives its spot to a paying client."""
+    monkeypatch.setenv("XERO_MAX_CONNECTIONS", "1")
+    get_settings.cache_clear()
+    fake = _xero_fake()
+    oauth.HTTP_TRANSPORT = httpx.MockTransport(fake)
+    ana, bo = _signup("ana@example.com"), _signup("bo@example.com")
+    assert _connect(ana, "xero").headers["location"].endswith("connected=1")
+    ana_id = client.get("/api/accounts/me", headers=ana).json()["id"]
+
+    async def paid_unless_ana(account):
+        return str(account["id"]) != ana_id          # Ana's plan ended; Bo pays
+
+    monkeypatch.setattr(entitlements, "has_paid_plan", paid_unless_ana)
+    fake.calls.clear()
+    assert client.get("/api/connections/xero/authorize", headers=bo).status_code == 200   # Ana's spot was released
+    assert not any(k[0] == ana_id for k in account_store._connections)
+    assert any(c.method == "DELETE" and c.url.path == "/connections/conn-1" for c in fake.calls)   # undone at Xero too
+
+
+def test_xero_data_is_kept_away_from_ai_and_machine_learning():
+    """Xero records can be cleaned and charted, but ML skills and AI questions refuse them (Xero's terms, 7(b))."""
+    from api.services import xero_guard
+    oauth.HTTP_TRANSPORT = httpx.MockTransport(_xero_fake())
+    h = _signup()
+    assert _connect(h, "xero").headers["location"].endswith("connected=1")
+    csv = client.get("/api/connections/xero/dataset?id=sales_invoices", headers=h).content
+
+    def run(skill, name="invoices.csv"):   # any file name: the fingerprint gives it away
+        return client.post(f"/api/skills/{skill}/run", headers=h, files=[("files", (name, csv, "text/csv"))],
+                           data={"params": "{}"})
+
+    for skill in ("predictive-modeling", "segmentation", "reorder-planning", "ask-your-data"):
+        res = run(skill)
+        assert res.status_code == 403 and "Xero" in res.json()["detail"], skill
+    ask = client.post("/api/ai/ask", headers=h, files=[("files", ("invoices.csv", csv, "text/csv"))],
+                      data={"question": "total by customer"})
+    assert ask.status_code == 403 and xero_guard.XERO_BLOCKED == ask.json()["detail"]
+    assert run("build-dashboard").status_code != 403 and run("eda-report").status_code != 403   # visuals are fine
+    # The website's file name for live Xero records is recognized too, even if the bytes changed.
+    edited = csv + b"\n"
+    assert client.post("/api/skills/segmentation/run", headers=h, data={"params": "{}"},
+                       files=[("files", ("xero.sales_invoices.csv", edited, "text/csv"))]).status_code == 403
+    # Other files are untouched.
+    other = b"customer,amount\n" + b"".join(f"c{i % 12},{i}\n".encode() for i in range(60))
+    assert client.post("/api/skills/segmentation/run", headers=h, data={"params": "{}"},
+                       files=[("files", ("mine.csv", other, "text/csv"))]).status_code != 403
