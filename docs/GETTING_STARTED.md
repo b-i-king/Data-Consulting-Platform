@@ -1,6 +1,6 @@
 # Getting started (local development)
 
-You need **Python 3.12+** and **Node.js 20+**.
+You need **Python 3.12+** and **Node.js 22+** (24 recommended — the version the GitHub checks use; Node 20 reached end of life in 04/2026).
 
 ## 1. Backend (FastAPI)
 
