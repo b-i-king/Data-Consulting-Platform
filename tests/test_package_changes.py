@@ -6,6 +6,7 @@ A fake Stripe keeps the subscription's items like the real one does, so each
 change is checked end to end: what's sent, and what the package holds after.
 """
 
+from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
@@ -147,8 +148,10 @@ def test_changing_the_package_undoes_a_scheduled_cancel(stripe_live):
     assert _package(t)["cancel_at_period_end"] is False
 
 
-def test_tools_not_charged_yet_are_kept(stripe_live):
-    """AI is free until it launches: it never goes to Stripe, but stays in the package."""
+def test_tools_not_charged_yet_are_kept(stripe_live, monkeypatch):
+    """A tool whose service isn't launched is free: it never goes to Stripe, but stays in the package."""
+    # AI is launched; put it back to "Early access" for this test.
+    monkeypatch.setitem(pricing.SERVICES_BY_ID, "ai", replace(pricing.SERVICES_BY_ID["ai"], available=False))
     t = _subscribed(stripe_live, ["data_cleaning", "data_engineering"])
     _change(t, ["data_cleaning", "data_engineering", "ai"])
     kw = stripe_live.calls[-1]

@@ -1,10 +1,10 @@
 """
-Write an ACCEPTED load plan into fact.account_data, and read a client's stored data back.
+Write an ACCEPTED load plan into fact.records / fact.fields, and read a client's stored data back.
 
 WHAT THIS FILE DOES
 -------------------
     load(holder, plan)       write a LoadPlan (api/services/warehouse_loader.py) into
-                             fact.account_data (db/schema.sql)
+                             fact.records + fact.fields (db/schema.sql)
     has_data(holder)         is anything stored for this client? (AI needs it)
     summary(holder)          what is stored, per source (file)
     export(holder, source)   a stored source as its ORIGINAL table again (pandas), so
@@ -24,19 +24,35 @@ names and details back, so "Use my stored data" still gives the table back.
 Only called after the client (or their consultant) saw the preview, accepted
 it, and consented to storage (api/routers/warehouse.py checks all of that).
 
+HOW DATA IS STORED (database path): NO REPETITION
+--------------------------------------------------
+The rest of the app works with UNIFIED ROWS — one per number (api/services/unified.py),
+which is easy to reshape and compare. Storing them like that would copy each
+line's attributes onto every number, so this file PACKS them on the way in and
+UNPACKS them on the way out:
+    fact.records  one row per record line: attributes once, every number of
+                  the line in `metrics` ({"line_amount": 21.0, "quantity": 3})
+    fact.fields   each field of a source described once (source column,
+                  metric type / subtype / unit)
+    _pack()       unified rows -> record rows + field rows
+    _unpack()     record rows + field rows -> unified rows (row_hash recomputed,
+                  so it's the same fingerprint the load used)
+The view fact.account_data shows the one-row-per-number shape for queries.
+
 HOW ONE LOAD IS WRITTEN (database path)
 ---------------------------------------
-ONE statement inside ONE transaction, so a failure stores nothing:
+Inside ONE transaction, so a failure stores nothing:
   1. set_config('app.account_id', ...) — the Row Level Security switch in
      db/schema.sql: from here on, this connection only sees this account's rows.
-  2. INSERT ... SELECT FROM unnest(...): all rows at once (unnest turns the
-     Python lists into rows).
-  3. ON CONFLICT (the unique key) DO UPDATE ... WHERE the row_hash changed:
+  2. the fields are upserted (each described once per source);
+  3. INSERT ... SELECT FROM unnest(...): every record line at once, ON CONFLICT
+     (the unique key) DO UPDATE ... WHERE the line's row_hash changed:
        new key                -> inserted
        stored, same content   -> skipped (nothing written, modified_at stays)
        stored, new content    -> updated
-     RETURNING (xmax = 0) tells inserted from updated rows (xmax is 0 for a
+     RETURNING (xmax = 0) tells inserted from updated lines (xmax is 0 for a
      row this statement created).
+Counts are still reported in NUMBERS (unified rows), the same as the memory path.
 
 The stored data belongs to the PLAN HOLDER's account (the individual, or a
 business's team owner), so it is the same on every load and for every colleague.
@@ -48,9 +64,9 @@ Like account_store.py there is an in-memory path for development and tests
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import uuid
-from decimal import Decimal
 
 import pandas as pd
 from fastapi import HTTPException, status
@@ -66,10 +82,87 @@ _stored: dict[tuple[str, str, str], pd.DataFrame] = {}
 NOT_SET_UP = ("The data table isn't in the database yet. Run `python scripts/setup_database.py` "
               "(or paste db/schema.sql into Supabase -> SQL Editor), then try again.")
 
-# The columns of one stored row, in the order the INSERT below lists them.
-_ROW_COLUMNS = ["record_id", "line_number", "event_type", "event_subtype", "event_date", "field_name",
-                "source_field", "metric_type", "metric_subtype", "metric_unit", "metric_value", "attributes",
-                "row_hash", "mapped", "source_modified_at"]
+FIELD_COLUMNS = ["field_name", "source_field", "metric_type", "metric_subtype", "metric_unit", "mapped"]
+
+
+def _pack(rows: pd.DataFrame) -> tuple[list[dict], list[dict], dict[tuple[str, int], int]]:
+    """
+    Unified rows (one per number) -> record rows (one per line) and field rows (one per field).
+
+    Args:
+        rows: pd.DataFrame, unified rows (UNIFIED_COLUMNS), already entity-linked.
+
+    Returns:
+        tuple: (records: [{"record_id", "line_number", "event_type", "event_subtype",
+        "event_date", "source_modified_at", "attributes", "metrics", "row_hash"}],
+        fields: [{FIELD_COLUMNS}] in first-seen order, numbers: {(record_id, line_number):
+        how many unified rows the line had} — so counts can still be given in numbers).
+
+    Example:
+        >>> recs, fields, n = _pack(plan.rows)
+        >>> recs[0]["metrics"]
+        {'quantity': 3.0, 'unit_price': 7.0, 'line_amount': 21.0}
+    """
+    records: dict[tuple[str, int], dict] = {}
+    hashes: dict[tuple[str, int], list[str]] = {}
+    fields: dict[str, dict] = {}
+    for r in rows.to_dict("records"):
+        key = (str(r["record_id"]), int(r["line_number"]))
+        rec = records.get(key)
+        if rec is None:
+            rec = records[key] = {
+                "record_id": key[0], "line_number": key[1], "event_type": r["event_type"],
+                "event_subtype": r["event_subtype"], "event_date": _none(r["event_date"]),
+                "source_modified_at": _none(r["source_modified_at"]), "attributes": r["attributes"] or {},
+                "metrics": {}}
+        hashes.setdefault(key, []).append(str(r["row_hash"]))
+        if r["field_name"] == unified.NO_METRIC:
+            continue
+        value = _none(r["metric_value"])
+        rec["metrics"][r["field_name"]] = None if value is None else float(value)
+        fields.setdefault(r["field_name"], {c: _none(r[c]) for c in FIELD_COLUMNS})
+    for key, rec in records.items():
+        # The line's fingerprint: its numbers' fingerprints together (order doesn't matter).
+        rec["row_hash"] = hashlib.sha256("|".join(sorted(hashes[key])).encode()).hexdigest()
+    return list(records.values()), list(fields.values()), {k: len(v) for k, v in hashes.items()}
+
+
+def _unpack(records, fields: dict[str, dict]) -> list[dict]:
+    """
+    Record rows + their source's field descriptions -> unified rows (one per number).
+
+    The numbers come back in the order the fields were first stored (the source's
+    column order); a line with no numbers gives its one NO_METRIC row. row_hash is
+    recomputed with unified.row_hash, so it's the same fingerprint the load used.
+
+    Args:
+        records: iterable of dicts with the fact.records columns (metrics and
+            attributes already parsed into dicts).
+        fields: dict, field_name -> its fact.fields row (ordered by field_id).
+
+    Returns:
+        list[dict]: unified rows (UNIFIED_COLUMNS keys).
+    """
+    out = []
+    for rec in records:
+        base = {"record_id": rec["record_id"], "line_number": int(rec["line_number"]),
+                "event_type": rec["event_type"], "event_subtype": rec["event_subtype"],
+                "event_date": rec["event_date"], "source_modified_at": rec["source_modified_at"],
+                "attributes": rec["attributes"]}
+        metrics = rec["metrics"] or {}
+        names = [f for f in fields if f in metrics] + [f for f in metrics if f not in fields]
+        if not names:
+            out.append({**base, "field_name": unified.NO_METRIC, "source_field": "", "metric_type": None,
+                        "metric_subtype": None, "metric_unit": None, "metric_value": None, "mapped": True})
+        for name in names:
+            f = fields.get(name, {})
+            out.append({**base, "field_name": name, "source_field": f.get("source_field") or name,
+                        "metric_type": f.get("metric_type"), "metric_subtype": f.get("metric_subtype"),
+                        "metric_unit": f.get("metric_unit"), "metric_value": metrics[name],
+                        "mapped": bool(f.get("mapped", True))})
+    for row in out:
+        row["row_hash"] = unified.row_hash(row)
+    return [{c: row.get(c) for c in unified.UNIFIED_COLUMNS} for row in out]
 
 
 def _label(event_type: str) -> str:
@@ -83,7 +176,7 @@ def _none(value):
 
 
 def _tables_missing(exc: Exception) -> bool:
-    """True when an error means fact.account_data doesn't exist yet (setup not run)."""
+    """True when an error means fact.records doesn't exist yet (setup not run)."""
     import asyncpg
 
     return isinstance(exc, (asyncpg.exceptions.UndefinedTableError, asyncpg.exceptions.InvalidSchemaNameError))
@@ -92,7 +185,7 @@ def _tables_missing(exc: Exception) -> bool:
 async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, replace: bool = False,
                skip_records: set[str] | None = None) -> dict:
     """
-    Write an accepted plan into fact.account_data.
+    Write an accepted plan into fact.records (one row per record line) and fact.fields.
 
     Args:
         holder: dict, the plan holder's accounts row (whose data it is).
@@ -138,8 +231,7 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
     if rows.empty:
         return {"rows_loaded": 0, "rows_updated": 0, "rows_already_stored": 0, **extra}
 
-    data = rows[_ROW_COLUMNS].to_dict("records")
-    col = lambda name, fix=lambda v: v: [fix(_none(r[name])) for r in data]   # noqa: E731 — one Python list per column
+    records, fields, numbers = _pack(rows)
     try:
         async with database.pool.acquire() as conn:
             async with conn.transaction():
@@ -147,50 +239,58 @@ async def load(holder: dict, plan: LoadPlan, consultant_id: str | None = None, r
                 await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
                 if replace:
                     await conn.execute(
-                        """DELETE FROM fact.account_data
+                        """DELETE FROM fact.records
                            WHERE account_id = $1 AND source_system = $2 AND source_name = $3""",
                         uuid.UUID(aid), plan.source_system, plan.source_name)
+                # Each field described once per source (a re-described field is updated).
+                await conn.execute(
+                    """INSERT INTO fact.fields AS f (account_id, source_system, source_name, field_name, source_field,
+                                                     metric_type, metric_subtype, metric_unit, mapped)
+                       SELECT $1, $2, $3, fn, sf, mt, ms, mu, mp
+                       FROM unnest($4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::bool[])
+                            AS t(fn, sf, mt, ms, mu, mp)
+                       ON CONFLICT (account_id, source_system, source_name, field_name) DO UPDATE SET
+                           source_field = EXCLUDED.source_field, metric_type = EXCLUDED.metric_type,
+                           metric_subtype = EXCLUDED.metric_subtype, metric_unit = EXCLUDED.metric_unit,
+                           mapped = EXCLUDED.mapped""",
+                    uuid.UUID(aid), plan.source_system, plan.source_name,
+                    *[[f[c] if c != "mapped" else bool(f[c]) for f in fields] for c in FIELD_COLUMNS])
+                col = lambda name, fix=lambda v: v: [fix(r[name]) for r in records]   # noqa: E731 — one list per column
                 changed = await conn.fetch(
-                    """INSERT INTO fact.account_data AS a
+                    """INSERT INTO fact.records AS a
                            (account_id, consultant_id, source_system, source_name, record_id, line_number,
-                            event_type, event_subtype, event_date, field_name, source_field, metric_type,
-                            metric_subtype, metric_unit, metric_value, attributes, row_hash, mapped,
-                            source_modified_at)
-                       SELECT $1, $2, $3, $4, rid, ln, et, es, ed, fn, sf, mt, ms, mu, mv, attr::jsonb, rh, mp, smod
+                            event_type, event_subtype, event_date, metrics, attributes, row_hash, source_modified_at)
+                       SELECT $1, $2, $3, $4, rid, ln, et, es, ed, mx::jsonb, attr::jsonb, rh, smod
                        FROM unnest($5::text[], $6::int[], $7::text[], $8::text[], $9::date[], $10::text[],
-                                   $11::text[], $12::text[], $13::text[], $14::text[], $15::numeric[], $16::text[],
-                                   $17::text[], $18::bool[], $19::timestamptz[])
-                            AS t(rid, ln, et, es, ed, fn, sf, mt, ms, mu, mv, attr, rh, mp, smod)
-                       ON CONFLICT (account_id, source_system, source_name, record_id, line_number, field_name)
+                                   $11::text[], $12::text[], $13::timestamptz[])
+                            AS t(rid, ln, et, es, ed, mx, attr, rh, smod)
+                       ON CONFLICT (account_id, source_system, source_name, record_id, line_number)
                        DO UPDATE SET
                            event_type = EXCLUDED.event_type, event_subtype = EXCLUDED.event_subtype,
-                           event_date = EXCLUDED.event_date, source_field = EXCLUDED.source_field,
-                           metric_type = EXCLUDED.metric_type, metric_subtype = EXCLUDED.metric_subtype,
-                           metric_unit = EXCLUDED.metric_unit, metric_value = EXCLUDED.metric_value,
-                           attributes = EXCLUDED.attributes, row_hash = EXCLUDED.row_hash, mapped = EXCLUDED.mapped,
+                           event_date = EXCLUDED.event_date, metrics = EXCLUDED.metrics,
+                           attributes = EXCLUDED.attributes, row_hash = EXCLUDED.row_hash,
                            source_modified_at = EXCLUDED.source_modified_at, consultant_id = EXCLUDED.consultant_id,
                            modified_at = now()                       -- added_at is never touched
-                       -- Only rows whose content really changed are rewritten:
+                       -- Only lines whose content really changed are rewritten:
                        WHERE a.row_hash IS DISTINCT FROM EXCLUDED.row_hash
-                       RETURNING (xmax = 0) AS inserted""",
+                       RETURNING record_id, line_number, (xmax = 0) AS inserted""",
                     uuid.UUID(aid), uuid.UUID(consultant_id) if consultant_id else None,
                     plan.source_system, plan.source_name,
-                    col("record_id"), col("line_number", int), col("event_type"), col("event_subtype"),
-                    col("event_date"), col("field_name"), col("source_field"), col("metric_type"),
-                    col("metric_subtype"), col("metric_unit"),
-                    col("metric_value", lambda v: None if v is None else Decimal(repr(float(v)))),
+                    col("record_id"), col("line_number"), col("event_type"), col("event_subtype"),
+                    col("event_date"), col("metrics", json.dumps),
                     # Emails and phone numbers are encrypted before they're written (pii.py).
                     col("attributes", lambda a: unified.attributes_json(pii.protect(a))), col("row_hash"),
-                    col("mapped", bool),
                     col("source_modified_at"),
                 )
     except Exception as exc:
         if _tables_missing(exc):
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=NOT_SET_UP)
         raise
-    inserted = sum(1 for r in changed if r["inserted"])
-    return {"rows_loaded": inserted, "rows_updated": len(changed) - inserted,
-            "rows_already_stored": len(data) - len(changed), **extra}
+    # Counts in NUMBERS (unified rows), like the memory path: each line counts its numbers.
+    inserted = sum(numbers[(r["record_id"], r["line_number"])] for r in changed if r["inserted"])
+    updated = sum(numbers[(r["record_id"], r["line_number"])] for r in changed if not r["inserted"])
+    return {"rows_loaded": inserted, "rows_updated": updated,
+            "rows_already_stored": len(rows) - inserted - updated, **extra}
 
 
 def _load_in_memory(aid: str, plan: LoadPlan) -> dict:
@@ -236,7 +336,7 @@ async def has_data(holder: dict) -> bool:
             async with conn.transaction():
                 await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
                 return bool(await conn.fetchval(
-                    "SELECT EXISTS (SELECT 1 FROM fact.account_data WHERE account_id = $1)", uuid.UUID(aid)))
+                    "SELECT EXISTS (SELECT 1 FROM fact.records WHERE account_id = $1)", uuid.UUID(aid)))
     except Exception as exc:
         if _tables_missing(exc):
             return False
@@ -286,13 +386,14 @@ async def summary(holder: dict) -> dict:
             async with database.pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
+                    # "rows" = numbers stored (a line with none counts once), "records" = lines.
                     found = await conn.fetch(
                         """SELECT source_system, source_name,
                                   min(event_type || '/' || event_subtype) AS event_type,
-                                  count(*) AS rows,
-                                  count(DISTINCT (record_id, line_number)) AS records,
+                                  sum(GREATEST(1, (SELECT count(*) FROM jsonb_object_keys(metrics)))) AS rows,
+                                  count(*) AS records,
                                   min(event_date) AS first_date, max(event_date) AS last_date
-                           FROM fact.account_data WHERE account_id = $1
+                           FROM fact.records WHERE account_id = $1
                            GROUP BY source_system, source_name ORDER BY source_name""", uuid.UUID(aid))
         except Exception as exc:
             if _tables_missing(exc):
@@ -331,22 +432,32 @@ async def _stored_rows(aid: str, source_name: str | None) -> dict[tuple[str, str
                 await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
                 records = await conn.fetch(
                     """SELECT source_system, source_name, record_id, line_number, event_type, event_subtype,
-                              event_date, source_modified_at, field_name, source_field, metric_type,
-                              metric_subtype, metric_unit, metric_value::float8 AS metric_value,
-                              attributes::text AS attributes, row_hash, mapped
-                       FROM fact.account_data
+                              event_date, source_modified_at, metrics::text AS metrics,
+                              attributes::text AS attributes
+                       FROM fact.records
                        WHERE account_id = $1 AND ($2::text IS NULL OR source_name = $2)
                        ORDER BY source_name, row_id""", uuid.UUID(aid), source_name)
+                described = await conn.fetch(
+                    """SELECT source_system, source_name, field_name, source_field, metric_type, metric_subtype,
+                              metric_unit, mapped
+                       FROM fact.fields
+                       WHERE account_id = $1 AND ($2::text IS NULL OR source_name = $2)
+                       ORDER BY field_id""", uuid.UUID(aid), source_name)
     except Exception as exc:
         if _tables_missing(exc):
             return {}
         raise
-    out: dict[tuple[str, str], list[dict]] = {}
+    fields: dict[tuple[str, str], dict[str, dict]] = {}
+    for f in described:
+        fields.setdefault((f["source_system"], f["source_name"]), {})[f["field_name"]] = dict(f)
+    grouped: dict[tuple[str, str], list[dict]] = {}
     for r in records:
         row = dict(r)
+        row["metrics"] = json.loads(row["metrics"] or "{}")
         row["attributes"] = pii.reveal(json.loads(row["attributes"] or "{}"))   # emails / phones decrypted
-        out.setdefault((row.pop("source_system"), row.pop("source_name")), []).append(row)
-    return {k: pd.DataFrame(v, columns=unified.UNIFIED_COLUMNS) for k, v in out.items()}
+        grouped.setdefault((row.pop("source_system"), row.pop("source_name")), []).append(row)
+    return {k: pd.DataFrame(_unpack(v, fields.get(k, {})), columns=unified.UNIFIED_COLUMNS)
+            for k, v in grouped.items()}
 
 
 async def export(holder: dict, source_name: str | None = None) -> pd.DataFrame:
@@ -393,7 +504,7 @@ async def export(holder: dict, source_name: str | None = None) -> pd.DataFrame:
 
 async def delete(holder: dict) -> dict:
     """
-    Delete EVERYTHING stored in fact.account_data for this client.
+    Delete EVERYTHING stored for this client (fact.records and fact.fields).
 
     Platform records (the account, consents, load history) are not touched here.
 
@@ -420,7 +531,8 @@ async def delete(holder: dict) -> dict:
     async with database.pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
-            await conn.execute("DELETE FROM fact.account_data WHERE account_id = $1", uuid.UUID(aid))
+            await conn.execute("DELETE FROM fact.records WHERE account_id = $1", uuid.UUID(aid))
+            await conn.execute("DELETE FROM fact.fields WHERE account_id = $1", uuid.UUID(aid))
     await entities.delete_all(aid)
     return gone
 
@@ -431,7 +543,7 @@ async def delete_records(holder: dict, source_system: str, source_name: str, rec
     Xero invoice), so stored totals match the source.
 
     Returns:
-        int: rows deleted.
+        int: numbers (unified rows) deleted — a deleted line counts its numbers.
     """
     if not record_ids:
         return 0
@@ -446,10 +558,12 @@ async def delete_records(holder: dict, source_system: str, source_name: str, rec
         return int((~keep).sum())
     async with database.pool.acquire() as conn, conn.transaction():
         await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
-        result = await conn.execute(
-            """DELETE FROM fact.account_data WHERE account_id = $1 AND source_system = $2 AND source_name = $3
-               AND record_id = ANY($4::text[])""", uuid.UUID(aid), source_system, source_name, list(record_ids))
-    return int(result.split()[-1])
+        gone = await conn.fetch(
+            """DELETE FROM fact.records WHERE account_id = $1 AND source_system = $2 AND source_name = $3
+               AND record_id = ANY($4::text[])
+               RETURNING GREATEST(1, (SELECT count(*) FROM jsonb_object_keys(metrics))) AS numbers""",
+            uuid.UUID(aid), source_system, source_name, list(record_ids))
+    return int(sum(r["numbers"] for r in gone))
 
 
 async def relink_stored(holder: dict) -> dict:
@@ -475,16 +589,19 @@ async def relink_stored(holder: dict) -> dict:
         if database.pool is None:
             _stored[(aid, system, name)] = linked.assign(attributes=linked["attributes"].map(pii.protect)).reset_index(drop=True)
             continue
-        part = linked[changed.values]
+        # Rewrite the changed LINES (their attributes and fingerprints), packed like a load.
+        changed_lines = set(zip(linked.loc[changed.values, "record_id"], linked.loc[changed.values, "line_number"]))
+        part = linked[[k in changed_lines for k in zip(linked["record_id"], linked["line_number"])]]
+        records, _, _ = _pack(part)
         async with database.pool.acquire() as conn, conn.transaction():
             await conn.execute("SELECT set_config('app.account_id', $1, true)", aid)
             await conn.execute(
-                """UPDATE fact.account_data AS a SET attributes = t.attr::jsonb, row_hash = t.rh
-                   FROM unnest($4::text[], $5::int[], $6::text[], $7::text[], $8::text[])
-                        AS t(rid, ln, fn, attr, rh)
+                """UPDATE fact.records AS a SET attributes = t.attr::jsonb, row_hash = t.rh
+                   FROM unnest($4::text[], $5::int[], $6::text[], $7::text[]) AS t(rid, ln, attr, rh)
                    WHERE a.account_id = $1 AND a.source_system = $2 AND a.source_name = $3
-                     AND a.record_id = t.rid AND a.line_number = t.ln AND a.field_name = t.fn""",
-                uuid.UUID(aid), system, name, part["record_id"].tolist(), [int(v) for v in part["line_number"]],
-                part["field_name"].tolist(), [unified.attributes_json(pii.protect(a)) for a in part["attributes"]],
-                part["row_hash"].tolist())
+                     AND a.record_id = t.rid AND a.line_number = t.ln""",
+                uuid.UUID(aid), system, name, [r["record_id"] for r in records],
+                [r["line_number"] for r in records],
+                [unified.attributes_json(pii.protect(r["attributes"])) for r in records],
+                [r["row_hash"] for r in records])
     return totals

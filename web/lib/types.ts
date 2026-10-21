@@ -471,7 +471,7 @@ export interface PriceChangeResult {
  * (build your own package; the total is the sum) or the All tools BUNDLE.
  */
 export interface Subscription {
-  id: string; // "data_cleaning", "data_visualization", ..., "ai", "all_tools"
+  id: string; // "starter", "growth", "all_tools" (bundles); "data_cleaning", ..., "ai" (tools)
   kind: "tool" | "bundle";
   /** Data Cleaning: in every package. */
   base: boolean;
@@ -479,8 +479,10 @@ export interface Subscription {
   requires: string[];
   /** false = free until it launches (AI). */
   billable: boolean;
-  /** Bundle only: how much less per month than picking every tool. */
+  /** Bundle only: how much less per month than picking its tools one by one. */
   bundle_savings_month_usd: number;
+  /** Bundle only: the tools it includes (never bought twice; others can be added on). */
+  covers?: string[];
   name: string;
   description: string;
   monthly_usd: number;
@@ -984,6 +986,21 @@ export interface Kpi {
 export interface DashboardData {
   title: string;
   date_column: string;
+  /** How each metric is worked out, as the equivalent SQL (the "How this was calculated" panel, QueryPanel.tsx). */
+  lineage?: {
+    date_column: string;
+    metrics: Record<string, {
+      label: string;
+      /** SQL, e.g. SUM("amount"); `where` an extra condition (a KPI type) or null. */
+      expression: string;
+      where: string | null;
+      /** The pandas twin, on a group `g` (e.g. g['amount'].sum()); `pandas_where` the condition on `df`. */
+      pandas: string;
+      pandas_where: string | null;
+      fields: string[];
+      note: string | null;
+    }>;
+  };
   /** "kpi_types": KPIs are the most common values of a type column; "metrics": number columns. */
   mode: "kpi_types" | "metrics";
   kpi_column: string | null;
@@ -1757,3 +1774,71 @@ export interface DashboardSuggestion {
   source: "yours" | "asked" | "industry";
 }
 
+
+// ── Partners (the home page carousel; api/routers/partners.py) ───────────────
+
+/** One partner in the carousel (GET /api/partners). */
+export interface PartnerLogo {
+  id: string;
+  name: string;
+  url: string;          // their website: a click on the logo opens it
+  logo_url: string;     // "/api/partners/<id>/logo?v=..." (WebP)
+  width: number;
+  height: number;
+}
+
+export interface PartnerCarouselData {
+  partners: PartnerLogo[];
+  requirements: string[];
+}
+
+export type PartnerChecks = {
+  paid_days: number;
+  own_domain: boolean;
+  website_reachable: boolean;
+  email_matches_website: boolean;
+  linkedin_given: boolean;
+  logo_bytes: number;
+  background?: "transparent" | "removed";   // the logo came transparent, or a plain background was taken off
+};
+
+/** A business's partner application (GET /api/partners/me). */
+export interface PartnerApplication {
+  status: "pending" | "approved" | "rejected" | "withdrawn";
+  reason: string | null;
+  business_name: string;
+  website_url: string;
+  linkedin_url: string | null;
+  logo_url: string;
+  logo_width: number;
+  logo_height: number;
+  checks: PartnerChecks;
+  submitted_at: string;
+}
+
+export interface PartnerStatus {
+  requirements: string[];
+  eligible: boolean;
+  missing: string[];
+  paid_days: number;
+  min_paid_days: number;
+  application: PartnerApplication | null;
+}
+
+/** An application in the admin review list (GET /api/partners/admin/list). */
+export interface PartnerReview {
+  id: string;
+  account_id: string | null;          // null = added by an admin (a company they work with directly)
+  source: "platform" | "admin";
+  business_name: string;
+  website_url: string;
+  linkedin_url: string | null;
+  status: PartnerApplication["status"];
+  checks: PartnerChecks;
+  reason: string | null;
+  submitted_at: string;
+  decided_at: string | null;
+  logo_url: string;
+  logo_width: number;
+  logo_height: number;
+}

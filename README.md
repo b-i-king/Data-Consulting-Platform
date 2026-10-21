@@ -38,7 +38,7 @@ The guest path:
    1 year, month to date, year to date; day/week/month over period). Plus the
    **data skills** of the services the client chose (others show as 🔒 badges)
 6. **Your needs** — Data Strategy & Discovery, Exploration & Analysis,
-   Visualization, Data Engineering, Data Science & ML, and AI (early access),
+   Visualization, Data Engineering, Data Science & ML, and AI,
    with a price estimate
 7. **Download** — create an account (only now), download CSV or Excel; billed by
    processing minute

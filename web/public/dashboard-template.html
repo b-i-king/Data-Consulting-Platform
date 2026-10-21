@@ -108,6 +108,13 @@
          background: color-mix(in srgb, var(--surface) 70%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: var(--shadow); }
   .seg button { border: 0; background: none; color: var(--muted); padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
   .seg button[aria-pressed="true"] { background: var(--brand); color: var(--on-brand); font-weight: 600; }
+  /* A phone turned sideways (a short screen): both panels side by side in one
+     slim row, so they cover less of the charts. */
+  @media (max-height: 500px) {
+    .timebar { flex-direction: row; justify-content: center; bottom: 8px; }
+    .seg button { padding: 4px 10px; }
+    main { padding-bottom: 72px; }
+  }
 </style>
 </head>
 <body>
@@ -389,18 +396,32 @@
   }
 
   // ── Time bar ──
-  function seg(id, options, key) {
+  // Full labels ("Last 3 months") when they fit; short ones ("3M") when they
+  // don't (a phone, a narrow window). The full label stays as the tooltip and
+  // what screen readers hear.
+  var compact = false;
+  function seg(id, options, key, short) {
     var box = $(id); box.innerHTML = "";
     Object.keys(options).forEach(function (k) {
-      var b = el("button", "", options[k]); b.type = "button"; b.setAttribute("aria-pressed", String(state[key] === k));
-      b.onclick = function () { state[key] = k; if (key === "range" && !(D.ranges[k].series[state.cmp])) state.cmp = Object.keys(D.ranges[k].series)[0] || state.cmp; seg("ranges", rangeOpts(), "range"); seg("cmps", cmpOpts(), "cmp"); draw(); };
+      var text = compact && short && short[k] ? short[k] : options[k];
+      var b = el("button", "", text); b.type = "button"; b.setAttribute("aria-pressed", String(state[key] === k));
+      if (text !== options[k]) { b.title = options[k]; b.setAttribute("aria-label", options[k]); }
+      b.onclick = function () { state[key] = k; if (key === "range" && !(D.ranges[k].series[state.cmp])) state.cmp = Object.keys(D.ranges[k].series)[0] || state.cmp; timebar(); draw(); };
       box.append(b);
     });
     box.hidden = Object.keys(options).length < 2;
   }
+  function timebar() { seg("ranges", rangeOpts(), "range", D.range_short_labels); seg("cmps", cmpOpts(), "cmp", D.comparison_short_labels); }
+  // Try the full labels; if a panel has to scroll to show them, use the short ones.
+  function fit() {
+    compact = false; timebar();
+    compact = ["ranges", "cmps"].some(function (id) { var b = $(id); return !b.hidden && b.scrollWidth > b.clientWidth + 1; });
+    if (compact) timebar();
+  }
+  window.addEventListener("resize", fit);   // also a phone turned sideways
   function rangeOpts() { var o = {}; (D.available_ranges || []).forEach(function (k) { o[k] = D.range_labels[k]; }); return o; }
   function cmpOpts() { var o = {}; Object.keys(D.ranges[state.range].series).forEach(function (k) { o[k] = D.comparison_labels[k]; }); return o; }
-  seg("ranges", rangeOpts(), "range"); seg("cmps", cmpOpts(), "cmp"); draw();
+  fit(); draw();
 })();
 </script>
 </body>

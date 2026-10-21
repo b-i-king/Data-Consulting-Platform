@@ -115,15 +115,17 @@ def test_build_your_own_package_adds_the_prices():
     res = client.post("/api/billing/price", json={"plan_ids": ["data_visualization", "data_exploration_analysis"],
                                                   "interval": "month"}).json()
     assert res["plan_ids"] == ["data_cleaning", "data_exploration_analysis", "data_visualization"]   # base added
-    assert res["total_usd"] == sum(l["amount_usd"] for l in res["lines"]) and not res["bundle_cheaper"]
+    assert res["total_usd"] == sum(l["amount_usd"] for l in res["lines"])
+    # $57 one by one — the Growth bundle covers all three for less, so it's suggested.
+    assert res["bundle_cheaper"] and res["cheaper_bundle"]["id"] == "growth"
     # Every tool picked separately costs more than the bundle.
     everything = [p.id for p in pricing.SUBSCRIPTIONS if p.kind == "tool"]
     assert client.post("/api/billing/price", json={"plan_ids": everything, "interval": "month"}).json()["bundle_cheaper"]
-    # AI needs Data Engineering, and is free until it launches.
+    # AI needs Data Engineering, and (launched) is charged at its own price.
     bad = client.post("/api/billing/price", json={"plan_ids": ["ai"], "interval": "month"})
     assert bad.status_code == 400 and "needs Data Engineering" in bad.json()["detail"]
     ok = client.post("/api/billing/price", json={"plan_ids": ["ai", "data_engineering"], "interval": "year"}).json()
-    assert next(l for l in ok["lines"] if l["id"] == "ai")["amount_usd"] == 0
+    assert next(l for l in ok["lines"] if l["id"] == "ai")["amount_usd"] == pricing.SUBSCRIPTIONS_BY_ID["ai"].annual_usd
     # The bundle replaces any other picks.
     assert client.post("/api/billing/price", json={"plan_ids": ["all_tools", "ai"]}).json()["plan_ids"] == ["all_tools"]
 
@@ -368,10 +370,10 @@ def test_checkout_sends_the_client_to_stripe(stripe_on, monkeypatch):
     assert res.json()["url"].startswith("https://checkout.stripe.com/")
     kind, kw = stripe_on.calls[-1]
     assert kind == "checkout" and kw["mode"] == "subscription" and kw["customer"] == "cus_123"
-    # One line per billable tool (AI is free until it launches, so it isn't charged).
+    # One line per billable tool (AI is launched, so it's charged like the others).
     assert kw["line_items"] == [{"price": f"price_dcp_{t}_year", "quantity": 1}
-                                for t in ("data_cleaning", "data_visualization", "data_engineering")]
-    assert kw["subscription_data"]["metadata"] == {"account_id": account_id, "free_plans": "ai"}   # AI: free, kept
+                                for t in ("data_cleaning", "data_visualization", "data_engineering", "ai")]
+    assert kw["subscription_data"]["metadata"] == {"account_id": account_id, "free_plans": ""}
     # Nothing is unlocked until Stripe's webhook says it's paid.
     assert client.get("/api/accounts/services", headers=_h(token)).json()["subscriptions"] == []
     assert client.post("/api/billing/portal", headers=_h(token)).json()["url"].startswith("https://billing.stripe.com/")
@@ -691,3 +693,23 @@ def test_the_cancellation_reason_from_stripes_portal_is_saved(stripe_on, monkeyp
     admin, _ = _signup("boss@example.com")
     summary = client.get("/api/admin/consultant-requests", headers=_h(admin)).json()["cancellations"]
     assert summary["by_reason"] == {"too_expensive": 1} and summary["comments"][0]["comment"].startswith("Great tools")
+
+
+def test_bundles_never_charge_twice_and_suggest_the_cheaper_one():
+    """Starter / Growth / Pro: tools a bundle covers are dropped, add-ons stay, one bundle at most."""
+    from api.services import pricing
+    n = pricing.normalize_selection
+    assert n(["starter", "data_cleaning", "data_visualization"]) == ["starter"]           # no double purchase
+    assert n(["starter", "data_science_ml"]) == ["starter", "data_science_ml"]           # add-on kept
+    assert n(["starter", "growth"]) == ["growth"] and n(["growth", "all_tools", "ai"]) == ["all_tools"]
+    assert n(["growth", "ai"]) == ["growth"]                                              # AI is in Growth
+    with pytest.raises(ValueError):
+        n(["starter", "ai"])                                                              # AI needs Data Engineering
+    price = pricing.selection_price(["data_cleaning", "data_visualization"], "month")
+    assert price["total_usd"] == 38 and price["cheaper_bundle"]["id"] == "starter"
+    catalog = {c["id"]: c for c in pricing.subscription_catalog()}
+    assert catalog["starter"]["monthly_usd"] == 19 and catalog["growth"]["monthly_usd"] == 49
+    assert catalog["all_tools"]["monthly_usd"] == 99
+    for b in ("starter", "growth", "all_tools"):                                          # always a real saving
+        one_by_one = sum(catalog[t]["monthly_usd"] for t in catalog[b]["covers"])
+        assert catalog[b]["bundle_savings_month_usd"] == one_by_one - catalog[b]["monthly_usd"] > 0

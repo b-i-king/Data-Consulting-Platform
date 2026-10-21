@@ -71,6 +71,7 @@ class LoadedDataset:
     file_type: str         # Human label, e.g. "CSV"
     df: pd.DataFrame       # The data itself
     size_bytes: int        # Size of the original upload
+    sha256: str = ""       # Fingerprint of the upload's bytes (set by pipeline.load_uploads; see xero_guard.py)
 
 
 # A reader takes (file name, raw bytes) and returns {table name: DataFrame}.

@@ -210,8 +210,9 @@ Stripe ──► webhook (cancel_at_period_end, then deleted) ──► plan off
 - A business's plan belongs to the **team owner**; only they (or their
   consultant, acting for them) can buy or cancel. Team members share it.
 - Every package includes Data Cleaning, so subscribers' cleaning downloads are free.
-- AI isn't charged until it launches (`billable` in `pricing.py`): it's left out
-  of the Stripe line items until then.
+- A tool whose service isn't launched (`available=False`, `billable` in
+  `pricing.py`) is left out of the Stripe line items until it launches. AI
+  launched in 10/2026 and is charged like the other tools.
 
 ## Fair use
 

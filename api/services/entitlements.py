@@ -207,6 +207,32 @@ async def interests(account: dict) -> list[str]:
     return [s.id for s in SERVICES if s.id in stored]
 
 
+async def has_paid_plan(account: dict) -> bool:
+    """
+    Tell whether the account may connect business tools (QuickBooks, Xero, Wave): any paid plan.
+
+    The tools' free API allowances are shared by every client of the platform
+    (Xero's free plan allows 5 connected businesses), so live connections come
+    with a paid plan; on the free plan, clients download an export from the
+    tool and upload it — the analysis is the same. Admins and testers count
+    as paid; a live subscription (active, trialing or past due) with any tool
+    counts.
+
+    Args:
+        account: dict, an accounts row (a team member or consultant uses the owner's plan).
+
+    Returns:
+        bool: True when connecting is allowed.
+
+    Example:
+        >>> await has_paid_plan(new_client), await has_paid_plan(subscriber)
+        (False, True)
+    """
+    if is_admin(account) or (await plan_holder(account)).get("is_tester"):
+        return True
+    return bool((await billing.live_plan_services(await plan_holder_id(account)))[1])
+
+
 async def downloads_included(account: dict) -> bool:
     """
     Tell whether downloads are free: an admin, a tester, or a live plan that includes Data Cleaning.

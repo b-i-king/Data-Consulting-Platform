@@ -61,6 +61,7 @@ export const SETTINGS_SLUGS = {
   integrations: "integrations", // IntegrationsPanel.tsx
   consultant: "consultant",     // SettingsPanel.tsx (consultants only)
   admin: "admin",               // AdminPanel.tsx (admins only)
+  help: "help",                 // components/FaqSection.tsx (Help & FAQ)
 } as const;
 export type SettingsSection = keyof typeof SETTINGS_SLUGS;
 

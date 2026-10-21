@@ -39,6 +39,7 @@ from api.services.categorizer import CategorizationResult, categorize, combine_g
 from api.services.cleaning import CleaningReport, MissingStrategy, clean_dataframe
 from api.services.file_reader import FileReadError, LoadedDataset, UnsupportedFileError, read_file
 from api.services.sample_size import sample_size_snapshot
+from api.services import xero_guard
 
 
 @dataclass
@@ -129,7 +130,11 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
                        "Book a consultation for larger datasets.",
             )
         try:
-            datasets.extend(read_file(upload.filename or "upload", raw))
+            tables = read_file(upload.filename or "upload", raw)
+            fp = xero_guard.fingerprint(raw)   # lets the AI / ML tools recognize data that came from Xero
+            for t in tables:
+                t.sha256 = fp
+            datasets.extend(tables)
         except (UnsupportedFileError, FileReadError) as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
         finally:

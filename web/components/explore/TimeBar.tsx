@@ -18,10 +18,17 @@
 // copy of the full-label panel is compared with the space available every
 // time the space changes (ResizeObserver). Screen readers always hear the full
 // label (aria-label), and hovering shows it too (title).
+//
+// On a short screen (a phone turned sideways, under 500px tall) the two panels
+// sit side by side in ONE slim row, so they cover less of the charts; then
+// "fits" means both panels' full labels together.
 
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+
+/** A phone turned sideways: the panels go side by side (matches the CSS below). */
+const SHORT_SCREEN = "(max-height: 500px)";
 
 function Panel(props: {
   label: string;
@@ -69,18 +76,29 @@ export default function TimeBar(props: {
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const measure = useRef<HTMLDivElement>(null);
+  const measureCmp = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
 
   useEffect(() => {
     const w = wrap.current;
     const m = measure.current;
-    if (!w || !m) return;
-    // Compact when the widest full-label panel is wider than the space we have.
-    const check = () => setCompact(m.scrollWidth > w.clientWidth);
+    const c = measureCmp.current;
+    if (!w || !m || !c) return;
+    const short = window.matchMedia(SHORT_SCREEN);
+    // Compact when the full labels need more than the space we have: the
+    // widest panel (stacked), or both panels together (one row, short screen).
+    const check = () => {
+      const need = short.matches ? m.scrollWidth + c.scrollWidth + 8 : Math.max(m.scrollWidth, c.scrollWidth);
+      setCompact(need > w.clientWidth);
+    };
     check();
     const ro = new ResizeObserver(check);
     ro.observe(w);
-    return () => ro.disconnect();
+    short.addEventListener("change", check);   // the phone was turned
+    return () => {
+      ro.disconnect();
+      short.removeEventListener("change", check);
+    };
   }, [props.ranges, props.comparisons]);
 
   const hasRanges = Object.keys(props.ranges).length > 0;
@@ -88,13 +106,23 @@ export default function TimeBar(props: {
   if (!hasRanges && !hasComparisons) return null;   // not enough data for any time view
 
   return (
-    <div ref={wrap} className="pointer-events-none sticky bottom-4 z-20 flex flex-col items-center gap-2">
+    <div ref={wrap}
+      className="pointer-events-none sticky bottom-4 z-20 flex flex-col items-center gap-2 [@media(max-height:500px)]:bottom-2 [@media(max-height:500px)]:flex-row [@media(max-height:500px)]:justify-center">
       {/* Invisible full-label copy, only used to measure the width needed. It sits
           in a zero-size box so it can never widen the page; scrollWidth still
           reports the width its content needs. */}
       <div ref={measure} aria-hidden className="invisible absolute left-0 top-0 h-0 w-0 overflow-hidden">
         <div className="flex w-max gap-1 whitespace-nowrap border p-1 pr-3">
           {Object.values(props.ranges).map((l) => (
+            <span key={l} className="rounded-full px-3 py-1 text-sm font-semibold">
+              {l}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div ref={measureCmp} aria-hidden className="invisible absolute left-0 top-0 h-0 w-0 overflow-hidden">
+        <div className="flex w-max gap-1 whitespace-nowrap border p-1 pr-3">
+          {Object.values(props.comparisons).map((l) => (
             <span key={l} className="rounded-full px-3 py-1 text-sm font-semibold">
               {l}
             </span>

@@ -70,7 +70,7 @@ python scripts/sync_dashboard_template.py  # copy the dashboard download templat
 
 ## Skills
 
-- 32 skills in `data_skills/` (project-written, Daniel Rosehill's plugin, and
+- 34 skills in `data_skills/` (project-written, Daniel Rosehill's plugin, and
   the Anthropic data plugin v1.1.0), each in exactly ONE of the seven service
   categories listed in `data_skills/catalog.json`. See
   `data_skills/README.md` for the categorized list and when to use each.

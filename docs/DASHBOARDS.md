@@ -108,6 +108,14 @@ things **above the fold**.
    Short labels come from `data_skills/_time.py` (`RANGE_SHORT`, `COMPARISON_SHORT`);
    screen readers and hover tooltips always give the full label.
 
+   **Phone turned sideways** (a screen under 500px tall): the two panels sit
+   side by side in one slim row at the bottom (then "fits" means both panels'
+   full labels together), and the site header scrolls away instead of staying
+   pinned, so the KPI cards and charts keep most of the screen. Portrait
+   phones get the stacked panels with short labels; KPI cards and charts go
+   to one column under 760px wide. The downloaded HTML file behaves the same
+   way (`templates/page.html`: the `max-height: 500px` rule and `fit()`).
+
 ## KPI card styles (one per dashboard)
 
 The whole KPI row uses ONE style, so it looks consistent (`layout.kpi_style`,
@@ -277,6 +285,29 @@ one — that period is marked **partial**. The last one is drawn faded with a
 hollow dot and labeled "(partial)" in the table, so a half-finished month
 isn't mistaken for a drop. For a fair comparison of the current month, use
 **Month to date**.
+
+## "How this was calculated" (the query behind a chart)
+
+Every line and bar chart (not the KPI cards) has a **`</>` Query** button —
+clicking the chart does the same. It opens a panel under the chart with:
+
+- **the equivalent SQL** for what's on screen: the metric's math, the date
+  range, the filters, and the grouping (by day / week / month for a line;
+  the top 8 categories for a bar) — with a **Copy SQL** button — and an
+  **SQL | pandas** switch: the pandas view is a simplified version of what the
+  dashboard really runs, for developers who check numbers in Python;
+- **the data source** (the files, stored table or connected-app records sent
+  with the request) and the table's rows after cleaning;
+- **the fields used**, and a note for industry KPIs naming the real columns
+  their parts add up.
+
+The dashboard is calculated with pandas, not a database, so the SQL is the
+equivalent query, for checking the numbers — not a log of what ran. The skill
+returns each metric's expression in `data.lineage`
+(`build-dashboard/skill.py` `_lineage`); `web/components/explore/QueryPanel.tsx`
+builds the query for the chart on screen. Hidden for view-only team members
+(`showQuery`). Next step (not built): clicking a bar to filter the whole
+dashboard, Tableau-style.
 
 ## Download
 

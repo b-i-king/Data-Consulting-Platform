@@ -10,9 +10,10 @@
 --         pays for, consultations, download billing, storage consent and the
 --         load log. Small tables that describe people and accounts.
 --   fact  CLIENT DATA: only for Data Engineering clients who said "yes, store
---         my data". One table, account_data, holds every client's data in
---         one shape (the unified data design), plus field_map, the shared
---         lookup that lines up field names across sources.
+--         my data". fact.records holds every client's data in one shape (the
+--         unified data design: one row per record line), fact.fields describes
+--         each field once, and field_map is the shared lookup that lines up
+--         field names across sources.
 --   (Supabase keeps its own sign-in tables in its built-in `auth` schema.
 --    Passwords live there, never here.)
 --
@@ -20,13 +21,14 @@
 --        │      ──< dim.consultations         free first call, then paid sessions
 --        │      ──< dim.usage_events          one row per download (billing)
 --        │      ──< dim.storage_consents      "yes, store my data"
---        │      ──< dim.load_runs             one row per load into fact.account_data
+--        │      ──< dim.load_runs             one row per load into fact.records
 --        │      ──< dim.data_connections      integrations: QuickBooks (schedule), a client's own
 --        │                                    Supabase/PostgreSQL database (read-only, encrypted login)
 --        │      ──< dim.dashboard_tabs        the client's own dashboard tabs (saved questions)
 --        │      ──< dim.question_log          questions asked of the data (to suggest dashboard tabs)
 --        │      ──< dim.ai_usage              AI questions per day (the monthly allowance)
---        │      ──< fact.account_data         the stored data (one row per metric)
+--        │      ──< fact.records              the stored data (one row per record line; its numbers in `metrics`)
+--        │      ──< fact.fields               each stored field described once (fact.account_data = a view of both)
 --        │      ──< fact.entities             each customer / vendor / item / location, ONCE
 --        │                                    ──< fact.entity_sources  how each source refers to it
 --        ├─ team_id ──> dim.teams             businesses: owner + colleagues
@@ -35,7 +37,7 @@
 --
 -- WHAT IS *NOT* STORED
 --   Uploaded files. They are cleaned in memory and discarded — except the
---   cleaned rows a consenting Data Engineering client loads into fact.account_data.
+--   cleaned rows a consenting Data Engineering client loads into fact.records.
 --   Passwords: Supabase Auth keeps them; local mode keeps only a one-way hash.
 --
 -- Full design and ER diagram: docs/DATABASE.md (dim) and docs/DATA_MODEL.md (fact).
@@ -364,6 +366,39 @@ CREATE INDEX IF NOT EXISTS idx_consultant_applications_account
 CREATE INDEX IF NOT EXISTS idx_consultant_applications_pending
     ON dim.consultant_applications (submitted_at) WHERE status = 'pending';
 
+-- ── dim.partners: businesses shown in the home page's "Partners" carousel ──
+-- One row per partner (api/services/partners.py): a business account that
+-- applied (source 'platform', account_id set), or a company an ADMIN added
+-- by hand: a client they work with and invoice directly, with no account
+-- (source 'admin', account_id NULL). The
+-- logo is NOT client data: it's marketing material the business chose to
+-- publish, stored small (WebP, at most 320 x 160 px, usually 5-20 KB) so the
+-- page loads fast (docs/ARCHITECTURE.md, "Partner logos").
+-- status: pending (waiting for an admin) | approved | rejected | withdrawn.
+-- An approved 'platform' partner is SHOWN only while its plan is paid (checked
+-- when the carousel is built), so a canceled plan or a deleted account drops
+-- off by itself; an 'admin' partner stays until an admin removes it. checks = the automatic checks at submission (website reachable,
+-- not a free email domain, email matches the website, ...), for the admin.
+CREATE TABLE IF NOT EXISTS dim.partners (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id     UUID UNIQUE REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- the plan holder; NULL = added by an admin
+    source         TEXT NOT NULL DEFAULT 'platform' CHECK (source IN ('platform', 'admin')),
+    business_name  TEXT NOT NULL,
+    website_url    TEXT NOT NULL,                     -- https://... (where a click on the logo goes)
+    linkedin_url   TEXT,                              -- optional: https://www.linkedin.com/company/...
+    logo_webp      BYTEA NOT NULL,                    -- the resized logo (WebP)
+    logo_width     INT NOT NULL,
+    logo_height    INT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'approved', 'rejected', 'withdrawn')),
+    checks         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason         TEXT,                              -- why it was turned down (shown to the business)
+    submitted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at     TIMESTAMPTZ,
+    decided_by     UUID REFERENCES dim.accounts (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS partners_status_idx ON dim.partners (status);
+
 -- ── dim.consulting_prices: what a consultant's help costs (ONE row) ─────────
 -- Admin -> Prices -> "Consultant help" (api/services/price_store.py). Read at
 -- startup into pricing.CONSULTING; each checkout sends Stripe the price it
@@ -520,6 +555,8 @@ CREATE TABLE IF NOT EXISTS dim.plan_prices (
 -- checks they match). ON CONFLICT DO NOTHING: re-running this file never
 -- overwrites a price you changed.
 INSERT INTO dim.plan_prices (plan_id, monthly_usd, annual_usd) VALUES
+    ('starter', 19.00, 190.00),
+    ('growth', 49.00, 490.00),
     ('all_tools', 99.00, 990.00),
     ('data_cleaning', 19.00, 190.00),
     ('data_exploration_analysis', 19.00, 190.00),
@@ -670,7 +707,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_account     ON dim.usage_events (acc
 CREATE INDEX IF NOT EXISTS idx_usage_events_fingerprint ON dim.usage_events (account_id, data_fingerprint);
 
 -- ── dim.storage_consents: "yes, store my data" (Data Engineering) ───────────
--- Loading into fact.account_data is refused without an active (not withdrawn)
+-- Loading into fact.records is refused without an active (not withdrawn)
 -- row here. See docs/ARCHITECTURE.md -> "Managed storage (opt-in exception)".
 CREATE TABLE IF NOT EXISTS dim.storage_consents (
     id            BIGSERIAL PRIMARY KEY,
@@ -682,7 +719,7 @@ CREATE TABLE IF NOT EXISTS dim.storage_consents (
 );
 CREATE INDEX IF NOT EXISTS idx_storage_consents_account ON dim.storage_consents (account_id);
 
--- ── dim.load_runs: one row per load into fact.account_data ──────────────────
+-- ── dim.load_runs: one row per load into fact.records ───────────────────────
 -- What was loaded, how many rows, and whether it worked — the audit trail.
 -- column_plan remembers how the file's columns were stored (roles, unified
 -- names, metric descriptions), so "Use my stored data" can rebuild the
@@ -709,7 +746,7 @@ CREATE INDEX IF NOT EXISTS idx_load_runs_account ON dim.load_runs (account_id, s
 
 -- ── dim.data_connections: connectors such as QuickBooks ─────────────────────
 -- One row per connector a client has set up (Data Engineering): the SCHEDULE
--- and status only. The pulled data goes to fact.account_data.
+-- and status only. The pulled data goes to fact.records.
 -- refresh_frequency ids and prices: api/services/pricing.py REFRESH_OPTIONS.
 CREATE TABLE IF NOT EXISTS dim.data_connections (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -993,65 +1030,113 @@ ON CONFLICT (system, source_field) DO UPDATE
         metric_type = EXCLUDED.metric_type,       metric_subtype = EXCLUDED.metric_subtype,
         metric_unit = EXCLUDED.metric_unit,       notes = EXCLUDED.notes;
 
--- ── fact.account_data: every client's stored data, one row per METRIC ──────
--- The unified data design (docs/DATA_MODEL.md). IDs, dates and categories
--- stay as they are (in `attributes`, on every row of the record line); each
--- number that is measured becomes its own row, described the same way for
--- every client: metric_type / metric_subtype / metric_unit / metric_value.
+-- ── Stored client data: fact.records + fact.fields (+ the fact.account_data view) ──
+-- The unified data design (docs/DATA_MODEL.md), stored WITHOUT repetition:
 --
---   file:  order_id | order_date | store   | quantity | unit_price | amount
---          50001    | 2024-10-11 | Midtown | 3        | 7.00       | 21.00
---   here:  field_name  | metric_type | metric_subtype | metric_unit | metric_value | attributes
---          quantity    | quantity    |                | count       | 3            | {"reference_number": 50001, "transaction_date": "2024-10-11", "location_name": "Midtown"}
---          unit_price  | price       | unit           | usd         | 7.00         | (same)
---          line_amount | amount      | line           | usd         | 21.00        | (same)
+--   fact.records  ONE row per record line (an order line, an invoice line, a
+--                 file row). Its IDs, dates and categories are stored ONCE in
+--                 `attributes`; its numbers are stored together in `metrics`,
+--                 keyed by their unified field name.
+--   fact.fields   each field of each source described ONCE: its unified name,
+--                 the client's own column, and what it measures
+--                 (metric_type / metric_subtype / metric_unit).
+--   fact.account_data  a VIEW in the one-row-per-number shape (records x their
+--                 metrics + the field descriptions), so queries can still say
+--                 "every amount in usd" for any source.
 --
--- A new kind of number from a new source is a new metric_type VALUE, never a
--- new column or table. Reshape code: api/services/unified.py; the load:
--- api/services/warehouse_store.py.
+--   file:     order_id | order_date | store   | quantity | unit_price | amount
+--             50001    | 2024-10-11 | Midtown | 3        | 7.00       | 21.00
+--   records:  record_id | event_date | attributes                                         | metrics
+--             50001     | 2024-10-11 | {"reference_number": 50001, "location_name": ...}  | {"quantity": 3, "unit_price": 7.00, "line_amount": 21.00}
+--   fields:   field_name  | source_field | metric_type | metric_subtype | metric_unit
+--             quantity    | quantity     | quantity    |                | count
+--             unit_price  | unit_price   | price       | unit           | usd
+--             line_amount | amount       | amount      | line           | usd
 --
--- No duplicate data, three ways:
---   1. UNIQUE (account_id, source_system, source_name, record_id, line_number,
---      field_name): one metric of one record line can only exist once.
---   2. record_id is the source's own ID ("Invoice:130", an order number) or,
---      for files with no ID column, a fingerprint of the row's content — the
---      same row uploaded twice gets the same record_id, so rule 1 catches it.
---   3. row_hash: a reload with the same content matches the stored hash and
---      the load skips the row — nothing is rewritten, modified_at stays.
-CREATE TABLE IF NOT EXISTS fact.account_data (
-    row_id              BIGSERIAL PRIMARY KEY,     -- ID of this one row (one metric of one record line)
-    account_id          UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,       -- whose data (the plan holder); Row Level Security filters on it
-    consultant_id       UUID REFERENCES dim.consultants (id) ON DELETE SET NULL,            -- the consultant who loaded it, if any
-    source_system       TEXT NOT NULL DEFAULT 'file_upload',  -- where it came from: 'file_upload', 'quickbooks', ...
+-- Rows grow with RECORDS, never records x numbers (the sample bakery file:
+-- 18,210 rows and ~11 MB, instead of 54,630 rows and ~40 MB one-row-per-number).
+-- A new source with new columns needs NO table change: new keys in `metrics`,
+-- new rows in fact.fields. Code: api/services/warehouse_store.py (the load and
+-- the read), api/services/unified.py (the reshape).
+--
+-- No duplicate data, and protection from user errors:
+--   1. UNIQUE (account_id, source_system, source_name, record_id, line_number):
+--      one record line exists once per source.
+--   2. record_id is the source's own ID ("Invoice:130", an order number) or, for
+--      files with no ID column, a fingerprint of the row's content — the same
+--      row uploaded twice gets the same record_id, so rule 1 catches it.
+--   3. row_hash: a reload with the same content is skipped (nothing rewritten,
+--      modified_at stays); changed content updates the row in place.
+--   4. The same records under ANOTHER file name: the load preview finds them
+--      (api/services/dedupe.py) and offers "load only the new records".
+
+-- The first design stored one row per NUMBER in a TABLE called fact.account_data.
+-- That name is now the view below, so an old, EMPTY table is removed; an old
+-- table that still holds data stops this script instead (move it first).
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'fact' AND c.relname = 'account_data' AND c.relkind = 'r') THEN
+        IF EXISTS (SELECT 1 FROM fact.account_data LIMIT 1) THEN
+            RAISE EXCEPTION 'fact.account_data (the old one-row-per-number table) still has data. '
+                            'Export or delete it before re-running db/schema.sql.';
+        END IF;
+        DROP TABLE fact.account_data;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS fact.records (
+    row_id              BIGSERIAL PRIMARY KEY,     -- ID of this record line
+    account_id          UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,   -- whose data (the plan holder); Row Level Security filters on it
+    consultant_id       UUID REFERENCES dim.consultants (id) ON DELETE SET NULL,        -- the consultant who loaded it, if any
+    source_system       TEXT NOT NULL DEFAULT 'file_upload',  -- 'file_upload', 'quickbooks', 'xero', 'wave'
     source_name         TEXT NOT NULL,             -- which file / connection: 'sales.csv', 'QuickBooks Online'
-    record_id           TEXT NOT NULL,             -- the record's ID in the source, e.g. '50001', 'Invoice:130', or 'sha256:...'
-    line_number         INTEGER NOT NULL DEFAULT 0, -- 0 = one row per record (or a QuickBooks header); 1, 2, ... = lines of an order / invoice
+    record_id           TEXT NOT NULL,             -- the record's ID in the source, or 'sha256:...' (a content fingerprint)
+    line_number         INTEGER NOT NULL DEFAULT 0, -- 0 = one row per record (or a header); 1, 2, ... = lines of an order / invoice
     event_type          TEXT NOT NULL,             -- WHAT the rows are, e.g. 'transaction' (api/services/warehouse_loader.py EVENT_TYPES)
     event_subtype       TEXT NOT NULL,             -- e.g. 'income'
-    event_date          DATE,                      -- the record's date (also kept in attributes); same on every row of a record
-    field_name          TEXT NOT NULL,             -- the metric's unified name, e.g. 'line_amount'; '_no_metric' = a line with no numbers, kept for its attributes
-    source_field        TEXT NOT NULL,             -- the client's own column / path, e.g. 'amount' or 'Line.Amount' — traces every value back
-    metric_type         TEXT,                      -- what is measured: 'amount', 'price', 'cost', 'quantity', 'score', ...
-    metric_subtype      TEXT,                      -- which one (optional): 'line', 'total', 'unit', 'shipping', 'csat', ...
-    metric_unit         TEXT,                      -- what the number is in: 'usd', 'count', 'percent', 'hours', ... (never sum across units)
-    metric_value        NUMERIC,                   -- the number (exact; no rounding)
-    attributes          JSONB NOT NULL DEFAULT '{}', -- the line's IDs, dates and categories, by unified name: {"customer_name": "Blue Door Cafe", ...}
-    row_hash            TEXT NOT NULL,             -- fingerprint of metric + value + date + attributes (skips unchanged reloads)
-    mapped              BOOLEAN NOT NULL DEFAULT true, -- false = named/described by a guess (not in field_map yet): worth a review
-    added_at            TIMESTAMPTZ NOT NULL DEFAULT now(), -- first stored
-    modified_at         TIMESTAMPTZ NOT NULL DEFAULT now(), -- content last changed (unchanged reloads leave it alone)
+    event_date          DATE,                      -- the record's date
+    metrics             JSONB NOT NULL DEFAULT '{}', -- the line's numbers by unified name: {"line_amount": 21.0, "quantity": 3}; {} = a line with no numbers
+    attributes          JSONB NOT NULL DEFAULT '{}', -- the line's IDs, dates and categories, ONCE: {"customer_link": 12, "location_name": "Midtown"}
+    row_hash            TEXT NOT NULL,             -- fingerprint of the whole line (skips unchanged reloads)
+    added_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at         TIMESTAMPTZ NOT NULL DEFAULT now(),   -- content last changed (unchanged reloads leave it alone)
     source_modified_at  TIMESTAMPTZ,               -- when the source last changed the record (QuickBooks MetaData.LastUpdatedTime)
-    -- A metric row has its type, unit and value; a line's one '_no_metric' row has none.
-    CHECK (CASE WHEN field_name = '_no_metric'
-                THEN metric_type IS NULL AND metric_unit IS NULL AND metric_value IS NULL
-                ELSE metric_type IS NOT NULL AND metric_unit IS NOT NULL AND metric_value IS NOT NULL END),
-    UNIQUE (account_id, source_system, source_name, record_id, line_number, field_name)   -- no duplicate data
+    UNIQUE (account_id, source_system, source_name, record_id, line_number)   -- no duplicate data
 );
-CREATE INDEX IF NOT EXISTS idx_account_data_date       ON fact.account_data (account_id, event_date);
-CREATE INDEX IF NOT EXISTS idx_account_data_metric     ON fact.account_data (account_id, metric_type, metric_subtype);
-CREATE INDEX IF NOT EXISTS idx_account_data_source     ON fact.account_data (account_id, source_system, source_name);
+CREATE INDEX IF NOT EXISTS idx_records_date   ON fact.records (account_id, event_date);
+CREATE INDEX IF NOT EXISTS idx_records_source ON fact.records (account_id, source_system, source_name);
 -- Fast filters on categories: WHERE attributes @> '{"location_name": "Midtown"}'
-CREATE INDEX IF NOT EXISTS idx_account_data_attributes ON fact.account_data USING gin (attributes jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_records_attributes ON fact.records USING gin (attributes jsonb_path_ops);
+
+CREATE TABLE IF NOT EXISTS fact.fields (
+    field_id        BIGSERIAL PRIMARY KEY,
+    account_id      UUID NOT NULL REFERENCES dim.accounts (id) ON DELETE CASCADE,
+    source_system   TEXT NOT NULL,
+    source_name     TEXT NOT NULL,
+    field_name      TEXT NOT NULL,             -- the unified name: the key in fact.records.metrics
+    source_field    TEXT NOT NULL,             -- the client's own column / path: 'amount', 'Line.Amount'
+    metric_type     TEXT NOT NULL,             -- what is measured: 'amount', 'price', 'quantity', ...
+    metric_subtype  TEXT,                      -- which one: 'line', 'total', 'unit', ...
+    metric_unit     TEXT NOT NULL,             -- 'usd', 'count', 'percent', ... (never sum across units)
+    mapped          BOOLEAN NOT NULL DEFAULT true,   -- false = described by a guess (not in field_map yet): worth a review
+    UNIQUE (account_id, source_system, source_name, field_name)
+);
+
+-- The one-row-per-number shape, for queries ("every amount in usd, any source").
+-- security_invoker: it runs with the reader's rights, so the records' Row Level
+-- Security applies through it too.
+CREATE OR REPLACE VIEW fact.account_data WITH (security_invoker = true) AS
+SELECT r.row_id, r.account_id, r.consultant_id, r.source_system, r.source_name, r.record_id, r.line_number,
+       r.event_type, r.event_subtype, r.event_date,
+       m.key AS field_name, f.source_field, f.metric_type, f.metric_subtype, f.metric_unit,
+       (m.value #>> '{}')::numeric AS metric_value, r.attributes, f.mapped,
+       r.added_at, r.modified_at, r.source_modified_at
+FROM fact.records r
+CROSS JOIN LATERAL jsonb_each(r.metrics) AS m(key, value)
+LEFT JOIN fact.fields f
+       ON f.account_id = r.account_id AND f.source_system = r.source_system
+      AND f.source_name = r.source_name AND f.field_name = m.key;
 
 -- ── fact.entities: each customer, vendor, product, payee, location — ONCE ──
 -- Before this, a customer's name, email and address were copied onto every
@@ -1111,14 +1196,14 @@ BEGIN
                              'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
                              'api_usage', 'ai_usage', 'plan_prices', 'account_deletions', 'seasonal_sales',
                              'sessions', 'audit_log', 'consultant_invites', 'consultant_applications',
-                             'consultant_engagements', 'consulting_prices']
+                             'consultant_engagements', 'consulting_prices', 'partners']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;
 END $$;
 ALTER TABLE fact.field_map ENABLE ROW LEVEL SECURITY;
 
--- fact.account_data: each query sees ONE account's rows. The API runs
+-- fact.records / fact.fields (client data) and the entity tables: each query sees ONE account's rows. The API runs
 -- set_config('app.account_id', '<uuid>', true) inside the transaction before
 -- touching it, and also filters by account_id itself (belt and braces: the
 -- login in DATABASE_URL — Supabase's `postgres` — may bypass RLS, and must,
@@ -1126,21 +1211,12 @@ ALTER TABLE fact.field_map ENABLE ROW LEVEL SECURITY;
 -- one account only). FORCE applies the rule to the table's owner too, so any
 -- other login that does NOT bypass RLS (a read-only reporting user, say)
 -- sees only the account named in app.account_id, and nothing without it.
-ALTER TABLE fact.account_data ENABLE ROW LEVEL SECURITY;
-ALTER TABLE fact.account_data FORCE ROW LEVEL SECURITY;
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'fact' AND tablename = 'account_data'
-                   AND policyname = 'one_account') THEN
-        CREATE POLICY one_account ON fact.account_data
-            USING (account_id = NULLIF(current_setting('app.account_id', true), '')::uuid);
-    END IF;
-END $$;
--- The same rule for the entity tables (they hold client data too).
+-- (fact.account_data is a view over fact.records with security_invoker, so
+-- this same rule applies when it is read.)
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['entities', 'entity_sources']
+    FOREACH t IN ARRAY ARRAY['records', 'fields', 'entities', 'entity_sources']
     LOOP
         EXECUTE format('ALTER TABLE fact.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('ALTER TABLE fact.%I FORCE ROW LEVEL SECURITY', t);
@@ -1180,7 +1256,8 @@ BEGIN
 END $$;
 GRANT USAGE ON SCHEMA dim, fact TO dcp_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dim TO dcp_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON fact.account_data, fact.entities, fact.entity_sources TO dcp_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON fact.records, fact.fields, fact.entities, fact.entity_sources TO dcp_app;
+GRANT SELECT ON fact.account_data TO dcp_app;   -- the view (read-only)
 GRANT SELECT ON fact.field_map TO dcp_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dim, fact TO dcp_app;
 DO $$

@@ -122,6 +122,7 @@ import SkillsPanel from "@/components/explore/SkillsPanel";
 import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components/wizard/DownloadConfirm";
 import { GroupDetails } from "@/components/wizard/StepResults";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import FaqSection from "@/components/FaqSection";
 
 // The first-visit guide for the workspace (components/ui/Tour.tsx).
 const WORKSPACE_TOUR: TourStep[] = [
@@ -139,6 +140,7 @@ const DASHBOARD = "data_visualization";
 const CLEANING = "data_cleaning";
 const ENGINEERING = "data_engineering";
 const AI = "ai";
+const SCIENCE_ML = "data_science_ml";
 // The hierarchy, top to bottom (Dashboard and Data Cleaning swap when there's no data yet).
 const ORDER = [DASHBOARD, CLEANING, ENGINEERING, "data_strategy_discovery", "data_exploration_analysis", "data_science_ml", AI];
 // Data Engineering's tabs: diagram and dictionary first, the load last.
@@ -155,16 +157,34 @@ const VIEW_SKILL: Record<string, { skill: string; label: string }> = {
 /** A service as the plan sends it: the catalog entry plus whether it's on the plan. */
 type PlanService = MyServices["services"][number];
 /** The account area's sections (Settings, bottom left). */
-type AccountTab = SettingsSection; // "account" | "billing" | "integrations" | "consultant" | "admin"
+type AccountTab = SettingsSection; // "account" | "billing" | "integrations" | "consultant" | "admin" | "help"
 /** The browser tab's title for each Settings section. */
 const SETTINGS_TITLES: Record<AccountTab, string> = {
   account: "Account", billing: "Plan & billing", integrations: "Integrations", consultant: "Consultant", admin: "Administration",
+  help: "Help & FAQ",
 };
 /** Where the open data came from: picked files, managed storage, or the client's own cloud database. */
 type Origin = "file" | "stored" | "cloud";
 
 /** The name shown in the left pane: the visualization service IS the dashboard. */
 const navName = (s: Service) => (s.id === DASHBOARD ? "Dashboard" : s.name);
+
+/**
+ * Shown instead of the AI and Data Science & ML tools when the open data came
+ * from Xero: Xero's developer terms rule out AI and machine learning on data
+ * from its API (the server refuses too: api/services/xero_guard.py).
+ */
+function XeroOffNote() {
+  return (
+    <Card>
+      <p className="text-sm">
+        <strong>AI and machine learning are off for Xero data.</strong> Xero&apos;s developer terms don&apos;t allow
+        data from its API to be used with AI or machine-learning models, so for Xero data we keep to cleaning,
+        exploring and dashboards. Your other data works with every tool.
+      </p>
+    </Card>
+  );
+}
 
 /** Plain-English "how do I get this?" for a locked service. */
 function howToGet(s: Service): string {
@@ -224,6 +244,11 @@ export default function Workspace() {
   const [busy, setBusy] = useState(false);
   // What this client has in managed storage, and their cloud tables (if connected).
   const [stored, setStored] = useState<WarehouseCounts | null>(null);
+  // The stored data just opened includes records synced from Xero (see xeroData below).
+  const [storedXero, setStoredXero] = useState(false);
+  // Data from Xero is open (live records are named "xero.<type>.csv"; stored data
+  // that includes Xero records): AI and Data Science & ML are off for it.
+  const xeroData = files.some((f) => f.name.toLowerCase().startsWith("xero.")) || (origin === "stored" && storedXero);
   const [cloudTables, setCloudTables] = useState<CloudTable[] | null>(null); // only tables with rows
   const [cloudNote, setCloudNote] = useState<string | null>(null); // "the first 100,000 rows" when cut short
   // Get Started's cloud path ends with "Open your workspace" on the table it previewed (?open_table=).
@@ -431,6 +456,7 @@ export default function Workspace() {
     setBusy(true);
     setError(null);
     try {
+      setStoredXero(!!stored?.sources.some((s) => s.source_system === "xero" && (!source || s.source_name === source)));
       await clean([await getStoredDataFile(session.token, source)], "stored");
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't open the stored data.");
@@ -680,6 +706,7 @@ export default function Workspace() {
     { id: "integrations", emoji: "🔌", label: "Integrations" },
     ...(isConsultant ? [{ id: "consultant" as const, emoji: "🤝", label: "Consultant" }] : []),
     ...(session.account.is_admin ? [{ id: "admin" as const, emoji: "🛡️", label: "Administration" }] : []),
+    { id: "help", emoji: "❓", label: "Help & FAQ" },
   ];
   const accountTitle = ACCOUNT_TABS.find((t) => t.id === accountTab);
 
@@ -893,7 +920,7 @@ export default function Workspace() {
         {isConsultant && plan?.acting && !addingClient && !accountTab && (
           <ConsultationPanel token={session.token} summary={plan.consulting} freeMinutes={plan.consulting.free_minutes} onChanged={reloadPlan} />
         )}
-        {isConsultant && current === AI && currentService && !currentService.available && (
+        {isConsultant && current === AI && (
           <p className="rounded-2xl border border-consultant/40 bg-consultant-soft px-4 py-3 text-sm">
             <strong>Beacon uses {plan?.account.company_name ?? "this client"}&apos;s allowance.</strong> Every client has
             a free monthly allowance (premium with the AI package); your questions count toward theirs. Answers come
@@ -1015,6 +1042,7 @@ export default function Workspace() {
         )}
         {accountTab === "consultant" && isConsultant && <ConsultantSetup token={session.token} onSetupNeeded={setSetupNeeded} />}
         {accountTab === "admin" && session.account.is_admin && <AdminPanel token={session.token} />}
+        {accountTab === "help" && <FaqSection title="Help & FAQ" />}
 
         {/* ── The workspace ── */}
         {!accountTab && plan && plan.active.includes(ENGINEERING) && !cloud && stored?.set_up && stored.rows === 0 &&
@@ -1067,6 +1095,8 @@ export default function Workspace() {
               )}
             </Card>
           )
+        ) : current === AI && analysis && group && plan && xeroData ? (
+          <XeroOffNote />
         ) : current === AI && analysis && group && plan ? (
           // The AI page: Beacon, with this month's allowance (free / premium / unlimited).
           <AssistantPanel
@@ -1120,15 +1150,17 @@ export default function Workspace() {
               </Card>
             )}
 
-            {/* The service's skills, as tabs. */}
+            {/* The service's skills, as tabs. On a phone they stay on one line and
+                scroll sideways (swipe); from tablet width up they wrap. */}
             {(current === CLEANING || group.report.analysis_ready) && menu.length > 1 && (
-              <div role="tablist" aria-label={`${navName(currentService)} tabs`} className="flex flex-wrap gap-1 border-b border-line">
+              <div role="tablist" aria-label={`${navName(currentService)} tabs`}
+                className="flex gap-1 overflow-x-auto border-b border-line sm:flex-wrap sm:overflow-visible">
                 {menu.map((m) => {
                   const off = cloud && current === ENGINEERING && m.value === VIEW;
                   return (
                     <button key={m.value} role="tab" aria-selected={choice === m.value}
                       onClick={() => current && setPicked((p) => ({ ...p, [current]: m.value }))}
-                      className={`-mb-px rounded-t-xl border-b-2 px-4 py-2 text-sm ${
+                      className={`-mb-px shrink-0 whitespace-nowrap rounded-t-xl border-b-2 px-4 py-2 text-sm ${
                         choice === m.value ? "border-brand font-semibold text-ink" : "border-transparent text-ink-muted hover:text-ink"
                       } ${off ? "opacity-50" : ""}`}>
                       {m.label}
@@ -1178,6 +1210,8 @@ export default function Workspace() {
               <DashboardTabs
                 key={`dash-${group.group_id}-${planAccountId}`}
                 token={session.token}
+                // The query panel is for people who check or build: not view-only team members.
+                showQuery={plan?.acting || session.account.team_role !== "member"}
                 input={input}
                 groupId={group.group_id}
                 columns={group.report.column_reports
@@ -1223,7 +1257,8 @@ export default function Workspace() {
                 />
               ))}
 
-            {choice !== VIEW && plan && (current === CLEANING || group.report.analysis_ready) && (
+            {current === SCIENCE_ML && xeroData && <XeroOffNote />}
+            {choice !== VIEW && plan && (current === CLEANING || group.report.analysis_ready) && !(current === SCIENCE_ML && xeroData) && (
               <SkillsPanel
                 key={`${choice}-${group.group_id}`}
                 input={input}

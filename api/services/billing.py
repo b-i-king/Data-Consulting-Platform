@@ -283,7 +283,7 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
     picked = _selection(plan_ids, interval)
     if "ai" in picked and not await ai_ready(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=AI_NEEDS_DATA)
-    billable = [p for p in picked if pricing.billable(p)]   # AI is free until it launches
+    billable = [p for p in picked if pricing.billable(p)]   # a tool whose service is not launched yet is free
     live = await account_store.list_subscriptions(str(account["id"]))
     current = live[0] if live else None
     if current and sorted(i["plan_id"] for i in current["items"]) == sorted(picked) \

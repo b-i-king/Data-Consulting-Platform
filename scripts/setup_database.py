@@ -7,7 +7,7 @@ WHAT THIS SCRIPT DOES
    which may create tables — or, if that's empty, DATABASE_URL.
 2. Runs db/schema.sql, which creates the two schemas:
      dim   the platform: accounts, consultants, teams, subscriptions, ...
-     fact  client data: account_data (stored data) and field_map (shared names)
+     fact  client data: records + fields (stored data; account_data is a view of them) and field_map (shared names)
 3. Prints every expected table with its row count, so you can see at a
    glance that the database is set up and what's in it, and lists the
    consultants (created by the app when a consultant first signs in).
@@ -50,8 +50,10 @@ TABLES = {
     "dim": ["accounts", "consultants", "teams", "subscriptions", "consultations", "usage_events",
             "storage_consents", "load_runs", "data_connections",
             "dashboard_tabs", "question_log", "api_usage", "ai_usage", "plan_prices", "account_deletions",
-            "seasonal_sales", "sessions", "audit_log"],
-    "fact": ["account_data", "field_map", "entities", "entity_sources"],
+            "seasonal_sales", "sessions", "audit_log", "consultant_invites", "consultant_applications",
+            "consultant_engagements", "consulting_prices", "partners"],
+    # account_data is a VIEW over records + fields (it still answers SELECT count(*)).
+    "fact": ["records", "fields", "account_data", "field_map", "entities", "entity_sources"],
 }
 
 

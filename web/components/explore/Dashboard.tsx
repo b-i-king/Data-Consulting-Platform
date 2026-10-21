@@ -32,6 +32,7 @@ import type { CleaningInput, DashboardData, DashboardVisual, PeriodRow, SkillRes
 import HBarChart from "@/components/charts/HBarChart";
 import LineChart, { usDate } from "@/components/charts/LineChart";
 import KpiCard, { ChangePill } from "./KpiCard";
+import QueryPanel from "./QueryPanel";
 import SkillPreview from "./SkillPreview";
 import TimeBar from "./TimeBar";
 import { Button, ErrorBox } from "@/components/wizard/ui";
@@ -129,6 +130,8 @@ export default function Dashboard(props: {
   tabName?: string;
   /** Which data this is, so each data set keeps its own heading (e.g. "Sales"). */
   dataName?: string | null;
+  /** Show "How this was calculated" on charts (false for view-only team members). Default true. */
+  showQuery?: boolean;
 }) {
   const { input, groupId, industry, businessName, viewerName } = props;
   const tabName = props.tabName ?? "Overview";
@@ -156,6 +159,9 @@ export default function Dashboard(props: {
     }
   }
   const [data, setData] = useState<DashboardData | null>(null);
+  // The chart whose "How this was calculated" panel is open (its key), if any.
+  const [queryFor, setQueryFor] = useState<string | null>(null);
+  const showQuery = props.showQuery ?? true;
   // Without Data Visualization in the package the server sends a PREVIEW (headline KPIs only).
   const [preview, setPreview] = useState<SkillResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -273,9 +279,24 @@ export default function Dashboard(props: {
   // One container (a plain function, not a component, so nothing is re-created on each render).
   function container(v: DashboardVisual, span: number) {
     const rows: PeriodRow[] = R.series[activeCmp]?.[v.metric] ?? [];
+    const key = `${v.kind}-${v.metric}-${v.dimension ?? ""}`;
+    const canQuery = showQuery && !!data!.lineage?.metrics[v.metric];
+    const open = queryFor === key;
     return (
-      <section key={`${v.kind}-${v.metric}-${v.dimension ?? ""}`} className={`col-span-full min-w-0 rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] ${SPAN[span] ?? ""}`}>
-        <h3 className="mb-2 font-mono text-sm font-semibold">{v.title}</h3>
+      <section key={key} className={`col-span-full min-w-0 rounded-3xl border border-line bg-surface p-4 shadow-[var(--shadow-card)] ${SPAN[span] ?? ""}`}>
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <h3 className="font-mono text-sm font-semibold">{v.title}</h3>
+          {canQuery && (
+            <button type="button" onClick={() => setQueryFor(open ? null : key)} aria-expanded={open}
+              title="How this was calculated: the query, data source and fields"
+              className="shrink-0 rounded-full border border-line px-2 py-0.5 font-mono text-[11px] text-ink-muted hover:border-brand hover:text-brand-ink">
+              {"</>"} Query
+            </button>
+          )}
+        </div>
+        {/* Clicking the chart itself opens the same panel (the button above is the keyboard way). */}
+        <div role="presentation" onClick={canQuery ? () => setQueryFor(key) : undefined}
+          className={canQuery ? "cursor-pointer" : undefined}>
         {v.kind === "line" ? (
           hasCharts ? (
             <>
@@ -296,6 +317,13 @@ export default function Dashboard(props: {
               category: b.category, value: b.current, pill: <ChangePill pct={b.pct_change} direction={dir(v.metric)} />,
             }))}
           />
+        )}
+        </div>
+        {open && (
+          <QueryPanel visual={v} data={data!} table={props.dataName || "your_data"}
+            sources={input.files.map((f) => f.name)} cmp={activeCmp}
+            cmpLabel={data!.comparison_labels[activeCmp] ?? ""} rangeLabel={data!.range_labels[activeRange] ?? ""}
+            window={{ start: w.start, end: w.end }} filters={activeFilters} onClose={() => setQueryFor(null)} />
         )}
       </section>
     );

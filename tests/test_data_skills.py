@@ -81,6 +81,8 @@ CASES = [
     ("data-visualization", lambda: _load("sales"), {}),
     ("data-reporting", lambda: _load("sales"), {}),
     ("predictive-modeling", lambda: _load("sales"), {"target": "amount", "exclude": "order_id,unit_price,quantity", "max_rows": 3000}),
+    ("reorder-planning", lambda: _load("sales"), {"on_hand": '{"Sourdough Loaf": 10}', "lead_time_days": 3}),
+    ("segmentation", lambda: _load("sales"), {"max_k": 4}),
     ("multivariate-analysis", lambda: _load("sales"), {}),
     ("er-diagram", lambda: {"sales.csv": _load("sales"), "customers.csv": _load("customers")}, {}),
     ("data-dictionary-creator", lambda: _load("customers"), {}),
@@ -124,10 +126,10 @@ def test_skill_runs_and_returns_a_result(skill, build, params):
 
 
 def test_describe_lists_category_and_params():
-    """Check describe() reports a skill's category and options, and that 32 skills are listed."""
+    """Check describe() reports a skill's category and options, and that 34 skills are listed."""
     d = describe("build-dashboard")
     assert d["category"] == "data_visualization" and "range" in d["params"]
-    assert len(list_skills()) == 32
+    assert len(list_skills()) == 34
 
 
 def test_unknown_option_and_file_writing_are_refused(sales):
@@ -420,3 +422,49 @@ def test_eda_report_handles_awkward_tables():
         json.dumps(r.to_dict())
     text_only = run_skill("eda-report", tables[1]).data["report"]["sections"]
     assert not {s["id"]: s for s in text_only}["summary_statistics"]["applicable"]
+
+
+def test_segmentation_groups_customers_and_names_each_group():
+    """K-means: sales roll up per customer (purchases, spend, recency); K by silhouette; each group named."""
+    from data_skills.registry import load_skill
+    seg = load_skill("segmentation")
+    res = seg.run(_load("sales"), max_k=4)
+    assert res.data["group_by"] == "customer_id" and "days_since_last" in res.data["features"]
+    assert [c["k"] for c in res.tables["k_choice"]] == [2, 3, 4]
+    best = max(res.tables["k_choice"], key=lambda c: c["silhouette"])
+    assert res.data["k"] == best["k"]
+    groups = res.tables["segments"]
+    assert len(groups) == res.data["k"] and abs(sum(g["share_pct"] for g in groups) - 100) < 0.5
+    assert groups[0]["members"] >= groups[-1]["members"]              # Segment 1 = the biggest
+    assert all(g["description"] and g["action"] for g in groups)
+    assert res.findings[-1] == res.data["disclaimer"]
+    # A fixed K, grouping rows as they are (no customer column).
+    rows = seg.run(_load("feedback"), group_by="", k=3)
+    assert rows.data["k"] == 3 and rows.data["group_by"] is None and "action" not in rows.tables["segments"][0]
+    with pytest.raises(SkillInputError):
+        seg.run(_load("sales"), k=1)
+
+
+def test_reorder_planning_says_when_to_buy_and_how_much():
+    """Just-in-time purchasing: low stock -> order now (with a quantity); plenty -> a later purchase date."""
+    from data_skills.registry import load_skill
+    sales = _load("sales")
+    res = load_skill("reorder-planning").run(sales, on_hand={"Sourdough Loaf": 10, "Croissant": 400},
+                                             lead_time_days=3, review_days=7)
+    plan = {p["product"]: p for p in res.tables["reorder_plan"]}
+    low, high = plan["Sourdough Loaf"], plan["Croissant"]
+    assert low["status"] == "Order now" and low["order_quantity"] > 0 and low["on_hand"] <= low["reorder_point"]
+    assert high["status"] == "OK" and high["order_quantity"] == 0 and high["next_purchase_date"] > res.data["as_of"]
+    # Reorder point = demand during the lead time + safety stock (z = 1.645 at 95%).
+    assert res.data["z"] == 1.645
+    assert low["reorder_point"] >= round(low["units_per_day"] * 3)
+    assert sum(r["share_pct"] for r in res.tables["weekday_pattern"]) > 99
+    assert res.findings[-1].startswith("These are recommendations")
+    # Without stock on hand: reorder points to plan around, no dates.
+    plain = load_skill("reorder-planning").run(sales)
+    assert not plain.data["has_on_hand"] and "status" not in plain.tables["reorder_plan"][0]
+    # Operational data only: a survey-like table (no product / quantity columns) is refused.
+    survey = pd.DataFrame({"date": pd.date_range("2026-01-01", periods=60), "region": ["North", "South"] * 30,
+                           "score": range(60)})
+    with pytest.raises(SkillInputError, match="operational data"):
+        load_skill("reorder-planning").run(survey)

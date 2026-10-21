@@ -53,6 +53,7 @@ _connections: dict[tuple[str, str], dict] = {}   # (account_id, connector) -> da
 _invites: dict[str, dict] = {}           # email -> consultant_invites row
 _applications: dict[str, dict] = {}      # application id -> consultant_applications row
 _engagements: dict[str, dict] = {}       # engagement id -> consultant_engagements row
+_partners: dict[str, dict] = {}          # partner id -> partners row (home page carousel)
 
 
 DEFAULT_CAPACITY = 3   # clients a new consultant takes at once (dim.consultants.capacity)
@@ -2644,6 +2645,22 @@ async def count_connected(connector: str) -> int:
         "SELECT count(*) FROM dim.data_connections WHERE connector = $1 AND status = 'connected'", connector)
 
 
+async def list_connected(connector: str) -> list[str]:
+    """
+    The account ids that have this integration connected (used to free spots
+    held by accounts without a paid plan — api/services/connections.py).
+
+    Example:
+        >>> await list_connected("xero")
+        ['5f0c...', '9a1b...']
+    """
+    if database.pool is None:
+        return [aid for (aid, cid), c in _connections.items() if cid == connector and c.get("status") == "connected"]
+    rows = await database.pool.fetch(
+        "SELECT account_id FROM dim.data_connections WHERE connector = $1 AND status = 'connected'", connector)
+    return [str(r["account_id"]) for r in rows]
+
+
 async def save_api_usage(account_id: str, connector: str, day, count: int) -> None:
     """Save how many API calls were made to a connection on `day` (UTC) — see CallMeter."""
     if database.pool is None:
@@ -3131,3 +3148,159 @@ async def cancellation_summary(days: int = 365) -> dict:
     return {"total": len(rows), "by_reason": by_reason,
             "comments": [{"at": r["canceled_at"].isoformat() if r.get("canceled_at") else None,
                           "reason": r.get("cancel_feedback"), "comment": r["cancel_comment"]} for r in with_comment]}
+
+
+
+# ── Partners (dim.partners; the rules live in api/services/partners.py) ──────
+
+_PARTNER_FIELDS = ("business_name", "website_url", "linkedin_url", "logo_webp", "logo_width", "logo_height", "checks")
+
+
+async def save_partner(account_id: str, **fields) -> dict:
+    """
+    Save a partner application (a new one, or a resubmission that goes back to "pending").
+
+    Args:
+        account_id: str, the plan holder.
+        **fields: business_name, website_url, linkedin_url, logo_webp (bytes),
+            logo_width, logo_height, checks (dict).
+
+    Returns:
+        dict: the partners row.
+
+    Example:
+        >>> (await save_partner(aid, business_name="Sunrise Bakery", ...))["status"]
+        'pending'
+    """
+    now = datetime.now(timezone.utc)
+    if database.pool is None:
+        old = next((r for r in _partners.values() if r["account_id"] == account_id), None)
+        pid = old["id"] if old else str(uuid.uuid4())
+        row = {"id": pid, "account_id": account_id, "source": "platform", **{k: fields.get(k) for k in _PARTNER_FIELDS},
+               "status": "pending", "reason": None, "submitted_at": now, "decided_at": None, "decided_by": None}
+        _partners[pid] = row
+        return dict(row)
+    row = await database.pool.fetchrow(
+        """INSERT INTO dim.partners (account_id, business_name, website_url, linkedin_url, logo_webp, logo_width,
+                                     logo_height, checks)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+           ON CONFLICT (account_id) DO UPDATE SET business_name = EXCLUDED.business_name,
+               website_url = EXCLUDED.website_url, linkedin_url = EXCLUDED.linkedin_url,
+               logo_webp = EXCLUDED.logo_webp, logo_width = EXCLUDED.logo_width, logo_height = EXCLUDED.logo_height,
+               checks = EXCLUDED.checks, status = 'pending', reason = NULL, submitted_at = now(),
+               decided_at = NULL, decided_by = NULL
+           RETURNING *""",
+        uuid.UUID(account_id), fields["business_name"], fields["website_url"], fields.get("linkedin_url"),
+        fields["logo_webp"], fields["logo_width"], fields["logo_height"], json.dumps(fields.get("checks") or {}))
+    return _partner_row(row)
+
+
+def _partner_row(row) -> dict:
+    out = dict(row)
+    out["id"] = str(out["id"])
+    out["account_id"] = str(out["account_id"]) if out.get("account_id") else None
+    if isinstance(out.get("checks"), str):
+        out["checks"] = json.loads(out["checks"])
+    if out.get("decided_by") is not None:
+        out["decided_by"] = str(out["decided_by"])
+    if out.get("logo_webp") is not None:
+        out["logo_webp"] = bytes(out["logo_webp"])
+    return out
+
+
+async def get_partner(account_id: str) -> dict | None:
+    """One business's partner row (by its account), or None if they never applied."""
+    if database.pool is None:
+        row = next((r for r in _partners.values() if r["account_id"] == account_id), None)
+        return dict(row) if row else None
+    row = await database.pool.fetchrow("SELECT * FROM dim.partners WHERE account_id = $1", uuid.UUID(account_id))
+    return _partner_row(row) if row else None
+
+
+async def list_partners(status: str | None = None, with_logo: bool = False) -> list[dict]:
+    """
+    Partner rows, newest first; only one status when given. The logo bytes are
+    left out unless `with_logo` (lists don't need them).
+    """
+    if database.pool is None:
+        rows = [dict(r) for r in _partners.values() if status is None or r["status"] == status]
+    else:
+        cols = "*" if with_logo else ", ".join(c for c in (
+            "id", "account_id", "source", "business_name", "website_url", "linkedin_url", "logo_width", "logo_height", "status",
+            "checks", "reason", "submitted_at", "decided_at", "decided_by"))
+        sql = f"SELECT {cols} FROM dim.partners" + (" WHERE status = $1" if status else "")
+        rows = [_partner_row(r) for r in await database.pool.fetch(sql, *([status] if status else []))]
+    if not with_logo:
+        for r in rows:
+            r.pop("logo_webp", None)
+    return sorted(rows, key=lambda r: r["submitted_at"], reverse=True)
+
+
+async def set_partner_status(partner_id: str, status: str, reason: str | None = None,
+                             decided_by: str | None = None) -> dict | None:
+    """Approve, turn down or withdraw a partner (by its id); returns the row (None if there is none)."""
+    now = datetime.now(timezone.utc)
+    if database.pool is None:
+        row = _partners.get(partner_id)
+        if not row:
+            return None
+        row.update(status=status, reason=reason, decided_at=now, decided_by=decided_by)
+        return dict(row)
+    try:
+        pid = uuid.UUID(partner_id)
+    except ValueError:
+        return None
+    row = await database.pool.fetchrow(
+        """UPDATE dim.partners SET status = $2, reason = $3, decided_at = now(), decided_by = $4
+           WHERE id = $1 RETURNING *""",
+        pid, status, reason, uuid.UUID(decided_by) if decided_by else None)
+    return _partner_row(row) if row else None
+
+
+async def get_partner_by_id(partner_id: str) -> dict | None:
+    """One partner row by its own id (any source), or None."""
+    if database.pool is None:
+        row = _partners.get(partner_id)
+        return dict(row) if row else None
+    try:
+        pid = uuid.UUID(partner_id)
+    except ValueError:
+        return None
+    row = await database.pool.fetchrow("SELECT * FROM dim.partners WHERE id = $1", pid)
+    return _partner_row(row) if row else None
+
+
+async def add_admin_partner(*, business_name: str, website_url: str, logo_webp: bytes, logo_width: int,
+                            logo_height: int, admin_id: str | None) -> dict:
+    """
+    A partner an admin added by hand (a client they work with directly, no account): approved at once.
+
+    Example:
+        >>> (await add_admin_partner(business_name="Corner Cafe", website_url="https://cornercafe.com", ...))["source"]
+        'admin'
+    """
+    now = datetime.now(timezone.utc)
+    if database.pool is None:
+        pid = str(uuid.uuid4())
+        _partners[pid] = {"id": pid, "account_id": None, "source": "admin", "business_name": business_name,
+                          "website_url": website_url, "linkedin_url": None, "logo_webp": logo_webp,
+                          "logo_width": logo_width, "logo_height": logo_height, "checks": {}, "status": "approved",
+                          "reason": None, "submitted_at": now, "decided_at": now, "decided_by": admin_id}
+        return dict(_partners[pid])
+    row = await database.pool.fetchrow(
+        """INSERT INTO dim.partners (source, business_name, website_url, logo_webp, logo_width, logo_height, status,
+                                     decided_at, decided_by)
+           VALUES ('admin', $1, $2, $3, $4, $5, 'approved', now(), $6) RETURNING *""",
+        business_name, website_url, logo_webp, logo_width, logo_height, uuid.UUID(admin_id) if admin_id else None)
+    return _partner_row(row)
+
+
+async def delete_partner(partner_id: str) -> bool:
+    """Remove a partner row completely (an admin taking one off the list). False if there was none."""
+    if database.pool is None:
+        return _partners.pop(partner_id, None) is not None
+    try:
+        pid = uuid.UUID(partner_id)
+    except ValueError:
+        return False
+    return (await database.pool.execute("DELETE FROM dim.partners WHERE id = $1", pid)) != "DELETE 0"

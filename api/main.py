@@ -35,7 +35,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from api.core import database, monitoring, rate_limit
 from api.core.config import get_settings
 from api.routers import (accounts, admin, ai, billing, compare, connections, consultants, consultations, dashboards, entities,
-                         files, intake, skills, warehouse)
+                         files, intake, partners, skills, warehouse)
 from api.services import auth, price_store
 
 logger = logging.getLogger("uvicorn.error")   # shows up in Render's logs
@@ -117,6 +117,7 @@ app.include_router(billing.router, prefix="/api", tags=["billing"])
 app.include_router(consultations.router, prefix="/api", tags=["consultations"])
 app.include_router(warehouse.router, prefix="/api", tags=["warehouse"])
 app.include_router(connections.router, prefix="/api", tags=["connections"])
+app.include_router(partners.router, prefix="/api", tags=["partners"])
 
 
 @app.get("/health", tags=["health"])

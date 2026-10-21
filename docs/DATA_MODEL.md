@@ -30,8 +30,31 @@ database — then they get a copy of the same schema, not a different one.
 ```
 dim   (db/schema.sql) — the PLATFORM: who signed up, consultants, plans, consent, load log
 fact  (db/schema.sql) — CLIENT DATA, only for Data Engineering clients who opt in:
-                        account_data (the data) + field_map (shared names)
+                        records (one row per record line) + fields (each field described
+                        once) + field_map (shared names); account_data = a VIEW of them
 ```
+
+## How it's stored: no repetition (records + fields)
+
+The data is stored as **one row per record line** (`fact.records`): the line's
+IDs, dates and categories once in `attributes`, and **all its numbers together**
+in `metrics` (`{"quantity": 3, "unit_price": 7.0, "line_amount": 21.0}`). What
+each number measures is written **once per source** in `fact.fields`
+(`line_amount` = the client's `amount` column, metric_type `amount`, subtype
+`line`, unit `usd`). Rows grow with records — never records × numbers — and a
+new source with new columns needs no table change.
+
+| The sample bakery file (1.7 MB CSV, 18,210 records) | Rows | Size with indexes |
+|---|---|---|
+| First design: one row per number, details copied onto each | 54,630 | ~40 MB |
+| **Now: `fact.records` + `fact.fields`** | **18,210** (+ 3 field rows) | **~17 MB** |
+
+Measured on PostgreSQL 16 (10/2026). **`fact.account_data` is now a VIEW** that
+shows the one-row-per-number shape below (each record × its numbers, with the
+field descriptions), so queries like "every amount in usd from any source"
+keep working. Inside the app, `api/services/warehouse_store.py` packs the
+unified rows into records when it saves (`_pack`) and unpacks them when it
+reads (`_unpack`), so the rest of the code still works with one row per number.
 
 The free cleaning flow still stores **no** client data. Storing it is an
 explicit, opt-in service (see "Managed storage" in ARCHITECTURE.md). The `dim`
@@ -47,8 +70,8 @@ tables are described in [DATABASE.md](DATABASE.md).
 | Location (optional, signup only) | `dim.accounts.location_*` | Picked from a city list (GeoNames); only the id is trusted |
 | Business size | `dim.accounts.company_size` | LinkedIn size codes `A` (self-employed) … `I` (10,001+ employees) |
 | What a client pays for | `dim.subscriptions` (its tools in `items`) | Projects they'd like help with: `dim.accounts.interested_services` (interest only) |
-| Fact table with ID, type, subtype, date | `fact.account_data` | `record_id`, `event_type` / `event_subtype` (what the rows are), `event_date` |
-| "Unified data": IDs, dates and categories as they are, metrics pivoted into type / value / unit / subtype | `fact.account_data` | One row per metric; IDs, dates and categories in `attributes` on every row |
+| Fact table with ID, type, subtype, date | `fact.records` | `record_id`, `event_type` / `event_subtype` (what the rows are), `event_date` |
+| "Unified data": IDs, dates and categories as they are, metrics pivoted into type / value / unit / subtype | `fact.records.metrics` + `fact.fields` (the `fact.account_data` view shows one row per metric) | Each line's IDs, dates and categories ONCE in `attributes`; each field's type / subtype / unit ONCE in `fact.fields` |
 | Expenses, income | `event_type` / `event_subtype` = `transaction/income`, `transaction/expense` | In an expense an `amount` is described as a **cost** |
 | CSAT score, rating | `feedback/csat`, `feedback/nps` rows; `metric_type = 'score'` | `csat` and `nps` columns become two rows, subtypes `csat` / `nps` |
 | Invoice received / sent | `invoice/received`, `invoice/sent`, `invoice/paid` | Invoice #, status, due date ride along in `attributes` |
@@ -59,38 +82,50 @@ tables are described in [DATABASE.md](DATABASE.md).
 
 ```mermaid
 erDiagram
-    accounts ||--o{ account_data : "whose data (account_id)"
-    consultants |o--o{ account_data : "loaded by"
-    field_map ||..o{ account_data : "names + describes (by source_field)"
+    accounts ||--o{ records : "whose data (account_id)"
+    consultants |o--o{ records : "loaded by"
+    accounts ||--o{ fields : "each stored field, described once"
+    fields ||..o{ records : "describes the keys of metrics"
+    field_map ||..o{ fields : "names + describes (by source_field)"
+    records ||..o{ account_data : "VIEW: one row per number"
     accounts ||--o{ load_runs : "each load (column_plan)"
     accounts ||--o{ storage_consents : "store my data"
     accounts ||--o{ entities : "each customer / vendor / item, once"
     entities ||--o{ entity_sources : "how each source names it"
-    entity_sources ||..o{ account_data : "attributes.customer_link"
+    entity_sources ||..o{ records : "attributes.customer_link"
 
-    account_data {
+    records {
         bigint row_id PK
         uuid account_id FK "dim.accounts, the plan holder"
         uuid consultant_id FK "who loaded it, if a consultant"
-        text source_system "file_upload | quickbooks | xero"
+        text source_system "file_upload | quickbooks | xero | wave"
         text source_name "sales.csv"
         text record_id "50001, Invoice:130, sha256:..."
         int line_number "0, or 1, 2, 3 for order lines"
         text event_type "transaction"
         text event_subtype "income"
         date event_date
-        text field_name "line_amount (or _no_metric)"
+        jsonb metrics "the line's numbers: line_amount, quantity..."
+        jsonb attributes "IDs, dates, categories: once"
+        text row_hash "skips unchanged reloads"
+        timestamptz added_at
+        timestamptz modified_at
+        timestamptz source_modified_at
+    }
+    fields {
+        bigint field_id PK
+        uuid account_id FK
+        text source_system
+        text source_name
+        text field_name "line_amount: a key in records.metrics"
         text source_field "amount (the client's column)"
         text metric_type "amount, price, cost, score..."
         text metric_subtype "line, unit, csat..."
         text metric_unit "usd, count, percent..."
-        numeric metric_value
-        jsonb attributes "IDs, dates, categories"
-        text row_hash "skips unchanged reloads"
         bool mapped "false = a guess, review it"
-        timestamptz added_at
-        timestamptz modified_at
-        timestamptz source_modified_at
+    }
+    account_data {
+        text view "records x metrics + fields: one row per number"
     }
     field_map {
         int field_map_id PK
@@ -192,15 +227,15 @@ python -m data_skills run unified-metrics samples/expenses.csv --param event=tra
 It also writes `sql_field_map`: ready-made `fact.field_map` rows for a file's
 new columns, so the next file with the same headers is mapped automatically.
 
-## The grain: one row per metric, at the smallest level available
+## The grain: one record line at the smallest level available (its numbers together)
 
-| Business event | event_type / subtype | Rows in account_data |
+| Business event | event_type / subtype | Numbers on the record (the view shows one row each) |
 |---|---|---|
 | A café sells 2 lattes at $4.50 | transaction / income | `quantity` 2, `unit_price` 4.50, `line_amount` 9.00 |
 | Rent paid | transaction / expense | `line_amount` 2,000 (cost / line / usd) |
 | Invoice #1001 sent to Acme (2 lines) | invoice / sent | line 0: `total_amount`, `balance_due`; lines 1–2: `quantity`, `unit_price`, `line_amount` |
 | Survey response, CSAT 4, NPS 9 | feedback / csat | `csat` 4 (score / csat), `nps` 9 (score / nps) |
-| A customer list | list / records | one `_no_metric` row per customer, all details in `attributes` |
+| A customer list | list / records | none: one record per customer, `metrics` = `{}`, all details in `attributes` |
 
 If a source only has monthly totals, load monthly totals — the grain is "the
 smallest the source provides".
@@ -211,13 +246,14 @@ smallest the source provides".
   description, every step with its *why*, the first rows as stored and the
   round-trip check; nothing is stored until "Accept and load" — and only if
   the data and choices still match the preview (its fingerprint).
-- `(account_id, source_system, source_name, record_id, line_number,
-  field_name)` is unique. One statement inserts new rows, **skips** rows whose
-  `row_hash` is unchanged, and **updates** rows whose content changed
-  (`modified_at` moves, `added_at` never does). Tested: reloading the 18,210-row
-  sales sample wrote 0 rows; changing one amount updated 1.
-- Every row keeps `source_name` and `source_field`, so you can always answer
-  "where did this number come from?".
+- `(account_id, source_system, source_name, record_id, line_number)` is unique
+  in `fact.records`. One statement inserts new lines, **skips** lines whose
+  `row_hash` is unchanged, and **updates** lines whose content changed
+  (`modified_at` moves, `added_at` never does). Tested on PostgreSQL: reloading
+  the sales sample wrote nothing; changing 3 amounts updated 3 lines (9 numbers);
+  the same data under another file name was caught as duplicates.
+- Every record keeps `source_name`, and every field its `source_field` (in
+  `fact.fields`), so you can always answer "where did this number come from?".
 
 ## Entities: each customer stored once (and matched across sources)
 

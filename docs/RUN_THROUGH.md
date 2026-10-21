@@ -56,7 +56,7 @@ python scripts/setup_database.py
 ```
 
 It runs `db/schema.sql`, which creates two schemas — `dim` (the platform: 9
-tables) and `fact` (client data: `account_data` and `field_map`) — then lists
+tables) and `fact` (client data: `records`, `fields` and `field_map`; `account_data` is a view) — then lists
 every table with its row count. You should see `ok` next to all 11 tables;
 `field_map` already has 94 rows (the shared field names). Safe to re-run anytime.
 
@@ -160,11 +160,11 @@ of each page to try the others.
 | 4 | 📊 Dashboard (Visualization) | `sales.csv` | the time dashboard; Charts from your data | KPI cards, ranges |
 | 5 | Data Engineering | `sales.csv`, then `expenses.csv`, `feedback.csv` | **Load into database (preview first)** — see below; ER diagrams; Data dictionaries | rows in `warehouse.*` |
 | 6 | Data Science & ML | `sales.csv` | Forecasts & predictive models | model results in plain English |
-| 7 | AI — **Preview** | `sales.csv` | Ask: `total amount by store`, `top 5 product by amount in 2025`, `how many orders by payment_method` | answers with the calculation shown |
+| 7 | AI | `sales.csv` | Ask: `total amount by store`, `top 5 product by amount in 2025`, `how many orders by payment_method` | answers with the calculation shown |
 
-AI shows a **Preview** badge: only consultants see it open; clients see it as
-"Early access". It answers with the built-in plain-English parser today; a
-language model comes later.
+AI is launched: every client gets free monthly questions, and more with the
+AI add-on (needs Data Engineering and stored data). It answers with the
+built-in plain-English parser, or Google Gemini when `GEMINI_API_KEY` is set.
 
 ### The Data Engineering load (preview → accept)
 
@@ -179,14 +179,14 @@ language model comes later.
    - **What happens to your data, and why** — e.g. "Turn 3 number columns into
      metric rows... *Why:* a new kind of number is then just a new type".
    - **How it will look in the database** — the first rows of
-     `fact.account_data`, and "Nothing is lost: rebuilding your table from these
+     `fact.account_data` (the view of `fact.records`), and "Nothing is lost: rebuilding your table from these
      rows gives back all N cells exactly".
 3. Tick **Store this data for Sunrise Bakery...** (consent, saved once) →
    **Accept and load**. Or **Don't load**: nothing is stored.
 4. The **Stored for ...** card lists the file. Press Accept again: "0 new
    rows — already stored unchanged" (reloads never duplicate).
 5. In Supabase: `dim.load_runs` and `dim.storage_consents` have rows, and the
-   data is in `fact.account_data` (the SQL Editor's login sees all of it):
+   data is in `fact.records` — one row per record line — and the view `fact.account_data` shows one row per number (the SQL Editor's login sees all of it):
 
    ```sql
    select field_name, metric_type, metric_unit, count(*), sum(metric_value)

@@ -10,6 +10,8 @@
 import Link from "next/link";
 import { categoryColor } from "@/lib/categories";
 import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
+import FaqSection from "@/components/FaqSection";
+import PartnerCarousel from "@/components/home/PartnerCarousel";
 import { GET_STARTED, SIGN_IN, SIGN_UP } from "@/lib/routes";
 
 // The first-visit guide for this page (components/ui/Tour.tsx).
@@ -35,10 +37,10 @@ const CATEGORIES = [
   { id: "data_cleaning", name: "Data Cleaning", body: "Automatic. Duplicates, blanks, and data types handled first." },
   { id: "data_strategy_discovery", name: "Data Strategy & Discovery", body: "Find your data sources and build a roadmap tied to your goals." },
   { id: "data_exploration_analysis", name: "Data Exploration & Analysis", body: "Answers to your critical questions and the key trends behind them." },
-  { id: "data_visualization", name: "Data Visualization", body: "Dashboards and reports in Tableau, Power BI, or custom builds." },
+  { id: "data_visualization", name: "Data Visualization", body: "Interactive dashboards built from your data, right here. Tableau or Power BI builds are a consultant project." },
   { id: "data_engineering", name: "Data Engineering", body: "ER diagrams, data dictionaries, and data built to integrate." },
   { id: "data_science_ml", name: "Data Science & ML", body: "Forecasts, predictive models, and advanced analytics." },
-  { id: "ai", name: "AI", body: "Ask questions about your data in plain English. Early access." },
+  { id: "ai", name: "AI", body: "Ask Beacon questions about your data in plain English. Free questions every month; more with the AI add-on." },
 ];
 
 export default function Home() {
@@ -88,6 +90,9 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Partner businesses' logos, linked to their websites (components/home/PartnerCarousel.tsx). */}
+      <PartnerCarousel />
+
       <section aria-labelledby="how" className="space-y-4" data-tour="home-how">
         <h2 id="how" className="text-xl font-semibold">
           How it works
@@ -122,6 +127,9 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {/* Questions people ask before signing up (lib/faq.ts), with search-engine markup. */}
+      <FaqSection withSchema />
     </div>
   );
 }
