@@ -105,7 +105,7 @@ export default function AdminPartners({ token }: { token: string }) {
 
   return (
     <Card>
-      <h3 className="font-semibold">Partner logos to review</h3>
+      <h3 className="font-semibold">&ldquo;Trusted by&rdquo; logos to review</h3>
       <p className="mt-1 text-sm text-ink-muted">
         Approve only a real business&apos;s clean, family-friendly logo (no vulgar or sexual images, no ads or
         slogans). Approved logos show on the home page while the business&apos;s plan is paid.

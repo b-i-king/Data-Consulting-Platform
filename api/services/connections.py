@@ -55,9 +55,10 @@ CONNECTORS: dict[str, dict] = {
     "xero": {"name": "Xero", "kind": "business_tool", "available": False, "stores_data": True,
              "sign_in": True, "live": True,
              "about": "Income, expenses, what customers owe you, top customers — live from Xero, nothing stored. "
-                      "Comes with any paid plan (on the free plan, upload an export). Cleaning, exploring and "
-                      "dashboards only: Xero's terms rule out AI and machine learning on its data. Storing it on "
-                      "your schedule (for history and trends) comes with Data Engineering."},
+                      "Comes with any paid plan (on the free plan, upload an export). Storing it on your schedule "
+                      "(for history and trends) comes with Data Engineering."},
+    # Xero's card also shows a highlighted note that AI and machine learning are off for Xero data
+    # (Xero's terms; web/components/workspace/IntegrationsPanel.tsx, api/services/xero_guard.py).
     "wave": {"name": "Wave", "kind": "business_tool", "available": False, "stores_data": True,
              "sign_in": True, "live": True,
              "about": "Sales, what customers owe you, top customers — live from Wave invoices, nothing stored "

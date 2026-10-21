@@ -444,6 +444,15 @@ export function BusinessToolCard(props: {
       {open && (
       <>
       <p className="text-sm text-ink-muted">{c.about}</p>
+      {c.connector === "xero" && (
+        // Said up front, before connecting (also in Get Started): Xero's developer terms rule out AI and
+        // machine learning on data from its API, so those tools are off for it (api/services/xero_guard.py).
+        <p role="note" className="rounded-xl border border-brand/40 bg-brand-soft px-3 py-2 text-sm">
+          <strong>Good to know:</strong> Xero&apos;s terms don&apos;t allow data from Xero to be used with AI or
+          machine learning, so Beacon (AI questions) and the Data Science &amp; Machine Learning tools are off for
+          your Xero data. Cleaning, exploring and dashboards work as usual.
+        </p>
+      )}
       {connected ? (
         <>
           <p className="text-sm">

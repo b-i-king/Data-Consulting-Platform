@@ -32,8 +32,8 @@ export const FAQS: Faq[] = [
     a: "CSV, Excel and other common spreadsheet and data formats, including several files at once (they're sorted and stacked for you). For safety, file types that can run code are never opened.",
   },
   {
-    q: "Can I connect QuickBooks, Xero or Wave?",
-    a: "Yes, with any paid plan. On the free plan, download a report or list from your accounting tool and upload it here — the analysis is the same. Data from Xero can be cleaned, explored and turned into dashboards, but Xero's terms don't allow AI or machine learning on it, so those tools are off for Xero data.",
+    q: "Can I connect my business tools or my cloud database?",
+    a: "Yes — they work a little differently. Business tools (the accounting, invoicing and sales apps small businesses use) connect with your own sign-in on their site, with any paid plan; we read your records live, and storing them on a schedule for history and trends comes with Data Engineering. On the free plan, download a report or list from the tool and upload it here — the analysis is the same. A cloud database (your own PostgreSQL, such as Supabase) is free to connect: we read the tables where they live and copy nothing. One note: some tools' terms don't allow their data to be used with AI or machine learning, so for data from those tools the AI and machine-learning features are turned off — cleaning, exploring and dashboards still work.",
   },
   {
     q: "How do I work with a consultant?",
@@ -48,7 +48,7 @@ export const FAQS: Faq[] = [
     a: "Not yet, and you don't need one: the website works on phones and tablets, in portrait and landscape. If you'd like it on your home screen, use your browser's \"Add to Home Screen\" option.",
   },
   {
-    q: "How can my business appear on the Partners list?",
+    q: "How can my business appear in \"Trusted by\"?",
     a: "Businesses on a paid plan for at least 30 days, with their own website domain, can send their logo from Settings -> Account: just the logo on a transparent background (a plain background is removed for you). It's shown in the site's colors so the row looks consistent, a person checks every logo (clean and family-friendly only) before it goes live, and it links to your website. It's shown while your plan is paid and comes off automatically if you cancel.",
   },
 ];

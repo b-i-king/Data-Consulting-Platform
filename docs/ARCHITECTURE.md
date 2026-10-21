@@ -256,7 +256,7 @@ no table changes.
 
 ### 2b. Partner logos (a deliberate, small exception)
 
-The home page's "Partnered with" row shows partner businesses' logos, linked
+The home page's "Trusted by" row shows partner businesses' logos, linked
 to their websites (`api/services/partners.py`, `dim.partners`). A logo is NOT
 client data: it's marketing material the business chooses to publish, on
 purpose, to be shown to the public. So it is stored — as a small WebP (at most
