@@ -12,4 +12,4 @@
 #
 # Then switch it on with the environment variable SPARK_ENABLED=true.
 
-pyspark==4.0.4
+pyspark==4.2.0
