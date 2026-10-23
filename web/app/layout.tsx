@@ -21,6 +21,7 @@ import HeaderAuth from "@/components/auth/HeaderAuth";
 import SocialLinks from "@/components/SocialLinks";
 import { SITE_NAME } from "@/lib/format";
 import { COMPANY, DESCRIPTION, KEYWORDS, SITE_URL, TAGLINE, X_HANDLE, jsonLd } from "@/lib/seo";
+import Icon from "@/components/ui/Icon";
 
 // Fira Code = headings and numbers (VGST signature). Inter = body text.
 // next/font downloads them at build time and serves them from our own domain.
@@ -119,7 +120,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               How client data is handled lives in the Privacy Policy and Storage terms. */}
           <div className="grid items-center gap-3 sm:grid-cols-3">
             <span className="text-center sm:text-left">
-              Made with 💡 by{" "}
+              Made with <Icon name="bulb" className="h-4 w-4 align-[-3px] text-brand-ink" label="ideas" /> by{" "}
               <a
                 href="https://www.linkedin.com/company/thebolgroup"
                 target="_blank"

@@ -18,7 +18,7 @@
 //   Services not on the plan stay in their place, GRAYED OUT, with an ⓘ that
 //   explains what they add and how to get them. On phones the pane becomes a
 //   row you can swipe sideways.
-//   At the BOTTOM LEFT: ⚙️ Settings (with your name). It opens the ACCOUNT AREA,
+//   At the BOTTOM LEFT: Settings (gear icon) (with your name). It opens the ACCOUNT AREA,
 //   whose own left pane has: Account · Plan & billing · Integrations ·
 //   Consultant (consultants only) · Administration (admins only) — and
 //   "← Back to workspace". Sign out is on the Account page.
@@ -82,7 +82,7 @@ import {
   setActingAs,
   signOutServer,
 } from "@/lib/api";
-import { categoryColor, categoryEmoji } from "@/lib/categories";
+import { categoryColor } from "@/lib/categories";
 import { FALLBACK_BOOKING_URL, fmtInt, fmtUsd, SITE_NAME, toolName } from "@/lib/format";
 import { HOME, setAddress, SIGN_IN, SIGN_UP, workspacePath, workspaceViewFromPath, type SettingsSection } from "@/lib/routes";
 import { clearSession, loadSession, saveSession, type Session } from "@/lib/session";
@@ -124,6 +124,7 @@ import DownloadConfirm, { estimateLine, type DownloadFormat } from "@/components
 import { GroupDetails } from "@/components/wizard/StepResults";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 import FaqSection from "@/components/FaqSection";
+import Icon, { CategoryIcon } from "@/components/ui/Icon";
 
 // The first-visit guide for the workspace (components/ui/Tour.tsx).
 const WORKSPACE_TOUR: TourStep[] = [
@@ -730,13 +731,13 @@ export default function Workspace() {
       Preview
     </span>
   );
-  const ACCOUNT_TABS: { id: AccountTab; emoji: string; label: string }[] = [
-    { id: "account", emoji: "👤", label: "Account" },
-    { id: "billing", emoji: "💳", label: "Plan & billing" },
-    { id: "integrations", emoji: "🔌", label: "Integrations" },
-    ...(isConsultant ? [{ id: "consultant" as const, emoji: "🤝", label: "Consultant" }] : []),
-    ...(session.account.is_admin ? [{ id: "admin" as const, emoji: "🛡️", label: "Administration" }] : []),
-    { id: "help", emoji: "❓", label: "Help & FAQ" },
+  const ACCOUNT_TABS: { id: AccountTab; icon: string; label: string }[] = [
+    { id: "account", icon: "user", label: "Account" },
+    { id: "billing", icon: "card", label: "Plan & billing" },
+    { id: "integrations", icon: "plug", label: "Integrations" },
+    ...(isConsultant ? [{ id: "consultant" as const, icon: "users", label: "Consultant" }] : []),
+    ...(session.account.is_admin ? [{ id: "admin" as const, icon: "shield", label: "Administration" }] : []),
+    { id: "help", icon: "help", label: "Help & FAQ" },
   ];
   const accountTitle = ACCOUNT_TABS.find((t) => t.id === accountTab);
 
@@ -751,8 +752,8 @@ export default function Workspace() {
             aria-current={current === s.id ? "page" : undefined}
             className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm lg:whitespace-normal"
           >
-            <span aria-hidden className="text-base">
-              {categoryEmoji(s.id)}
+            <span style={{ color: categoryColor(s.id) }}>
+              <CategoryIcon serviceId={s.id} className="h-4 w-4" />
             </span>
             <span className={current === s.id ? "font-semibold" : ""}>{navName(s)}</span>
             {!s.available && !isLocked && previewChip}
@@ -850,7 +851,7 @@ export default function Workspace() {
                       accountTab === t.id ? "bg-brand-soft font-semibold" : "hover:bg-surface-2"
                     }`}
                   >
-                    <span aria-hidden>{t.emoji}</span> {t.label}
+                    <Icon name={t.icon} className="h-4 w-4" /> {t.label}
                   </button>
                 </li>
               ))}
@@ -880,7 +881,7 @@ export default function Workspace() {
             accountTab ? "border-brand bg-brand-soft font-semibold" : "border-line bg-surface hover:border-brand"
           }`}
         >
-          <span aria-hidden>⚙️</span>
+          <Icon name="gear" className="h-4 w-4" />
           <span className="min-w-0 flex-1">
             Settings
             <span className="block truncate text-xs font-normal text-ink-muted">
@@ -897,12 +898,12 @@ export default function Workspace() {
           <h1 className="text-2xl font-semibold">
             {accountTitle && (
               <>
-                <span aria-hidden>{accountTitle.emoji}</span> {accountTitle.label}
+                <Icon name={accountTitle.icon} className="h-5 w-5" /> {accountTitle.label}
               </>
             )}
             {currentService && (
               <>
-                <span aria-hidden>{categoryEmoji(currentService.id)}</span> {navName(currentService)}{" "}
+                <span style={{ color: categoryColor(currentService.id) }}><CategoryIcon serviceId={currentService.id} className="h-5 w-5" /></span> {navName(currentService)}{" "}
                 {!currentService.available && currentService.active && previewChip}
               </>
             )}
@@ -1157,12 +1158,12 @@ export default function Workspace() {
                 ))}
               </div>
             )}
-            {/* How the open tables relate: 🔗 a shared ID, ≈ customers matched by name / email / phone. */}
+            {/* How the open tables relate: a link icon = a shared ID, ≈ = customers matched by name / email / phone. */}
             {analysis.groups.length > 1 && analysis.categorization.relationships.length > 0 && (
               <div className="space-y-1 text-sm">
                 {analysis.categorization.relationships.map((r) => (
                   <p key={`${r.left_group}-${r.right_group}`}>
-                    <span aria-hidden>{r.method === "fuzzy" ? "≈" : "🔗"}</span> {r.description}
+                    {r.method === "fuzzy" ? <span aria-hidden>≈</span> : <Icon name="link" className="h-4 w-4" />} {r.description}
                   </p>
                 ))}
               </div>

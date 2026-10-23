@@ -89,6 +89,9 @@ python scripts/sync_dashboard_template.py  # copy the dashboard download templat
 - Look: VGST palette (navy-black, gold `#c8ac44`, Fira Code headings/numbers)
   with Copilot Money-style rounded cards and one color per service category
   (`web/lib/categories.ts`).
+- **No emoji in the UI.** Icons are the line icons in `web/components/ui/Icon.tsx`
+  (drawn in the current text color, so they follow the theme); add a new one
+  there when needed. Plain text marks like ✓ ✗ ≈ are fine.
 
 ## Tech stack (from the Video_Game_Stats_Tracker template)
 

@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSkills, runSkill, saveText } from "@/lib/api";
 import SkillPreview from "./SkillPreview";
-import { categoryColor, categoryEmoji } from "@/lib/categories";
+import { categoryColor } from "@/lib/categories";
 import type { CleaningInput, Service, SkillInfo, SkillParam, SkillResult } from "@/lib/types";
 import ChartView from "@/components/charts/ChartView";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
@@ -205,7 +205,7 @@ export default function SkillsPanel(props: {
             onChange={(e) => pick(e.target.value)}
           >
             {Object.entries(byCategory).map(([cat, list]) => (
-              <optgroup key={cat} label={`${categoryEmoji(list[0].category)} ${cat}`}>
+              <optgroup key={cat} label={cat}>
                 {list.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.label}

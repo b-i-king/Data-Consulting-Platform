@@ -17,6 +17,7 @@ import type { CleaningInput, GroupOutput, Service } from "@/lib/types";
 import Dashboard from "./Dashboard";
 import { LockedCard } from "./LockedService";
 import SkillsPanel from "./SkillsPanel";
+import Icon from "@/components/ui/Icon";
 
 const DASHBOARD_SERVICE = "data_visualization";
 
@@ -50,7 +51,7 @@ export default function ExplorePanel(props: {
         <div role="tablist" className="flex gap-1 rounded-full border border-line bg-surface p-1">
           {hasDates && (
             <button role="tab" aria-selected={tab === "dashboard"} onClick={() => setTab("dashboard")} className={tabCls(tab === "dashboard")}>
-              {dashboardUnlocked ? "" : "🔒 "}Dashboard
+              {!dashboardUnlocked && <Icon name="lock" className="mr-1 h-3.5 w-3.5 align-[-2px]" />}Dashboard
             </button>
           )}
           <button role="tab" aria-selected={tab === "skills"} onClick={() => setTab("skills")} className={tabCls(tab === "skills")}>

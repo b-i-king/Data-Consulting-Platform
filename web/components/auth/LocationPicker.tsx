@@ -17,6 +17,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { searchLocations } from "@/lib/api";
 import type { Location } from "@/lib/types";
+import Icon from "@/components/ui/Icon";
 
 const inputCls =
   "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
@@ -71,7 +72,7 @@ export default function LocationPicker(props: {
     return (
       <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm">
         <span>
-          <span aria-hidden>📍 </span>
+          <Icon name="pin" className="mr-1 h-4 w-4 align-[-3px] text-ink-muted" />
           {props.value.label}
         </span>
         <button

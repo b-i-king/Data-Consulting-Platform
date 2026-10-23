@@ -37,6 +37,7 @@ import hashlib
 import json
 import secrets
 import time
+from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -83,6 +84,18 @@ PROVIDERS: dict[str, dict] = {
         "pkce": False,
         "client_auth": "body",       # Wave takes the client ID and secret as form fields
     },
+    "square": {
+        "name": "Square",
+        # Production addresses; endpoint() swaps in Square's sandbox (SQUARE_ENVIRONMENT).
+        "authorize_url": "https://connect.squareup.com/oauth2/authorize",
+        "token_url": "https://connect.squareup.com/oauth2/token",
+        "revoke_url": "https://connect.squareup.com/oauth2/revoke",
+        # Read-only: the seller's profile, orders, payments, items, stock and customers.
+        "scope": "MERCHANT_PROFILE_READ ORDERS_READ PAYMENTS_READ ITEMS_READ INVENTORY_READ CUSTOMERS_READ",
+        "pkce": False,
+        "client_auth": "json",       # Square takes the token request as JSON
+        "extra_params": {"session": "false"},
+    },
     "google_sheets": {
         "name": "Google Sheets",
         "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
@@ -123,9 +136,18 @@ def _keys(provider: str) -> tuple[str, str]:
         "xero": (s.xero_client_id, s.xero_client_secret),
         "supabase": (s.supabase_oauth_client_id, s.supabase_oauth_client_secret),
         "google_sheets": (s.google_client_id, s.google_client_secret),
+        "square": (s.square_client_id, s.square_client_secret),
         "salesforce": (s.salesforce_client_id, s.salesforce_client_secret),
         "wave": (s.wave_client_id, s.wave_client_secret),
     }.get(provider, ("", ""))
+
+
+def endpoint(provider: str, key: str) -> str | None:
+    """A provider address (authorize_url / token_url / revoke_url); Square's sandbox when not in production."""
+    url = PROVIDERS[provider].get(key)
+    if url and provider == "square" and get_settings().square_environment.strip().lower() != "production":
+        url = url.replace("connect.squareup.com", "connect.squareupsandbox.com")
+    return url
 
 
 def configured(provider: str) -> bool:
@@ -239,7 +261,19 @@ def authorize_url(provider: str, account_id: str, consultant_id: str | None = No
         params["scope"] = scope
     params.update(p.get("extra_params", {}))
     params["state"] = make_state(provider, account_id, consultant_id, verifier, return_to)
-    return f"{p['authorize_url']}?{urlencode(params)}"
+    return f"{endpoint(provider, 'authorize_url')}?{urlencode(params)}"
+
+
+def _expires_at(body: dict) -> int:
+    """When the access token expires (Unix time): from "expires_in" seconds, or Square's ISO "expires_at"."""
+    if body.get("expires_in"):
+        return int(time.time()) + int(body["expires_in"])
+    if isinstance(body.get("expires_at"), str):
+        try:
+            return int(datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00")).timestamp())
+        except ValueError:
+            pass
+    return int(time.time()) + 1800
 
 
 def _tokens_from(body: dict, old: dict | None = None) -> dict:
@@ -248,18 +282,23 @@ def _tokens_from(body: dict, old: dict | None = None) -> dict:
         "access_token": body["access_token"],
         # Providers ROTATE refresh tokens: always keep the newest one.
         "refresh_token": body.get("refresh_token") or (old or {}).get("refresh_token"),
-        "expires_at": int(time.time()) + int(body.get("expires_in", 1800)),
+        "expires_at": _expires_at(body),
     }
 
 
 async def _token_request(provider: str, data: dict) -> dict:
     """POST to the provider's token address (client ID + secret as HTTP Basic, the standard way)."""
     client_id, secret = _keys(provider)
-    body_auth = PROVIDERS[provider].get("client_auth") == "body"   # Wave: in the form, not HTTP Basic
+    how = PROVIDERS[provider].get("client_auth")   # "body" (Wave: in the form), "json" (Square), else HTTP Basic
     async with http_client() as http:
-        res = await http.post(PROVIDERS[provider]["token_url"],
-                              data={**data, "client_id": client_id, "client_secret": secret} if body_auth else data,
-                              auth=None if body_auth else (client_id, secret), headers={"Accept": "application/json"})
+        if how == "json":
+            res = await http.post(endpoint(provider, "token_url"), json={**data, "client_id": client_id,
+                                                                         "client_secret": secret},
+                                  headers={"Accept": "application/json"})
+        else:
+            res = await http.post(endpoint(provider, "token_url"),
+                                  data={**data, "client_id": client_id, "client_secret": secret} if how == "body" else data,
+                                  auth=None if how == "body" else (client_id, secret), headers={"Accept": "application/json"})
     if res.status_code >= 400:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             detail=f"{PROVIDERS[provider]['name']} didn't accept the sign-in. Please click Connect again.")
@@ -309,6 +348,10 @@ async def revoke(provider: str, tokens: dict) -> None:
             if provider == "quickbooks":
                 await http.post(url, json={"token": tokens["refresh_token"]}, auth=(client_id, secret),
                                 headers={"Accept": "application/json"})
+            elif provider == "square":
+                await http.post(endpoint(provider, "revoke_url"), json={"client_id": client_id,
+                                                                         "access_token": tokens["access_token"]},
+                                headers={"Authorization": f"Client {secret}"})
             else:
                 await http.post(url, data={"token": tokens["refresh_token"]}, auth=(client_id, secret))
     except httpx.HTTPError:
@@ -362,6 +405,9 @@ async def finish_connect(provider: str, tokens: dict, realm_id: str = "") -> tup
 
     if provider == "google_sheets":
         return f"Google Sheets: {await google_sheets.account_email(tokens['access_token'])}", {}
+    if provider == "square":
+        seller = await business_tools.square_merchant(tokens["access_token"])
+        return seller["name"], {"merchant_id": seller["merchant_id"], "currency": seller["currency"]}
     if provider == "salesforce":
         # Which org, and its REST address (orgs live on different servers).
         async with http_client() as http:

@@ -12,8 +12,9 @@
 "use client";
 
 import { fmtUsd } from "@/lib/format";
-import { categoryColor, categoryEmoji } from "@/lib/categories";
+import { categoryColor } from "@/lib/categories";
 import type { Service } from "@/lib/types";
+import Icon, { CategoryIcon } from "@/components/ui/Icon";
 
 /** "$19/month", "$80/hour", "Free 30-min call", "Early access", "Included". */
 export function priceLabel(s: Service): string {
@@ -35,9 +36,9 @@ export function LockedBadge({ service, onAdd }: { service: Service; onAdd: (id: 
       title={`Add ${service.name} to unlock its skills`}
     >
       <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: categoryColor(service.id) }} />
-      <span aria-hidden>🔒</span>
+      <Icon name="lock" className="h-3.5 w-3.5 text-ink-muted" />
       <span className="font-medium">
-        <span aria-hidden>{categoryEmoji(service.id)} </span>
+        <span style={{ color: categoryColor(service.id) }}><CategoryIcon serviceId={service.id} className="mr-1 h-4 w-4 align-[-3px]" /></span>
         {service.name}
       </span>
       <span className="text-xs text-ink-muted">· {priceLabel(service)}</span>
@@ -51,8 +52,8 @@ export function LockedCard(props: { service: Service; feature: string; onAdd: (i
   const { service } = props;
   return (
     <div className="rounded-2xl border border-dashed border-line bg-surface p-6 text-center">
-      <p className="text-2xl" aria-hidden>
-        🔒
+      <p className="flex justify-center text-ink-muted">
+        <Icon name="lock" className="h-7 w-7" />
       </p>
       <p className="mt-2 font-semibold">
         {props.feature} is part of <span style={{ color: categoryColor(service.id) }}>{service.name}</span>

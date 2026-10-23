@@ -32,6 +32,7 @@ import SampleQuestions from "./SampleQuestions";
 import { fmtDate, fmtInt } from "@/lib/format";
 import type { AiUsage, CleaningInput, SkillResult } from "@/lib/types";
 import { Button, Card } from "@/components/wizard/ui";
+import Icon from "@/components/ui/Icon";
 
 interface Message {
   role: "you" | "assistant";
@@ -123,7 +124,7 @@ export default function AssistantPanel(props: {
       <Card className="flex min-h-[28rem] min-w-0 flex-col p-0">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
           <div className="flex items-center gap-2">
-            <span aria-hidden className="text-xl">🔦</span>
+            <span className="text-brand-ink"><Icon name="beacon" className="h-6 w-6" /></span>
             <div>
               <h2 className="font-semibold">Beacon</h2>
               <p className="text-xs text-ink-muted">

@@ -35,14 +35,15 @@ import ConsultantPicker, { PLAN_LABELS } from "@/components/consultants/Consulta
 import { QuoteSummary } from "./ServiceConfirm";
 import type { DataSource } from "./StepDataLocation";
 import { Button, Card, ConfirmDialog, ConsultantCta, ErrorBox, NavRow, StepHeader, TotalRow } from "./ui";
+import Icon from "@/components/ui/Icon";
 
 /** The three ways forward from "Your needs". */
 export type NextPath = "download" | "package" | "consultant";
 
-const PATHS: { id: NextPath; emoji: string; title: string; note: string }[] = [
-  { id: "download", emoji: "⬇️", title: "Just download", note: "Get your cleaned data as CSV or Excel. Pay only for the processing minutes." },
-  { id: "package", emoji: "🧰", title: "Do it myself", note: "A monthly or yearly package of tools — dashboards, analysis, storage. Cancel anytime." },
-  { id: "consultant", emoji: "🤝", title: "Help from a consultant", note: "A one-time analysis, or monthly help. Pick who, by name. Starts with a free call." },
+const PATHS: { id: NextPath; icon: string; title: string; note: string }[] = [
+  { id: "download", icon: "download", title: "Just download", note: "Get your cleaned data as CSV or Excel. Pay only for the processing minutes." },
+  { id: "package", icon: "wrench", title: "Do it myself", note: "A monthly or yearly package of tools — dashboards, analysis, storage. Cancel anytime." },
+  { id: "consultant", icon: "users", title: "Help from a consultant", note: "A one-time analysis, or monthly help. Pick who, by name. Starts with a free call." },
 ];
 
 export default function StepServices(props: {
@@ -147,8 +148,8 @@ export default function StepServices(props: {
                     : "border-line bg-surface hover:border-brand"
               }`}
             >
-              <span aria-hidden className="text-2xl">
-                {p.emoji}
+              <span className="text-brand-ink">
+                <Icon name={p.icon} className="h-7 w-7" />
               </span>
               <span className="mt-1 block font-semibold">{p.title}</span>
               <span className="mt-1 block text-sm text-ink-muted">{off ?? p.note}</span>

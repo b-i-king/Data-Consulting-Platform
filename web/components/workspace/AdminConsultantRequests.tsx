@@ -21,7 +21,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { addConsultantInvite, decideConsultantRequest, getIntakeOptions, removeConsultantInvite } from "@/lib/api";
-import { categoryEmoji } from "@/lib/categories";
 import { fmtDate } from "@/lib/format";
 import { SIGN_UP, workspacePath } from "@/lib/routes";
 import type { AdminPanelData, ConsultantRequest, DenialReason } from "@/lib/types";
@@ -206,7 +205,7 @@ export default function AdminConsultantRequests(props: {
                 {app ? (
                   <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[9rem_minmax(0,1fr)]">
                     <dt className="text-ink-muted">Services</dt>
-                    <dd>{app.services.map((s) => `${categoryEmoji(s)} ${serviceNames[s] ?? s}`).join(" · ")}</dd>
+                    <dd>{app.services.map((s) => serviceNames[s] ?? s).join(" · ")}</dd>
                     <dt className="text-ink-muted">Experience</dt>
                     <dd>{app.experience_label} · {app.tools}</dd>
                     <dt className="text-ink-muted">LinkedIn</dt>

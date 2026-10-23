@@ -23,6 +23,7 @@
 import type { ReactNode } from "react";
 import { fmtUsd } from "@/lib/format";
 import type { BillingInterval, Subscription } from "@/lib/types";
+import Icon from "@/components/ui/Icon";
 
 /** The tools a picked item gives: a bundle's `covers`, or the tool itself. */
 const gives = (plans: Subscription[], id: string): string[] => {
@@ -201,7 +202,7 @@ export default function PackageBuilder(props: {
                     on ? "border-brand bg-brand text-on-brand" : "border-line"
                   }`}
                 >
-                  {on ? "✓" : blocked ? "🔒" : ""}
+                  {on ? "✓" : blocked ? <Icon name="lock" className="h-3 w-3 text-ink-muted" /> : ""}
                 </span>
               </span>
               <span className="mt-1 flex-1 text-xs text-ink-muted">{p.description}</span>
