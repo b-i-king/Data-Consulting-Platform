@@ -13,6 +13,7 @@ import Tour, { TourButton, type TourStep } from "@/components/ui/Tour";
 import FaqSection from "@/components/FaqSection";
 import PartnerCarousel from "@/components/home/PartnerCarousel";
 import { GET_STARTED, SIGN_IN, SIGN_UP } from "@/lib/routes";
+import { FALLBACK_BOOKING_URL } from "@/lib/format";
 
 // The first-visit guide for this page (components/ui/Tour.tsx).
 const HOME_TOUR: TourStep[] = [
@@ -137,6 +138,13 @@ export default function Home() {
             </div>
           ))}
         </div>
+        <p className="text-sm text-ink-muted">
+          A larger organization? Ask about an <strong className="text-ink">Enterprise plan</strong> — your own contract, higher limits and a
+          dedicated consultant.{" "}
+          <a href={FALLBACK_BOOKING_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-brand-ink underline">
+            Talk to us
+          </a>
+        </p>
       </section>
 
       <section id="services" aria-labelledby="services-title" className="space-y-4" data-tour="home-services">

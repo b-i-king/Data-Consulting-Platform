@@ -246,7 +246,7 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
         return [{"schema": "public", "name": "orders", "kind": "table", "rows_estimate": 3, "has_rows": True},
                 {"schema": "public", "name": "returns", "kind": "table", "rows_estimate": 0, "has_rows": False}]
 
-    async def fake_read(dsn, schema, name, limit):
+    async def fake_read(dsn, schema, name, limit, max_bytes=None, cap=None):   # the size and row caps (enterprise)
         csv = pd.DataFrame({"order_id": [1, 2, 3], "amount": [9.5, 4.0, 2.25]}).to_csv(index=False).encode()
         return {"csv": csv, "rows": 3, "columns": ["order_id", "amount"], "truncated": False}
 

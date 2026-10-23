@@ -45,7 +45,7 @@ from fastapi.responses import StreamingResponse
 from api.core import database
 from api.core.security import get_acting_context
 from api.models.accounts import DeleteStoredIn
-from api.services import account_store, audit, combine, dedupe, entitlements, hipaa, teams, warehouse_store, xero_guard
+from api.services import account_store, audit, combine, dedupe, enterprise, entitlements, hipaa, teams, warehouse_store, xero_guard
 from api.services.entitlements import plan_holder
 
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
@@ -70,7 +70,7 @@ async def _require_service(ctx: dict) -> None:
 
 async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, column_actions: str,
                 column_names: str, transforms: str, choices: str, event_type: str,
-                combine_spec: str = "{}", source_name: str | None = None) -> LoadPlan:
+                combine_spec: str = "{}", source_name: str | None = None, max_mb: int | None = None) -> LoadPlan:
     """
     Re-run the cleaning pipeline on the upload and build the load plan for one table.
 
@@ -99,7 +99,7 @@ async def _plan(files: list[UploadFile], group_id: int, missing_strategy: str, c
             raise ValueError
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="'choices' and 'combine' must be JSON objects.")
-    datasets = await load_uploads(files)
+    datasets = await load_uploads(files, max_mb)   # max_mb: an enterprise contract's upload size
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))
     group = next((g for g in result.groups if g.group_id == group_id), None)
@@ -213,7 +213,8 @@ async def preview_load(
     hipaa.require_storage_allowed(holder)   # a HIPAA request waiting for an admin: nothing is stored yet
     target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
-                       choices, event_type, combine_spec, target)
+                       choices, event_type, combine_spec, target,
+                       await enterprise.limit(ctx["account"], "max_upload_mb"))
     duplicates = await dedupe.find_duplicates(str(holder["id"]), plan.rows, plan.source_system, plan.source_name)
     # The same file uploaded again (rows or columns added): what's new since the stored copy.
     changes = None if target else await warehouse_store.changes_since_stored(holder, plan)
@@ -287,7 +288,8 @@ async def accept_and_load(
                                                 else str(ctx["consultant"]["account_id"]))
     target = await _replace_target(holder, replace_source)
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
-                       choices, event_type, combine_spec, target)
+                       choices, event_type, combine_spec, target,
+                       await enterprise.limit(ctx["account"], "max_upload_mb"))
     if plan.problem:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=plan.problem)
     if plan.fingerprint != fingerprint:

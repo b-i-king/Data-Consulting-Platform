@@ -55,7 +55,7 @@ after the free 30-minute consultation.
 from __future__ import annotations
 
 from api.core.config import get_settings
-from api.services import account_store, billing
+from api.services import account_store, billing, enterprise
 from api.services.pricing import SERVICES, SERVICES_BY_ID
 
 ALWAYS_INCLUDED = "data_cleaning"
@@ -181,6 +181,7 @@ async def active_services(account: dict, *, preview_all: bool = False) -> list[s
         return [s.id for s in SERVICES]
     holder = await plan_holder_id(account)
     unlocked = set((await billing.live_plan_services(holder))[0])     # the tools in their package
+    unlocked |= set(enterprise.services(await account_store.get_account(holder)))   # an active enterprise contract
     unlocked.add(ALWAYS_INCLUDED)
     return [s.id for s in SERVICES if s.id in unlocked]
 
@@ -228,7 +229,8 @@ async def has_paid_plan(account: dict) -> bool:
         >>> await has_paid_plan(new_client), await has_paid_plan(subscriber)
         (False, True)
     """
-    if is_admin(account) or (await plan_holder(account)).get("is_tester"):
+    holder = await plan_holder(account)
+    if is_admin(account) or holder.get("is_tester") or enterprise.is_active(holder):
         return True
     return bool((await billing.live_plan_services(await plan_holder_id(account)))[1])
 
@@ -253,6 +255,8 @@ async def downloads_included(account: dict) -> bool:
     if is_admin(account):
         return True
     if (await plan_holder(account)).get("is_tester"):   # a tester's colleagues test for free too
+        return True
+    if enterprise.is_active(await plan_holder(account)):   # enterprise contracts include downloads
         return True
     return ALWAYS_INCLUDED in (await billing.live_plan_services(await plan_holder_id(account)))[0]
 

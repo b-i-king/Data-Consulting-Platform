@@ -3327,3 +3327,63 @@ async def set_setting(key: str, value, admin_id: str | None = None) -> None:
         """INSERT INTO dim.app_settings (key, value, updated_by) VALUES ($1, $2::jsonb, $3)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by""",
         key, json.dumps(value), uuid.UUID(admin_id) if admin_id else None)
+
+
+
+# ── Enterprise contracts (columns on dim.accounts; rules in api/services/enterprise.py) ──
+
+_ENTERPRISE_COLUMNS = ("is_enterprise", "enterprise_price_usd", "enterprise_billing", "enterprise_setup_fee_usd",
+                       "enterprise_contract_start", "enterprise_contract_end", "enterprise_services",
+                       "enterprise_limits", "enterprise_notes")
+
+
+async def update_enterprise(account_id: str, fields: dict) -> dict | None:
+    """
+    Save an admin's changes to a client's enterprise contract (only the columns given change).
+
+    Args:
+        account_id: str, the plan holder.
+        fields: dict, a subset of _ENTERPRISE_COLUMNS, already checked by enterprise.admin_update.
+
+    Returns:
+        dict | None: the updated accounts row.
+    """
+    fields = {k: v for k, v in fields.items() if k in _ENTERPRISE_COLUMNS}
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc is not None:
+            acc.update(fields, updated_at=_now())
+        return acc
+    if not fields:
+        return await get_account(account_id)
+    cols = list(fields)
+    sets = ", ".join(f"{c} = ${i + 2}" + ("::jsonb" if c == "enterprise_limits" else "") for i, c in enumerate(cols))
+    values = [json.dumps(fields[c]) if c == "enterprise_limits" else fields[c] for c in cols]
+    row = await database.pool.fetchrow(f"UPDATE dim.accounts SET {sets} WHERE id = $1 RETURNING *",
+                                       uuid.UUID(account_id), *values)
+    return dict(row) if row else None
+
+
+async def list_enterprise_accounts() -> list[dict]:
+    """Every account with the enterprise tag, contracts ending soonest first."""
+    if database.pool is None:
+        rows = [a for a in _accounts.values() if a.get("is_enterprise")]
+    else:
+        rows = [dict(r) for r in await database.pool.fetch(
+            "SELECT * FROM dim.accounts WHERE is_enterprise ORDER BY enterprise_contract_end NULLS LAST")]
+    return rows
+
+
+async def accept_enterprise_terms(account_id: str, version: str, signer_name: str) -> dict | None:
+    """Record that the client's owner accepted the Enterprise agreement (version, now, typed name)."""
+    if database.pool is None:
+        acc = _accounts.get(account_id)
+        if acc is not None:
+            acc.update(enterprise_terms_version=version, enterprise_terms_accepted_at=_now(),
+                       enterprise_terms_accepted_by=signer_name, updated_at=_now())
+        return acc
+    row = await database.pool.fetchrow(
+        """UPDATE dim.accounts SET enterprise_terms_version = $2, enterprise_terms_accepted_at = now(),
+                  enterprise_terms_accepted_by = $3 WHERE id = $1 RETURNING *""",
+        uuid.UUID(account_id), version, signer_name)
+    return dict(row) if row else None

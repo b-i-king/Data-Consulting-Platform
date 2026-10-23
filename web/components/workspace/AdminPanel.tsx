@@ -28,6 +28,7 @@ import type { AdminPanelData, TeamConsultant } from "@/lib/types";
 import { LoadBar } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 import AdminConsultantRequests from "./AdminConsultantRequests";
+import AdminEnterprise from "./AdminEnterprise";
 import AdminHipaa from "./AdminHipaa";
 import AdminPartners from "./AdminPartners";
 import AdminReassign from "./AdminReassign";
@@ -190,6 +191,7 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
 
       <AdminSalesSwitch token={token} />
       <AdminPartners token={token} />
+      <AdminEnterprise token={token} />
       <AdminHipaa token={token} />
       <AdminPrices token={token} />
       <AdminConsultingPrices token={token} />

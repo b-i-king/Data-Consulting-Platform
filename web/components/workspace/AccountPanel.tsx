@@ -21,6 +21,7 @@ import type { Account, BusinessContext, WarehouseCounts } from "@/lib/types";
 import { PLAN_LABELS } from "@/components/consultants/ConsultantPicker";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 import { AskToConsult, DeleteAccount, UpdateLatestUpload } from "./SettingsPanel";
+import EnterpriseCard from "./EnterpriseCard";
 import PartnerCard from "./PartnerCard";
 import HipaaCard from "./HipaaCard";
 import { ActivityLogCard, DevicesCard, TwoStepCard } from "./SecurityPanel";
@@ -89,6 +90,8 @@ export default function AccountPanel(props: {
           <DevicesCard token={props.token} />
         </>
       )}
+      {/* Shown only for enterprise clients; the owner accepts the agreement here. */}
+      <EnterpriseCard token={props.token} isOwner={!props.acting && (!a.team_id || a.team_role === "owner")} />
       {!props.acting && a.account_type === "business" && props.canChange && <PartnerCard token={props.token} />}
       {!props.acting && a.account_type === "business" && props.canChange && (
         <HipaaCard token={props.token} onChanged={props.onRefreshAccount} />

@@ -266,6 +266,27 @@ ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS hipaa_decision_note TEXT;
 CREATE INDEX IF NOT EXISTS idx_accounts_hipaa_pending ON dim.accounts (hipaa_requested_at)
     WHERE hipaa_status = 'pending';
 ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMPTZ;
+-- Enterprise contracts (api/services/enterprise.py): COLUMNS on the plan holder's
+-- row, set by an admin (Administration -> Enterprise) — no table or rows per client.
+-- An active contract (tag on, today within the dates) unlocks enterprise_services
+-- without Stripe and raises the limits in enterprise_limits; invoices go out from
+-- the owner's own tool (e.g. Wave). The client's owner accepts the Enterprise
+-- agreement in the app: the version, time and typed name are recorded here.
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS is_enterprise BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_price_usd NUMERIC(12, 2);
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_billing TEXT
+    CHECK (enterprise_billing IN ('monthly', 'yearly', 'one_time'));
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_setup_fee_usd NUMERIC(12, 2);
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_contract_start DATE;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_contract_end DATE;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_services TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_limits JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_terms_version TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_terms_accepted_by TEXT;
+ALTER TABLE dim.accounts ADD COLUMN IF NOT EXISTS enterprise_notes TEXT;
+-- The admin's enterprise list.
+CREATE INDEX IF NOT EXISTS idx_accounts_enterprise ON dim.accounts (enterprise_contract_end) WHERE is_enterprise;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivated_by UUID;
 ALTER TABLE dim.consultants ADD COLUMN IF NOT EXISTS deactivation_reason TEXT;
