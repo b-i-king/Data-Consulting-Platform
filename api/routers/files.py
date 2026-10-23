@@ -35,8 +35,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import StreamingResponse
 
 from api.core.config import get_settings
-from api.core.security import get_acting_context
-from api.services import account_store, audit, entitlements, fair_use
+from api.core.security import get_acting_context, get_optional_acting_context
+from api.services import account_store, audit, enterprise, entitlements, fair_use
 from api.services.cleaning import dataframe_to_records
 from api.services.pipeline import (
     load_uploads,
@@ -62,6 +62,8 @@ async def analyze_files(
     column_names: Annotated[str, Form()] = "{}",
     # Transform steps, JSON: {"<group_id>": [{"op": "change_type", ...}, ...]} (api/services/transforms.py)
     transforms: Annotated[str, Form()] = "{}",
+    # Signed in (optional): an enterprise contract's larger upload size applies.
+    ctx: Annotated[dict | None, Depends(get_optional_acting_context)] = None,
 ):
     """
     POST /api/files/analyze — GUEST: upload 1+ files and see how they would be cleaned.
@@ -105,7 +107,7 @@ async def analyze_files(
                 "runtime": {"runtime_seconds": 0.21, "amount_usd": 0.5, ...}}
     """
     settings = get_settings()
-    datasets = await load_uploads(files)
+    datasets = await load_uploads(files, await enterprise.limit(ctx["account"] if ctx else None, "max_upload_mb"))
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))
 
@@ -201,7 +203,7 @@ async def download_cleaned(
            Content-Disposition: attachment; filename="sales_cleaned.csv"
            X-Amount-USD: 0.50
     """
-    datasets = await load_uploads(files)
+    datasets = await load_uploads(files, await enterprise.limit(ctx["account"], "max_upload_mb"))
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))
 

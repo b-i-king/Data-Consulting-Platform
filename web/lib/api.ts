@@ -8,6 +8,7 @@
 
 import type {
   Account,
+  EnterpriseSummary,
   PartnerCarouselData,
   PartnerReview,
   PartnerStatus,
@@ -849,9 +850,11 @@ export function saveText(filename: string, text: string, type = "text/plain") {
 }
 
 /** Guest step: upload files and get the cleaning report + preview. */
-export async function analyzeFiles(input: CleaningInput): Promise<AnalyzeResponse> {
+export async function analyzeFiles(input: CleaningInput, token?: string): Promise<AnalyzeResponse> {
   const res = await apiFetch(`${API_URL}/api/files/analyze`, {
     method: "POST",
+    // Signed in (the workspace): an enterprise contract's larger upload size applies.
+    headers: token ? authHeaders(token) : undefined,
     body: filesForm(input.files, choiceFields(input)),
   });
   await raiseForStatus(res);
@@ -1261,3 +1264,40 @@ export async function summarizeWarehouse(token: string, connector: string, spec:
 export const getWarehouseTableFile = (token: string, connector: string, table: string) =>
   liveCsv(token, `/api/connections/${encodeURIComponent(connector)}/warehouse/table?table=${encodeURIComponent(table)}`,
     `${table.split(".").pop()}.csv`);
+
+
+// ── Enterprise contracts (api/routers/enterprise.py) ──────────────────────────
+
+/** My organization's enterprise contract (is_enterprise false = none). */
+export async function getMyEnterprise(token: string): Promise<EnterpriseSummary> {
+  const res = await apiFetch(`${API_URL}/api/enterprise/me`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** The account's owner accepts the Enterprise Agreement (typed name + "I agree"). */
+export const acceptEnterpriseAgreement = (token: string, signerName: string, agreed: boolean) =>
+  postJson<EnterpriseSummary>("/api/enterprise/me/accept", { signer_name: signerName, agreed }, token);
+
+/** Admins: every enterprise client. */
+export async function getEnterpriseClients(token: string): Promise<{ clients: (EnterpriseSummary & { account_id: string; name: string; email: string })[] }> {
+  const res = await apiFetch(`${API_URL}/api/enterprise/admin/list`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: one client's contract (notes included). */
+export async function getEnterpriseContract(token: string, accountId: string): Promise<EnterpriseSummary> {
+  const res = await apiFetch(`${API_URL}/api/enterprise/admin/${encodeURIComponent(accountId)}`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: set or change a client's contract. */
+export async function setEnterpriseContract(token: string, accountId: string, body: Record<string, unknown>): Promise<EnterpriseSummary> {
+  const res = await apiFetch(`${API_URL}/api/enterprise/admin/${encodeURIComponent(accountId)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json", ...authHeaders(token) }, body: JSON.stringify(body),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}

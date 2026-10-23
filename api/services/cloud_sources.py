@@ -306,7 +306,7 @@ def csv_within(df: pd.DataFrame, max_bytes: int, header: bool = True) -> tuple[b
 
 
 async def read_table_csv(dsn: str, schema: str, name: str, limit: int = MAX_ROWS,
-                         max_bytes: int | None = None) -> dict:
+                         max_bytes: int | None = None, cap: int = MAX_ROWS) -> dict:
     """
     Read one table (or view) as CSV, read-only, using as little memory as possible.
 
@@ -341,7 +341,7 @@ async def read_table_csv(dsn: str, schema: str, name: str, limit: int = MAX_ROWS
         >>> r["rows"], r["truncated"]
         (1000, True)
     """
-    limit = max(1, min(int(limit), MAX_ROWS))
+    limit = max(1, min(int(limit), cap))   # cap: MAX_ROWS, or an enterprise contract's
     if max_bytes is None:
         max_bytes = get_settings().max_upload_bytes - 64 * 1024   # a little room under the upload limit
     conn = await _connect(dsn)
@@ -496,7 +496,7 @@ async def mgmt_list_tables(token: str, ref: str) -> list[dict]:
 
 
 async def mgmt_read_table_csv(token: str, ref: str, schema: str, name: str, limit: int = MAX_ROWS,
-                              max_bytes: int | None = None) -> dict:
+                              max_bytes: int | None = None, cap: int = MAX_ROWS) -> dict:
     """
     Like read_table_csv(), through the Management API.
 
@@ -511,7 +511,7 @@ async def mgmt_read_table_csv(token: str, ref: str, schema: str, name: str, limi
     Raises:
         HTTPException: 404 unknown table; 422 empty.
     """
-    limit = max(1, min(int(limit), MAX_ROWS))
+    limit = max(1, min(int(limit), cap))   # cap: MAX_ROWS, or an enterprise contract's
     if max_bytes is None:
         max_bytes = get_settings().max_upload_bytes - 64 * 1024
     known = {(t["schema"], t["name"]): t for t in await mgmt_list_tables(token, ref)}

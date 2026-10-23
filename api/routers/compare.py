@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from api.core.security import get_acting_context
-from api.services import compare as compare_service, skill_access
+from api.services import compare as compare_service, enterprise, skill_access
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms, run_pipeline
 from data_skills._core import SkillInputError
 
@@ -58,7 +58,7 @@ async def over_time(
         period, sides = s.get("period", "month"), [s["left"], s["right"]]
     except (ValueError, KeyError, TypeError, AttributeError):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='spec must look like {"period": "month", "left": {...}, "right": {...}}.')
-    datasets = await load_uploads(files)
+    datasets = await load_uploads(files, await enterprise.limit(ctx["account"], "max_upload_mb"))
     result = run_pipeline(datasets, missing_strategy, parse_column_actions(column_actions),
                           parse_column_names(column_names), parse_transforms(transforms))
     groups = {g.group_id: g for g in result.groups}

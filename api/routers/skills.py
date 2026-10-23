@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 
 from api.core.rate_limit import client_ip
 from api.core.security import get_optional_acting_context
-from api.services import skill_access, xero_guard
+from api.services import enterprise, skill_access, xero_guard
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms
 from api.services.skills_runner import run_on_uploads
 from data_skills._core import SkillInputError
@@ -131,7 +131,7 @@ async def run_skill_endpoint(
     actions = parse_column_actions(column_actions)
     names = parse_column_names(column_names)
     steps = parse_transforms(transforms)
-    datasets = await load_uploads(files)
+    datasets = await load_uploads(files, await enterprise.limit((ctx["account"] if ctx else None), "max_upload_mb"))
     if xero_guard.restricted(service):
         xero_guard.refuse_if_xero(datasets)   # 403: Xero's terms rule out AI / ML on its data
     try:

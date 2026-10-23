@@ -422,7 +422,7 @@ export default function Workspace() {
       setColumnNames({});
       setTransforms({});
       setGroupIndex(0);
-      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }));
+      setAnalysis(await analyzeFiles({ files: chosen, strategy: "keep", columnActions: {}, columnNames: {}, transforms: {} }, session?.token));
     } catch (e) {
       setAnalysis(null);
       setError(e instanceof Error ? e.message : "We couldn't read that data.");
@@ -634,7 +634,7 @@ export default function Workspace() {
 
   async function applyActions(groupId: number, actions: Record<string, ColumnAction>) {
     const next = { ...columnActions, [String(groupId)]: actions };
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames, transforms }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: next, columnNames, transforms }, session?.token));
     setColumnActions(next);
     setResults({});
   }
@@ -642,7 +642,7 @@ export default function Workspace() {
   async function applyNames(groupId: number, names: Record<string, string>, actions?: Record<string, ColumnAction>) {
     const nextNames = { ...columnNames, [String(groupId)]: names };
     const nextActions = actions ? { ...columnActions, [String(groupId)]: actions } : columnActions;
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: nextActions, columnNames: nextNames, transforms }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions: nextActions, columnNames: nextNames, transforms }, session?.token));
     setColumnNames(nextNames);
     setColumnActions(nextActions);
     setResults({}); // skill results used the old names
@@ -650,7 +650,7 @@ export default function Workspace() {
   // The table's transform steps (Power Query-style "Applied steps"), in order.
   async function applyTransforms(groupId: number, steps: TransformStep[]) {
     const next = { ...transforms, [String(groupId)]: steps };
-    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions, columnNames, transforms: next }));
+    setAnalysis(await analyzeFiles({ files, strategy: "keep", columnActions, columnNames, transforms: next }, session?.token));
     setTransforms(next);
     setResults({}); // skill results used the old data
   }

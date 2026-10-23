@@ -667,7 +667,7 @@ async def my_team(token: Annotated[dict, Depends(get_current_account)]):
         "team_id": team_id,
         "name": team["name"] if team else None,
         "members": [_account_out(m) for m in members],
-        "seats": {"used": len(members), "limit": teams.max_people()},
+        "seats": {"used": len(members), "limit": await teams.seat_limit(team_id)},
         "roles": teams.ROLE_LABELS,
         "can_manage": acc.get("team_role") == "owner",
     }

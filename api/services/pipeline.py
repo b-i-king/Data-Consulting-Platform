@@ -77,7 +77,7 @@ class PipelineResult:
         return asdict(self.categorization)
 
 
-async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
+async def load_uploads(files: list[UploadFile], max_mb: int | None = None) -> list[LoadedDataset]:
     """
     Read every uploaded file into DataFrames (step 1 of the pipeline).
 
@@ -122,11 +122,13 @@ async def load_uploads(files: list[UploadFile]) -> list[LoadedDataset]:
     datasets: list[LoadedDataset] = []
     for upload in files:
         # Read one byte past the limit: if we get it, the file is too big.
-        raw = await upload.read(settings.max_upload_bytes + 1)
-        if len(raw) > settings.max_upload_bytes:
+        # An enterprise contract can raise the size (max_mb, api/services/enterprise.py).
+        limit_mb = max_mb or settings.max_upload_mb
+        raw = await upload.read(limit_mb * 1024 * 1024 + 1)
+        if len(raw) > limit_mb * 1024 * 1024:
             raise HTTPException(
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"'{upload.filename}' is larger than {settings.max_upload_mb} MB. "
+                detail=f"'{upload.filename}' is larger than {limit_mb} MB. "
                        "Book a consultation for larger datasets.",
             )
         try:

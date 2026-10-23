@@ -215,6 +215,28 @@ allowances are shared by every client, so free accounts upload an export
 instead (same analysis). Details and the "spots" rule: [CONNECTORS.md](CONNECTORS.md).
 Data from Xero can't be used with the AI or Data Science & ML tools (Xero's terms).
 
+## Enterprise contracts (custom, outside self-serve)
+
+For larger organizations, by conversation (the home page's "Ask about an
+Enterprise plan → Talk to us" link goes to your booking page). No Stripe checkout:
+
+1. Agree the price, term, services and limits on a call.
+2. **Administration → Enterprise clients**: find the client, tick *Enterprise
+   client*, enter the price and billing (monthly, yearly or one time), the
+   one-time setup fee, the contract dates, the included services and any raised
+   limits (upload size up to 200 MB, team seats up to 500, rows per database
+   table up to 1,000,000). Saved on their account; takes effect at once.
+3. Their owner accepts the **Enterprise Agreement** in Settings → Account
+   (`/enterprise-agreement`; the version, time and typed name are recorded).
+4. Invoice them from your own tool (e.g. Wave) and note the invoice numbers in
+   the contract's private notes.
+
+While the contract is active (today within its dates) the services are unlocked
+and it counts as a paid plan (business-tool connections, free downloads). After
+the end date everything returns to the normal limits by itself. Raising uploads
+past ~100 MB also needs a larger Render instance (memory). Have a lawyer review
+the agreement text before the first enterprise client.
+
 ## Connected data: how often it refreshes
 
 Connectors (QuickBooks first) pull a client's data into managed storage, so

@@ -40,7 +40,7 @@ from fastapi.responses import RedirectResponse, Response
 from api.core.config import get_settings
 from api.core.security import get_acting_context
 from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn, WaveTokenIn
-from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, google_sheets, hipaa, integration_slots, oauth, sync, teams, warehouses, xero_guard
+from api.services import account_store, audit, business_tools, cloud_sources, connections, enterprise, entitlements, google_sheets, hipaa, integration_slots, oauth, sync, teams, warehouses, xero_guard
 from api.services.pricing import refresh_catalog
 
 router = APIRouter(prefix="/connections")
@@ -392,7 +392,7 @@ async def google_sheet_tab(link: str, tab: str, ctx: Annotated[dict, Depends(get
 
 @router.get("/supabase/table")
 async def supabase_table(ctx: Annotated[dict, Depends(get_acting_context)], schema: str, name: str,
-                         limit: int = cloud_sources.MAX_ROWS):
+                         limit: int | None = None):
     """
     GET /api/connections/supabase/table?schema=public&name=orders — one table as a CSV file.
 
@@ -409,12 +409,16 @@ async def supabase_table(ctx: Annotated[dict, Depends(get_acting_context)], sche
             project is picked yet; 422 for an empty table; 400 when unreachable.
     """
     src = await _supabase_source(ctx)
+    # An enterprise contract can raise how many rows (and MB) one table read brings.
+    cap = await enterprise.limit(ctx["account"], "table_rows")
+    max_bytes = await enterprise.limit(ctx["account"], "max_upload_mb") * 1024 * 1024 - 64 * 1024
+    limit = min(limit or cap, cap)
     if src["mode"] == "dsn":
-        r = await cloud_sources.read_table_csv(src["dsn"], schema, name, limit)
+        r = await cloud_sources.read_table_csv(src["dsn"], schema, name, limit, max_bytes, cap)
     elif not src["ref"]:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Pick a Supabase project first (Settings -> Integrations).")
     else:
-        r = await cloud_sources.mgmt_read_table_csv(src["token"], src["ref"], schema, name, limit)
+        r = await cloud_sources.mgmt_read_table_csv(src["token"], src["ref"], schema, name, limit, max_bytes, cap)
     return _csv_response(r, f"{schema}.{name}.csv")
 
 

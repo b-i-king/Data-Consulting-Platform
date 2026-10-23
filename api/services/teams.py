@@ -123,6 +123,16 @@ def max_people() -> int:
     return max(1, get_settings().team_max_people)
 
 
+async def seat_limit(team_id: str | None) -> int:
+    """The most people THIS team holds: the owner's enterprise contract can raise max_people()."""
+    if not team_id:
+        return max_people()
+    from api.services import enterprise   # here: enterprise reaches entitlements, which reaches billing
+
+    owner = next((m for m in await account_store.list_team_members(team_id) if m.get("team_role") == "owner"), None)
+    return enterprise.limits(owner)["team_seats"] if owner else max_people()
+
+
 async def seats(team_id: str) -> dict:
     """
     How full a team is.
@@ -137,7 +147,7 @@ async def seats(team_id: str) -> dict:
         >>> await seats(team_id)
         {'used': 3, 'limit': 5}
     """
-    return {"used": len(await account_store.list_team_members(team_id)), "limit": max_people()}
+    return {"used": len(await account_store.list_team_members(team_id)), "limit": await seat_limit(team_id)}
 
 
 async def check_room(team_id: str | None, adding: int, already: int | None = None) -> None:
@@ -159,8 +169,9 @@ async def check_room(team_id: str | None, adding: int, already: int | None = Non
         >>> await check_room(None, adding=4, already=1)   # sign-up with 4 colleagues: fits in 5
     """
     used = already if already is not None else (await seats(team_id))["used"]
-    if used + adding > max_people():
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=team_full_message(max_people()))
+    room = await seat_limit(team_id)
+    if used + adding > room:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=team_full_message(room))
 
 
 async def _colleague_of(owner: dict, member_id: str) -> dict:

@@ -1863,3 +1863,33 @@ export interface StoredChanges {
   new_columns: string[];
   removed_columns: string[];
 }
+
+
+// ── Enterprise contracts (api/services/enterprise.py) ─────────────────────────
+
+export interface EnterpriseLimits {
+  max_upload_mb: number;
+  team_seats: number;
+  table_rows: number;
+}
+
+/** A client's enterprise contract (GET /api/enterprise/me; admins also get notes, raw_limits, ceilings). */
+export interface EnterpriseSummary {
+  is_enterprise: boolean;
+  /** The tag is on and today is within the contract dates. */
+  active: boolean;
+  price_usd: number | null;
+  billing: "monthly" | "yearly" | "one_time" | null;
+  setup_fee_usd: number | null;
+  contract_start: string | null;
+  contract_end: string | null;
+  services: string[];
+  /** The limits that apply now (raised while the contract is active). */
+  limits: EnterpriseLimits;
+  defaults: EnterpriseLimits;
+  agreement: { version: string; accepted_version: string | null; accepted_at: string | null; accepted_by: string | null;
+    needs_acceptance: boolean };
+  notes?: string | null;
+  raw_limits?: Record<string, number>;   // only the limits the admin raised
+  ceilings?: Record<string, number>;
+}
