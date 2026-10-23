@@ -44,6 +44,7 @@ from api.core.config import get_settings
 from api.models.admin import (ConsultantDecisionIn, ConsultantInviteIn, ConsultingPricesIn, DeactivateIn, HealthcareIn,
                               HipaaDecisionIn, PlanPriceIn, SeasonalSaleIn, TesterIn)
 from api.services import account_store, billing, consultants, hipaa, mfa, offers, price_store, sessions
+from api.services import sales as sales_switch   # "sales" is also a route function below (seasonal sales)
 from api.services.entitlements import is_admin
 
 router = APIRouter(prefix="/admin")
@@ -373,6 +374,7 @@ async def _person_out(acc: dict) -> dict:
         "id": str(acc["id"]), "name": f"{acc['first_name']} {acc['last_name']}", "email": acc["email"],
         "company_name": acc.get("company_name"), "account_type": acc["account_type"], "role": role,
         "is_tester": bool(acc.get("is_tester")),
+        "consultant_id": str(acc["consultant_id"]) if acc.get("consultant_id") else None,   # their consultant (clients)
         "is_healthcare": bool(acc.get("is_healthcare")),
         "mfa_enabled": mfa.is_on(acc),
         "has_plan": bool(await account_store.list_subscriptions(str(acc["id"]))),
@@ -403,6 +405,39 @@ async def people(token: Annotated[dict, Depends(get_current_account)], q: str = 
     """
     await _admin(token)
     return {"accounts": [await _person_out(a) for a in await account_store.search_accounts(q, limit)]}
+
+
+@router.post("/clients/{account_id}/reassign")
+async def reassign_client(account_id: str, body: dict, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/clients/{account_id}/reassign {"consultant_id": "..."} — move a client to another consultant.
+
+    Rules and what moves: consultants.reassign_client. Ongoing help with the old
+    consultant ends now ("help_ended": refund the unused time in Stripe).
+
+    Raises:
+        HTTPException: 403 non-admins; 400 / 404 from consultants.reassign_client.
+    """
+    me = await _admin(token)
+    if not isinstance(body.get("consultant_id"), str):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='Send {"consultant_id": "..."}.')
+    return await consultants.reassign_client(account_id, body["consultant_id"], me)
+
+
+@router.post("/sales")
+async def set_sales_open(body: dict, token: Annotated[dict, Depends(get_current_account)]):
+    """
+    POST /api/admin/sales {"open": true | false} — open or close purchases for customers (admins only).
+
+    Takes effect at once, no redeploy (api/services/sales.py). Admins and testers can always buy.
+
+    Raises:
+        HTTPException: 403 non-admins; 400 without a true / false "open".
+    """
+    me = await _admin(token)
+    if not isinstance(body.get("open"), bool):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='Send {"open": true} or {"open": false}.')
+    return await sales_switch.set_open(body["open"], str(me["id"]))
 
 
 @router.post("/accounts/{account_id}/tester")

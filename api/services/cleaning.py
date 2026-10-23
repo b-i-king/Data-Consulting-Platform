@@ -40,6 +40,18 @@ Step 0b. Header steps the client chose ("Use first row as headers", "Remove
         top rows") run BEFORE Step 0, because they change the header row.
         See api/services/transforms.py.
 
+Step 0a. Remove image data (first, before anything else looks at the data)
+        Pictures saved INSIDE cells — base64 text such as "data:image/png;
+        base64,iVBOR...", raw image bytes, or other binary blobs — can't be
+        analyzed, make files huge and slow everything down. A column that is
+        mostly pictures is removed; a stray picture in a text column is blanked.
+        The report says what was removed (`image_columns_removed`,
+        `image_cells_removed`) and recommends the condensed approach: keep the
+        pictures in cloud storage and put a LINK (URL) in a column such as
+        photo_url — a link is a few dozen characters and still opens the
+        picture. (Pictures placed ON an Excel sheet, not in a cell, are never
+        read in the first place.)
+
 Step 1. Tidy text cells
         Trim leading/trailing spaces in text columns (" Acme " -> "Acme")
         and turn blank text ("", "   ") into a real missing value (NaN).
@@ -250,6 +262,8 @@ class CleaningReport:
     transforms_applied: list[dict] = field(default_factory=list)   # Steps 0b / 1b: what each step did
     outlier_columns: list[str] = field(default_factory=list)       # Step 6: columns with unusual values
     format_columns: list[str] = field(default_factory=list)        # Step 6: columns in the wrong format
+    image_columns_removed: list[str] = field(default_factory=list)   # Step 0a: columns of pictures, removed
+    image_cells_removed: int = 0         # Step 0a: picture cells blanked in other columns
     notes: list[str] = field(default_factory=list)
     runtime_seconds: float = 0.0
     # The rows removed for a missing ID, kept so the Excel download can list
@@ -469,6 +483,58 @@ def _infer_type(series: pd.Series) -> str:
     if pd.to_datetime(sample, errors="coerce", format="mixed").notna().mean() >= 0.95:
         return "date (stored as text)"
     return "text"
+
+
+# Step 0a: how pictures look when they're stored in a cell as text (base64) — the
+# start of a data URL, or the base64 of a PNG / JPEG / GIF / WebP / BMP / SVG file.
+IMAGE_TEXT_STARTS = ("data:image/", "ivborw0kggo", "/9j/", "r0lgod", "uklgr", "qk0", "phn2zy", "<svg")
+IMAGE_TEXT_MIN_LENGTH = 100   # a real picture is never this short; keeps ordinary text safe
+IMAGE_COLUMN_SHARE = 0.5      # at least half the filled cells are pictures -> remove the whole column
+IMAGE_TIP = ("Tip: keep pictures in cloud storage (Google Drive, Dropbox, OneDrive, Amazon S3) and put a link to "
+             "each one in a column such as photo_url — a link is small, can be analyzed (e.g. which items have a "
+             "photo) and still opens the picture.")
+
+
+def _is_image(value) -> bool:
+    """True for a picture (or other binary file) stored in a cell: raw bytes, or base64 / data-URL text."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return True
+    if isinstance(value, str) and len(value) >= IMAGE_TEXT_MIN_LENGTH:
+        return value.lstrip()[:12].lower().startswith(IMAGE_TEXT_STARTS)
+    return False
+
+
+def _remove_images(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], int]:
+    """
+    Step 0a: remove pictures stored in cells — whole columns of them, then stray ones.
+
+    Args:
+        df: pd.DataFrame, the table (only text / object columns can hold pictures).
+
+    Returns:
+        tuple[pd.DataFrame, list[str], int]: (the table, columns removed, cells blanked).
+
+    Example:
+        >>> df = pd.DataFrame({"item": ["Cake"], "photo": ["data:image/png;base64," + "A" * 200]})
+        >>> _remove_images(df)[1]
+        ['photo']
+    """
+    removed, blanked = [], 0
+    # Text columns can hold pictures: pandas 3's "str" type or the older object type
+    # (which can also hold raw bytes). Numbers and dates can't.
+    for col in [c for c in df.columns if df[c].dtype == object or pd.api.types.is_string_dtype(df[c])]:
+        filled = df[col].dropna()
+        if filled.empty:
+            continue
+        is_img = filled.map(_is_image)
+        if not is_img.any():
+            continue
+        if is_img.mean() >= IMAGE_COLUMN_SHARE:
+            removed.append(str(col))
+        else:
+            df.loc[is_img[is_img].index, col] = pd.NA
+            blanked += int(is_img.sum())
+    return df.drop(columns=removed), removed, blanked
 
 
 def _tidy_text(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -798,6 +864,17 @@ def clean_dataframe(
     # Step 0b — header steps ("Use first row as headers", "Remove top rows").
     out, applied = tf.apply_raw_steps(out, steps, dedupe_column_names, keep=METADATA_COLUMNS)
 
+    # Step 0a — pictures stored in cells come out FIRST (nothing below should
+    # spend time on them, and they'd swell the download).
+    out, image_cols, image_cells = _remove_images(out)
+    if image_cols:
+        notes.append(f"Removed {'a column' if len(image_cols) == 1 else f'{len(image_cols)} columns'} of pictures "
+                     f"stored in the file ({', '.join(image_cols)}): pictures can't be analyzed and make the file "
+                     f"large and slow. {IMAGE_TIP}")
+    if image_cells:
+        notes.append(f"Removed {image_cells:,} picture{'s' if image_cells != 1 else ''} stored in text cells "
+                     f"(those cells are now empty). {IMAGE_TIP}")
+
     # Step 0 — lowercase snake_case column names (our own metadata columns keep
     # theirs), then the client's own names, then the header checks.
     originals = [str(c) for c in out.columns]
@@ -1030,6 +1107,8 @@ def clean_dataframe(
         duplicate_columns=duplicate_cols,
         rows_missing_id_removed=rows_missing_id,
         rows_missing_id=removed_for_id,
+        image_columns_removed=image_cols,
+        image_cells_removed=image_cells,
         notes=notes,
         runtime_seconds=round(time.perf_counter() - started, 4),
     )

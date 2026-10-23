@@ -80,6 +80,7 @@ Entity labels are a keyword-based guess and are shown to clients as such.
 
 | Step | What | Example |
 |---|---|---|
+| 0a. Pictures out (first) | Pictures stored IN cells — base64 / `data:image/...` text, raw image bytes, other binary blobs — are removed: a column that's mostly pictures is dropped, a stray picture in a text column is blanked. The note recommends links instead (`photo_url` pointing to Drive / Dropbox / S3). Pictures placed on an Excel sheet (not in a cell) are never read | `photo` column of `data:image/png;base64,…` → removed (`image_columns_removed`, `image_cells_removed`) |
 | 0. Column names | Lowercase snake_case: spaces/punctuation → `_`, camelCase split, accents removed, names kept unique | `Order Date` → `order_date`, `Unit Price ($)` → `unit_price`, `CustomerID` → `customer_id`, second `Amount` → `amount_2` |
 | 1. Tidy text | Trim spaces; blank text → missing | `" Acme "` → `"Acme"`, `"  "` → missing |
 | 2. Empty rows | Drop rows with no values at all | Blank lines at the bottom of a spreadsheet |

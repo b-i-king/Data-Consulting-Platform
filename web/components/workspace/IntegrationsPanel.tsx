@@ -48,6 +48,7 @@ import {
   getCloudTables,
   getConnections,
   getLiveDatasets,
+  getSheetTabs,
   getSupabaseProjects,
   startConnect,
   startSync,
@@ -66,6 +67,8 @@ import type {
 import DataRefresh from "@/components/billing/DataRefresh";
 import QuickLook from "@/components/workspace/QuickLook";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import SummarizePanel from "./SummarizePanel";
+import WarehouseCard from "./WarehouseCard";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   connected: { label: "Connected", cls: "bg-good/15 text-good" },
@@ -82,6 +85,10 @@ export default function IntegrationsPanel(props: {
   onOpenTable: (t: CloudTable) => void;
   /** Open a QuickBooks / Xero record type in the workspace (live, never stored). */
   onOpenLive: (connector: string, dataset: LiveDataset) => void;
+  /** Open one tab of a Google Sheet in the workspace (live, never stored). */
+  onOpenSheet?: (link: string, tab: string) => void;
+  /** Open a file read live from a source (a warehouse table, or a summary that ran in the source). */
+  onOpenFile?: (file: File, from: string, note: string | null) => void;
   /** After coming back from a provider's sign-in: what happened. */
   notice?: { ok: boolean; text: string } | null;
   /** Admins can connect their own Wave with a personal token (Wave's free plan). */
@@ -144,9 +151,15 @@ export default function IntegrationsPanel(props: {
           {info.connectors
             .filter((c) => c.kind === kind)
             .map((c) =>
-              c.connector === "supabase" ? (
+              ["snowflake", "bigquery", "salesforce"].includes(c.connector) ? (
+                <WarehouseCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
+                  onChanged={changed} onOpenFile={props.onOpenFile} />
+              ) : c.connector === "google_sheets" ? (
+                <GoogleSheetsCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
+                  onChanged={changed} onOpenSheet={props.onOpenSheet} />
+              ) : c.connector === "supabase" ? (
                 <SupabaseCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
-                  onChanged={changed} onOpenTable={props.onOpenTable} collapsible
+                  onChanged={changed} onOpenTable={props.onOpenTable} onOpenFile={props.onOpenFile} collapsible
                   defaultOpen={c.status === "connected"} />
               ) : (
                 <BusinessToolCard key={c.connector} token={props.token} connector={c} canChange={props.canChange}
@@ -378,6 +391,98 @@ function useConnect(token: string, connector: string, returnTo: "app" | "start" 
   return { go, busy, error };
 }
 
+/**
+ * Google Sheets: connect a Google account (read-only), paste a sheet's link,
+ * pick a tab and open it in the workspace — always the latest rows, nothing stored.
+ */
+function GoogleSheetsCard(props: {
+  token: string;
+  connector: DataConnection;
+  canChange: boolean;
+  onChanged: (connectors: DataConnection[]) => void;
+  onOpenSheet?: (link: string, tab: string) => void;
+}) {
+  const c = props.connector;
+  const connected = c.status === "connected";
+  const connect = useConnect(props.token, c.connector);
+  const [link, setLink] = useState("");
+  const [sheet, setSheet] = useState<{ title: string; tabs: { title: string; rows: number }[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function showTabs(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setSheet(await getSheetTabs(props.token, link));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We couldn't open that sheet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      props.onChanged((await disconnectIntegration(props.token, c.connector)).connectors);
+      setSheet(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "We couldn't disconnect.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="space-y-3">
+      <Header c={c} />
+      <p className="text-sm text-ink-muted">{c.about}</p>
+      {!connected ? (
+        c.sign_in ? (
+          <Button disabled={!props.canChange || connect.busy} onClick={connect.go}>
+            {connect.busy ? "Opening Google…" : "Connect Google Sheets"}
+          </Button>
+        ) : (
+          <p className="text-sm text-ink-muted">Coming soon.</p>
+        )
+      ) : (
+        <>
+          <p className="text-sm">
+            Connected: <strong>{c.display_name}</strong>. Read-only — we never change your sheets.
+          </p>
+          <form onSubmit={showTabs} className="flex flex-wrap gap-2">
+            <input className="min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 py-2 text-sm" value={link}
+              onChange={(e) => setLink(e.target.value)} placeholder="Paste your sheet's link (docs.google.com/spreadsheets/d/…)"
+              aria-label="Google Sheet link" />
+            <Button type="submit" variant="secondary" disabled={busy || !link.trim()}>Show tabs</Button>
+          </form>
+          {sheet && (
+            <ul className="space-y-2">
+              {sheet.tabs.map((t) => (
+                <li key={t.title} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line px-3 py-2 text-sm">
+                  <span>
+                    <strong>{sheet.title}</strong> › {t.title}
+                  </span>
+                  <Button variant="secondary" disabled={!props.onOpenSheet} onClick={() => props.onOpenSheet?.(link, t.title)}>
+                    Open in workspace
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {props.canChange && (
+            <Button variant="secondary" disabled={busy} onClick={disconnect}>Disconnect</Button>
+          )}
+        </>
+      )}
+      <ErrorBox message={error ?? connect.error} />
+    </Card>
+  );
+}
+
 /** QuickBooks / Xero: connect, quick look, open records, disconnect. Also used by Get Started (connectOnly). */
 export function BusinessToolCard(props: {
   token: string;
@@ -547,6 +652,7 @@ export function SupabaseCard(props: {
   canChange: boolean;
   onChanged: (connectors: DataConnection[]) => void;
   onOpenTable: (t: CloudTable) => void;
+  onOpenFile?: (file: File, from: string, note: string | null) => void;
   /** The button on each table (default "Open in workspace"). */
   openLabel?: string;
   /** Where "Sign in with Supabase" sends the person back. */
@@ -555,6 +661,7 @@ export function SupabaseCard(props: {
   collapsible?: boolean;
   defaultOpen?: boolean;
 }) {
+  const [summarizing, setSummarizing] = useState<string | null>(null);   // the table whose Summarize form shows
   const c = props.connector;
   const connected = c.status === "connected";
   const [open, setOpen] = useState(!props.collapsible || !!props.defaultOpen);
@@ -673,7 +780,7 @@ export function SupabaseCard(props: {
                     ) : (
                       <ul className="divide-y divide-line">
                         {withData.map((t) => (
-                          <li key={t.name} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                          <li key={t.name} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm">
                             <span>
                               <span className="font-mono">{t.name}</span>
                               <span className="ml-2 text-xs text-ink-muted">
@@ -681,9 +788,21 @@ export function SupabaseCard(props: {
                                 {t.rows_estimate > 0 && ` · ~${fmtInt(t.rows_estimate)} rows`}
                               </span>
                             </span>
-                            <Button variant="secondary" onClick={() => props.onOpenTable(t)}>
-                              {props.openLabel ?? "Open in workspace"}
-                            </Button>
+                            <span className="flex gap-2">
+                              {props.onOpenFile && (
+                                // Do the math in their database; only the answer comes back.
+                                <Button variant="secondary" onClick={() => setSummarizing(summarizing === `${t.schema}.${t.name}` ? null : `${t.schema}.${t.name}`)}>
+                                  Summarize
+                                </Button>
+                              )}
+                              <Button variant="secondary" onClick={() => props.onOpenTable(t)}>
+                                {props.openLabel ?? "Open in workspace"}
+                              </Button>
+                            </span>
+                            {props.onOpenFile && summarizing === `${t.schema}.${t.name}` && (
+                              <SummarizePanel token={props.token} connector="supabase" table={`${t.schema}.${t.name}`}
+                                sourceName="your database" onOpenFile={props.onOpenFile} />
+                            )}
                           </li>
                         ))}
                       </ul>

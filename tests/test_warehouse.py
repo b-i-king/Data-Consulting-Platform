@@ -388,3 +388,30 @@ def test_records_storage_packs_and_unpacks_without_losing_anything():
     # A line with no numbers comes back as its one NO_METRIC row.
     empty = warehouse_store._unpack([{**stored[0], "metrics": {}}], {})
     assert [r["field_name"] for r in empty] == [unified.NO_METRIC]
+
+
+def test_uploading_the_same_spreadsheet_again_shows_whats_new_and_updates_it():
+    """Same file name, rows and a column added, one amount changed: the preview says what's new; the load updates."""
+    coach = _signup("coach@example.com", "Coach")["access_token"]
+    client_id = _signup("ana@example.com", wants_consultant=True)["account"]["id"]
+    h = _h(coach, client_id)
+    first = client.post("/api/warehouse/preview", headers=h, files=_files()).json()
+    assert first["changes"] is None                                   # nothing stored under this name yet
+    client.post("/api/warehouse/load", headers=h, files=_files(),
+                data={"fingerprint": first["fingerprint"], "consent": "true"})
+
+    lines = SALES.decode().splitlines()
+    header = lines[0] + ",store"
+    body = [ln + ",Midtown" for ln in lines[1:]]
+    body[0] = body[0].replace(",Card,", ",Cash,")                   # one existing row edited
+    body += ["2001,2024-11-01,101,Bagel,Bread,5.5,Card,Midtown", "2002,2024-11-02,102,Latte,Drinks,4.0,Card,Decatur"]
+    grown = ("\n".join([header, *body]) + "\n").encode()
+    again = client.post("/api/warehouse/preview", headers=h, files=_files(grown)).json()
+    ch = again["changes"]
+    assert ch["source"] == "sales.csv" and ch["new_rows"] == 2 and ch["new_columns"] == ["store"]
+    assert ch["changed_rows"] >= 1 and ch["removed_columns"] == []   # the new column changes every old row too
+    loaded = client.post("/api/warehouse/load", headers=h, files=_files(grown),
+                         data={"fingerprint": again["fingerprint"]}).json()["result"]
+    assert loaded["rows_loaded"] > 0 and loaded["rows_updated"] > 0  # consent remembered: one click
+    after = client.post("/api/warehouse/preview", headers=h, files=_files(grown)).json()["changes"]
+    assert after["new_rows"] == 0 and after["changed_rows"] == 0     # stored copy is now up to date

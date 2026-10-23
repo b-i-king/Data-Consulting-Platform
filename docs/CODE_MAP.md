@@ -99,6 +99,8 @@ services the client chose are offered; the rest are badges from
 | `web/components/home/PartnerCarousel.tsx`, `ThemedLogo.tsx`, `web/components/workspace/PartnerCard.tsx`, `AdminPartners.tsx` | The carousel; each logo drawn as a silhouette in the theme's colors; the business's application (Settings → Account); the admin review and "Add a company you work with" | How partners look and apply |
 | `web/lib/faq.ts` + `web/components/FaqSection.tsx` | The FAQ: home page (with Google's FAQ markup) and Settings → Help & FAQ | Changing a question or answer |
 | `web/components/SiteMenu.tsx` | The header's ☰ menu: Sign in (or Help & FAQ), the home page's sections, the legal pages | Header links |
+| `api/services/pushdown.py` + `api/services/warehouses.py` + `web/components/workspace/SummarizePanel.tsx`, `WarehouseCard.tsx` | Summarize IN the client's source (PostgreSQL / Redshift, Snowflake, BigQuery, Salesforce): the checked summary request, the query per source, the connectors | Adding a warehouse, or a new kind of summary ([CONNECTORS.md](CONNECTORS.md)) |
+| `api/services/google_sheets.py` | "Connect Google Sheets": a tab read live, read-only | Google Sheets |
 | `api/services/integration_slots.py` | Business tools come with a paid plan; frees spots held by ended plans when a tool is full; Disconnect | Who may connect QuickBooks / Xero / Wave ([CONNECTORS.md](CONNECTORS.md)) |
 | `api/services/xero_guard.py` | Keeps Xero data away from AI and ML (Xero's terms): fingerprints the Xero files the API sends; the AI endpoint and ML / AI skills refuse them | What's off for Xero data |
 | `api/services/business_tools.py` | QuickBooks, Xero and Wave read live: the quick look, the record types, one record type as CSV (never stored) | QuickBooks / Xero numbers |

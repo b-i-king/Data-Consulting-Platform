@@ -30,7 +30,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Annotated
-from urllib.parse import urlencode
+import json
+import re
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse, Response
@@ -38,7 +40,7 @@ from fastapi.responses import RedirectResponse, Response
 from api.core.config import get_settings
 from api.core.security import get_acting_context
 from api.models.accounts import CloudConnectIn, RefreshIn, SupabaseProjectIn, SyncIn, WaveTokenIn
-from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, hipaa, integration_slots, oauth, sync, teams, xero_guard
+from api.services import account_store, audit, business_tools, cloud_sources, connections, entitlements, google_sheets, hipaa, integration_slots, oauth, sync, teams, warehouses, xero_guard
 from api.services.pricing import refresh_catalog
 
 router = APIRouter(prefix="/connections")
@@ -235,6 +237,157 @@ def _csv_response(r: dict, filename: str) -> Response:
                     headers={"Content-Disposition": f'attachment; filename="{filename}"',
                              "X-Data-Origin": "cloud", "X-Rows": str(r["rows"]),
                              "X-Truncated": "true" if r["truncated"] else "false"})
+
+
+# ── Warehouses and Salesforce: summarize where the data lives (warehouses.py, pushdown.py) ──
+
+WAREHOUSE_SOURCES = ("supabase", "snowflake", "bigquery", "salesforce")
+
+
+async def _warehouse_source(ctx: dict, connector: str) -> dict:
+    """What a warehouse runner needs: the PostgreSQL source, the saved key / service account, or the Salesforce sign-in."""
+    if connector not in WAREHOUSE_SOURCES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown data source.")
+    if connector == "supabase":
+        src = await _supabase_source(ctx)
+        if src["mode"] == "oauth" and not src["ref"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="Choose a Supabase project first.")
+        return src
+    holder = await entitlements.plan_holder_id(ctx["account"])
+    if connector == "salesforce":
+        _, creds = await oauth.load(holder, "salesforce")
+        return {"token": creds["tokens"]["access_token"], "rest": creds["extra"]["rest"]}
+    row = await account_store.get_integration(holder, connector)
+    if not row or not row.get("credentials_encrypted"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"{connections.CONNECTORS[connector]['name']} isn't connected.")
+    return {"creds": warehouses.unpack_creds(row["credentials_encrypted"])}
+
+
+async def _save_warehouse(ctx: dict, connector: str, creds: dict, label: str) -> dict:
+    """Check the credentials really work (list the tables), then save them encrypted."""
+    holder = await _holder_only(ctx)
+    found = await warehouses.tables(connector, {"creds": creds})
+    await account_store.save_integration(
+        account_id=holder, connector=connector, kind="cloud_storage", display_name=label,
+        credentials_encrypted=warehouses.pack_creds(creds),
+        consultant_id=str(ctx["consultant"]["id"]) if ctx["acting"] else None)
+    return {"connectors": connections.connector_list(await account_store.list_connections(holder)), "tables": found}
+
+
+@router.post("/snowflake")
+async def connect_snowflake(body: dict, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/connections/snowflake {"account", "user", "private_key", "warehouse", "database", "schema"?, "role"?}
+
+    A read-only Snowflake user signed in with a key pair (no password). Checked (it
+    lists tables) before it's saved, encrypted.
+
+    Raises:
+        HTTPException: 400 a missing field, a bad account name or key, or Snowflake refusing.
+    """
+    need = ("account", "user", "private_key", "warehouse", "database")
+    if any(not str(body.get(k) or "").strip() for k in need):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Please fill in: {', '.join(need)}.")
+    account = str(body["account"]).strip()
+    # The account becomes part of a web address: letters, digits, dots, dashes and underscores only.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", account) or ".." in account:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="The account should look like myorg-myaccount (from your Snowflake URL).")
+    creds = {k: str(body.get(k) or "").strip() for k in (*need, "schema", "role")}
+    creds["account"] = account
+    return await _save_warehouse(ctx, "snowflake", creds, f"Snowflake: {account} / {creds['database'].upper()}")
+
+
+@router.post("/bigquery")
+async def connect_bigquery(body: dict, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/connections/bigquery {"service_account_json": "<the key file's text>", "location"?: "US"}
+
+    A service account with only BigQuery Data Viewer + Job User. Checked (it lists
+    datasets) before it's saved, encrypted.
+
+    Raises:
+        HTTPException: 400 not a service account key file, or Google refusing it.
+    """
+    try:
+        sa = json.loads(str(body.get("service_account_json") or ""))
+        assert sa.get("type") == "service_account" and sa["client_email"] and sa["private_key"] and sa["project_id"]
+    except (ValueError, AssertionError, KeyError, TypeError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Paste the whole service-account key file (JSON) from Google Cloud.")
+    creds = {"service_account": {"client_email": sa["client_email"], "private_key": sa["private_key"],
+                                 # Always Google's own token address — never one from the pasted file.
+                                 "token_uri": "https://oauth2.googleapis.com/token"},
+             "project": sa["project_id"], "location": str(body.get("location") or "").strip() or None}
+    return await _save_warehouse(ctx, "bigquery", creds, f"BigQuery: {sa['project_id']}")
+
+
+@router.get("/{connector}/warehouse/tables")
+async def warehouse_tables(connector: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """GET /api/connections/{snowflake|bigquery|salesforce}/warehouse/tables — the tables (objects) to analyze."""
+    return {"tables": await warehouses.tables(connector, await _warehouse_source(ctx, connector))}
+
+
+@router.get("/{connector}/warehouse/columns")
+async def warehouse_columns(connector: str, table: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """GET /api/connections/{connector}/warehouse/columns?table=... — columns and kinds (number / date / text)."""
+    cols = await warehouses.columns(connector, await _warehouse_source(ctx, connector), table)
+    return {"columns": [{"name": n, "kind": k} for n, k in cols.items()]}
+
+
+@router.post("/{connector}/warehouse/summarize")
+async def warehouse_summarize(connector: str, body: dict, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    POST /api/connections/{connector}/warehouse/summarize
+    {"table", "agg", "metric", "group_by": [...], "date_column", "period", "limit"}
+
+    The math runs IN the client's source (pushdown.py); only the answer comes back,
+    as CSV, opened like a file. The exact query that ran is in the X-Query header
+    (shown to the client — nothing hidden). Works for the PostgreSQL database
+    ("supabase"), Snowflake, BigQuery and Salesforce.
+    """
+    table = str(body.get("table") or "")
+    r = await warehouses.summarize(connector, await _warehouse_source(ctx, connector), table, body)
+    await audit.record(ctx, "view_live", {"tool": connector, "dataset": table, "summary": True})
+    res = _csv_response(r, f"{r['name']}.csv")
+    res.headers["X-Query"] = quote(r["query"])
+    return res
+
+
+@router.get("/{connector}/warehouse/table")
+async def warehouse_table(connector: str, table: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """GET /api/connections/{snowflake|bigquery|salesforce}/warehouse/table?table=... — the table, capped, as CSV."""
+    r = await warehouses.sample(connector, await _warehouse_source(ctx, connector), table)
+    await audit.record(ctx, "view_live", {"tool": connector, "dataset": table})
+    return _csv_response(r, f"{r['name']}.csv")
+
+
+@router.get("/google_sheets/tabs")
+async def google_sheet_tabs(link: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    GET /api/connections/google_sheets/tabs?link=<the sheet's link> — the sheet's title and tabs (read-only).
+
+    Raises:
+        HTTPException: 404 not connected / can't open that sheet; 400 not a Sheets link.
+    """
+    holder = await entitlements.plan_holder_id(ctx["account"])
+    _, creds = await oauth.load(holder, "google_sheets")
+    return await google_sheets.tabs(creds["tokens"]["access_token"], link)
+
+
+@router.get("/google_sheets/tab")
+async def google_sheet_tab(link: str, tab: str, ctx: Annotated[dict, Depends(get_acting_context)]):
+    """
+    GET /api/connections/google_sheets/tab?link=...&tab=Sales — one tab as CSV, live, never stored.
+
+    Returns:
+        Response: text/csv with X-Rows and X-Truncated (like /supabase/table).
+    """
+    holder = await entitlements.plan_holder_id(ctx["account"])
+    _, creds = await oauth.load(holder, "google_sheets")
+    r = await google_sheets.read_tab_csv(creds["tokens"]["access_token"], link, tab)
+    await audit.record(ctx, "view_live", {"tool": "google_sheets", "dataset": tab})   # healthcare clients only
+    return _csv_response(r, f"{r['name']}.csv")
 
 
 @router.get("/supabase/table")

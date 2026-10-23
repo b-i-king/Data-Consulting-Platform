@@ -83,6 +83,27 @@ PROVIDERS: dict[str, dict] = {
         "pkce": False,
         "client_auth": "body",       # Wave takes the client ID and secret as form fields
     },
+    "google_sheets": {
+        "name": "Google Sheets",
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "revoke_url": "https://oauth2.googleapis.com/revoke",
+        # Read-only: we can open the client's sheets, never change them. "email" = whose account it is.
+        "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly",
+        "pkce": True,
+        # Google gives a refresh token (to keep reading later) only when asked for "offline" access.
+        "extra_params": {"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"},
+    },
+    "salesforce": {
+        "name": "Salesforce",
+        "authorize_url": "https://login.salesforce.com/services/oauth2/authorize",
+        "token_url": "https://login.salesforce.com/services/oauth2/token",
+        "revoke_url": "https://login.salesforce.com/services/oauth2/revoke",
+        # "api" = read the org's records (we only ever run SELECT queries); "refresh_token" = keep access.
+        "scope": "api refresh_token",
+        "pkce": True,
+        "client_auth": "body",
+    },
     "supabase": {
         "name": "Supabase",
         "authorize_url": "https://api.supabase.com/v1/oauth/authorize",
@@ -101,6 +122,8 @@ def _keys(provider: str) -> tuple[str, str]:
         "quickbooks": (s.quickbooks_client_id, s.quickbooks_client_secret),
         "xero": (s.xero_client_id, s.xero_client_secret),
         "supabase": (s.supabase_oauth_client_id, s.supabase_oauth_client_secret),
+        "google_sheets": (s.google_client_id, s.google_client_secret),
+        "salesforce": (s.salesforce_client_id, s.salesforce_client_secret),
         "wave": (s.wave_client_id, s.wave_client_secret),
     }.get(provider, ("", ""))
 
@@ -214,6 +237,7 @@ def authorize_url(provider: str, account_id: str, consultant_id: str | None = No
     scope = get_settings().wave_scopes if provider == "wave" else p["scope"]
     if scope:
         params["scope"] = scope
+    params.update(p.get("extra_params", {}))
     params["state"] = make_state(provider, account_id, consultant_id, verifier, return_to)
     return f"{p['authorize_url']}?{urlencode(params)}"
 
@@ -334,8 +358,20 @@ async def finish_connect(provider: str, tokens: dict, realm_id: str = "") -> tup
     Returns:
         tuple[str, dict]: (display_name, extra).
     """
-    from api.services import business_tools, cloud_sources
+    from api.services import business_tools, cloud_sources, google_sheets
 
+    if provider == "google_sheets":
+        return f"Google Sheets: {await google_sheets.account_email(tokens['access_token'])}", {}
+    if provider == "salesforce":
+        # Which org, and its REST address (orgs live on different servers).
+        async with http_client() as http:
+            res = await http.get("https://login.salesforce.com/services/oauth2/userinfo",
+                                 headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        if res.status_code != 200:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Salesforce didn't say which org was connected.")
+        info = res.json()
+        rest = info["urls"]["rest"].replace("{version}", "61.0")
+        return f"Salesforce: {info.get('preferred_username') or info.get('organization_id')}", {"rest": rest}
     if provider == "quickbooks":
         if not realm_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="QuickBooks didn't say which company was connected.")

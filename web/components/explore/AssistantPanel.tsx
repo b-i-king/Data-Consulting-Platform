@@ -28,6 +28,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { askAi, getAiUsage, getDashboards, getDashboardSuggestions } from "@/lib/api";
+import SampleQuestions from "./SampleQuestions";
 import { fmtDate, fmtInt } from "@/lib/format";
 import type { AiUsage, CleaningInput, SkillResult } from "@/lib/types";
 import { Button, Card } from "@/components/wizard/ui";
@@ -194,6 +195,8 @@ export default function AssistantPanel(props: {
 
       {/* ── The side column: allowance, ideas, the table, how it works ── */}
       <div className="min-w-0 space-y-4">
+        {/* Sample questions for the client's industry (or any other), with this table's columns. */}
+        <SampleQuestions token={props.token} columns={props.columns} onPick={(q) => setText(q)} />
         <Card className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Beacon questions this month</h3>

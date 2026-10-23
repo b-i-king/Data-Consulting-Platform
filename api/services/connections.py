@@ -65,6 +65,25 @@ CONNECTORS: dict[str, dict] = {
                       "(Wave's API doesn't share expenses). Needs Wave Pro, and any paid plan here (on the free plan, "
                       "upload an export). Storing it on your schedule comes with "
                       "Data Engineering."},
+    "google_sheets": {"name": "Google Sheets", "kind": "cloud_storage", "available": False, "stores_data": False,
+                      "sign_in": True, "live": False,
+                      "about": "Keep your data in a Google Sheet you add to every day? Connect your Google account "
+                               "(read-only), paste the sheet's link and open any tab — always the latest rows, "
+                               "nothing copied."},
+    "snowflake": {"name": "Snowflake", "kind": "cloud_storage", "available": True, "stores_data": False,
+                  "sign_in": False, "live": False,
+                  "about": "Your Snowflake warehouse, read where it lives: summaries run IN Snowflake (only the "
+                           "answer comes back), or open a table (first 20,000 rows). Connect a read-only user with "
+                           "a key pair — no password stored."},
+    "bigquery": {"name": "Google BigQuery", "kind": "cloud_storage", "available": True, "stores_data": False,
+                 "sign_in": False, "live": False,
+                 "about": "Your BigQuery datasets, read where they live: summaries run IN BigQuery with a cap on "
+                          "bytes scanned (so your bill can't run away); opening a table uses BigQuery's free preview. "
+                          "Connect a service account with BigQuery Data Viewer + Job User."},
+    "salesforce": {"name": "Salesforce", "kind": "cloud_storage", "available": False, "stores_data": False,
+                   "sign_in": True, "live": False,
+                   "about": "Your Salesforce org: summarize any object (opportunities by stage per month, accounts "
+                            "by industry…) in Salesforce itself, or open up to 2,000 records. Read-only queries."},
     "supabase": {"name": "Supabase / PostgreSQL database", "kind": "cloud_storage", "available": True, "stores_data": False,
                  "sign_in": False, "live": False,
                  "about": "Your own Supabase database — or any PostgreSQL, such as Amazon RDS / Aurora PostgreSQL, "
@@ -82,15 +101,15 @@ KINDS = {"cloud_storage": "Cloud storage", "business_tool": "Business tools"}
 # with the questionnaire's options (api/services/intake.py DATA_LOCATIONS).
 # When one is built, move it into CONNECTORS and delete it here.
 COMING_SOON: list[dict] = [
-    {"name": "Snowflake", "kind": "cloud_storage", "when": "soon"},
-    {"name": "Google BigQuery", "kind": "cloud_storage", "when": "soon"},
-    {"name": "Amazon Redshift", "kind": "cloud_storage", "when": "soon"},
+    # Snowflake, BigQuery, Salesforce and Google Sheets are real connectors now (CONNECTORS above);
+    # Amazon Redshift connects through the PostgreSQL card.
+    {"name": "Amazon Athena (S3)", "kind": "cloud_storage", "when": "soon"},
     {"name": "MySQL (incl. Amazon RDS / Aurora MySQL)", "kind": "cloud_storage", "when": "soon"},
     {"name": "Microsoft SQL Server / Azure SQL", "kind": "cloud_storage", "when": "soon"},
     {"name": "Databricks", "kind": "cloud_storage", "when": "later"},
     {"name": "Microsoft Fabric / Azure Synapse", "kind": "cloud_storage", "when": "later"},
     {"name": "Amazon S3 (files)", "kind": "cloud_storage", "when": "later"},
-    {"name": "Google Drive / Sheets", "kind": "cloud_storage", "when": "later"},
+    {"name": "Google Drive (files)", "kind": "cloud_storage", "when": "later"},
     {"name": "Square", "kind": "business_tool", "when": "soon"},
     {"name": "Shopify", "kind": "business_tool", "when": "soon"},
     {"name": "Stripe", "kind": "business_tool", "when": "soon"},
@@ -99,7 +118,6 @@ COMING_SOON: list[dict] = [
     {"name": "Clover", "kind": "business_tool", "when": "later"},
     {"name": "Toast", "kind": "business_tool", "when": "later"},
     {"name": "HubSpot", "kind": "business_tool", "when": "later"},
-    {"name": "Salesforce", "kind": "business_tool", "when": "later"},
 ]
 
 # The tool a client needs before any connector can store data for them.

@@ -77,11 +77,15 @@ async def lifespan(_app: FastAPI):
 
 monitoring.init()   # error reports with personal data stripped (only when SENTRY_DSN is set)
 
+_docs = get_settings().show_api_docs   # hidden on the live server (config.py, API_DOCS)
 app = FastAPI(
     title="Data Consulting Platform API",
     description="Guest-friendly data intake, automatic cleaning, and consultant hand-off.",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
 )
 
 # Per-IP request limits (api/core/rate_limit.py). Added BEFORE CORS so CORS
@@ -95,7 +99,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD", "X-Rows", "X-Truncated", "Retry-After"],
+    expose_headers=["Content-Disposition", "X-Runtime-Seconds", "X-Amount-USD", "X-Rows", "X-Truncated", "Retry-After",
+                    "X-Query"],
 )
 
 # Compress responses over 1 KB. The data preview (JSON) and CSV downloads

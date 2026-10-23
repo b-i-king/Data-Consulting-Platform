@@ -551,3 +551,50 @@ async def mgmt_read_table_csv(token: str, ref: str, schema: str, name: str, limi
         raise HTTPException(422, detail=f"{schema}.{name} has rows too large to open here." if cut
                             else f"{schema}.{name} has no rows yet, so there is nothing to analyze.")
     return {"csv": out.getvalue(), "rows": rows, "columns": columns, "truncated": cut or more}
+
+
+
+# ── Summaries in the client's database (api/services/pushdown.py) ────────────
+
+async def run_select(src: dict, sql: str) -> tuple[list[str], list[list]]:
+    """
+    Run ONE generated SELECT (a pushdown summary or a catalog lookup) in the
+    client's database, read-only; returns (column names, rows).
+
+    `src` is the connections router's _supabase_source: a pasted connection
+    string ("dsn" — PostgreSQL, Supabase or AWS Redshift's PostgreSQL endpoint)
+    or "Sign in with Supabase" ("oauth", through the read-only query endpoint).
+    """
+    if src["mode"] == "dsn":
+        conn = await _connect(src["dsn"])
+        try:
+            async with conn.transaction(readonly=True):
+                recs = await conn.fetch(sql)
+        except asyncpg.PostgresError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"The database couldn't run that summary: {str(exc).splitlines()[0][:200]}")
+        finally:
+            await conn.close()
+        cols = list(recs[0].keys()) if recs else []
+        return cols, [list(r.values()) for r in recs]
+    rows = await mgmt_query(src["token"], src["ref"], sql)
+    cols = list(rows[0]) if rows else []
+    return cols, [[r.get(c) for c in cols] for r in rows]
+
+
+async def table_columns(src: dict, table: str) -> dict[str, str]:
+    """
+    A table's columns and their kinds ("number" / "date" / "text"), from the catalog.
+
+    Raises:
+        HTTPException: 404 when it isn't one of the client's tables (names are never trusted as typed).
+    """
+    from api.services.warehouses import kind_of   # here: warehouses imports this module
+
+    schema, _, name = table.partition(".")
+    _, rows = await run_select(src, "SELECT column_name, data_type FROM information_schema.columns "
+                                    f"WHERE table_schema = {_literal(schema)} AND table_name = {_literal(name)} "
+                                    "ORDER BY ordinal_position")
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That table wasn't found.")
+    return {str(c): kind_of(str(t)) for c, t in rows}

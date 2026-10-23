@@ -138,9 +138,9 @@ SALES = (__import__("pathlib").Path(__file__).resolve().parents[1] / "samples" /
 
 
 def test_list_skills():
-    """Check that GET /api/skills lists all 34 skills, spread across the service categories."""
+    """Check that GET /api/skills lists all 35 skills, spread across the service categories."""
     skills = client.get("/api/skills").json()
-    assert len(skills) == 34
+    assert len(skills) == 35
     assert {s["category"] for s in skills} >= {"data_cleaning", "data_visualization", "ai"}
 
 
@@ -365,3 +365,16 @@ def test_transform_steps_apply_to_analyze_and_skills(admin):
     assert res.status_code == 200, res.text
     bad = client.post("/api/files/analyze", files=_files(("w.csv", csv)), data={"transforms": '{"0": [{"op": "x"}]}'})
     assert bad.status_code == 400 and "unknown step" in bad.json()["detail"]
+
+
+def test_api_docs_are_hidden_on_the_live_server(monkeypatch):
+    """/docs shows locally; on Render (RENDER=true) it's hidden unless API_DOCS=true."""
+    from api.core.config import Settings
+
+    monkeypatch.delenv("API_DOCS", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    assert Settings().show_api_docs is True
+    monkeypatch.setenv("RENDER", "true")
+    assert Settings().show_api_docs is False
+    monkeypatch.setenv("API_DOCS", "true")
+    assert Settings().show_api_docs is True

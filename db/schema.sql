@@ -366,6 +366,16 @@ CREATE INDEX IF NOT EXISTS idx_consultant_applications_account
 CREATE INDEX IF NOT EXISTS idx_consultant_applications_pending
     ON dim.consultant_applications (submitted_at) WHERE status = 'pending';
 
+-- ── dim.app_settings: platform-wide switches an admin flips (no redeploy) ──
+-- One row per setting. Today: "sales_open" (true / false) — can customers buy
+-- plans and consultant help yet? (api/services/sales.py)
+CREATE TABLE IF NOT EXISTS dim.app_settings (
+    key         TEXT PRIMARY KEY,
+    value       JSONB NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  UUID REFERENCES dim.accounts (id) ON DELETE SET NULL   -- the admin
+);
+
 -- ── dim.partners: businesses shown in the home page's "Trusted by" carousel ──
 -- One row per partner (api/services/partners.py): a business account that
 -- applied (source 'platform', account_id set), or a company an ADMIN added
@@ -1196,7 +1206,7 @@ BEGIN
                              'storage_consents', 'load_runs', 'data_connections', 'dashboard_tabs', 'question_log',
                              'api_usage', 'ai_usage', 'plan_prices', 'account_deletions', 'seasonal_sales',
                              'sessions', 'audit_log', 'consultant_invites', 'consultant_applications',
-                             'consultant_engagements', 'consulting_prices', 'partners']
+                             'consultant_engagements', 'consulting_prices', 'partners', 'app_settings']
     LOOP
         EXECUTE format('ALTER TABLE dim.%I ENABLE ROW LEVEL SECURITY', t);
     END LOOP;

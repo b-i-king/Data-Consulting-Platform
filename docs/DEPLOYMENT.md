@@ -100,6 +100,11 @@ the create page):
 | Variable | Value |
 |---|---|
 | `PYTHON_VERSION` | `3.12.7` (Render's default Python may be newer than the libraries support) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | optional: "Connect Google Sheets" (read-only). Setup steps in [CONNECTORS.md](CONNECTORS.md#google-sheets-live-read-only) |
+| `SALESFORCE_CLIENT_ID`, `SALESFORCE_CLIENT_SECRET` | optional: "Connect Salesforce" (a Connected App; [CONNECTORS.md](CONNECTORS.md#warehouses-and-salesforce-summarize-where-the-data-lives)) |
+| `BIGQUERY_MAX_BYTES` | optional: the most bytes one BigQuery summary may scan in a client's project (default 10 GB) |
+| `SALES_OPEN` | leave unset during the beta (purchases closed); after that, flip it in Administration → Purchases instead (that switch wins) |
+| `API_DOCS` | leave unset: `/docs`, `/redoc` and `/openapi.json` are hidden on Render and shown on your computer; `true` shows them on Render too |
 | `JWT_SECRET_KEY` | a long random string — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`; keep it secret |
 | `ALLOWED_ORIGINS` | your Vercel URL, e.g. `https://your-site.vercel.app` (comma-separate several; a trailing `/` is ignored) |
 | `ALLOWED_ORIGIN_REGEX` | optional, e.g. `https://your-site-.*\.vercel\.app` for Vercel preview links |

@@ -421,3 +421,37 @@ def test_delete_my_account_removes_everything():
     client.request("DELETE", "/api/accounts/me", headers=_auth(kim), json={"confirm_email": "kim@example.com"})
     me = client.get("/api/accounts/me", headers=_auth(sam["access_token"])).json()
     assert me["consultant_name"] is None and me["wants_consultant"]
+
+
+def test_admin_moves_a_client_to_another_consultant():
+    """Admin reassigns a client: the new consultant can open them, the old one can't, old ongoing help ends now."""
+    import asyncio
+
+    admin = _signup("brandon@example.com", "Brandon", signup_as="admin").json()
+    h = _auth(admin["access_token"])
+    kim, lee = _signup("kim@example.com", "Kim").json(), _signup("lee@example.com", "Lee").json()
+    for who in (kim, lee):
+        apply_as_consultant(client, h, who["access_token"], who["account"]["email"])
+        client.post(f"/api/admin/consultant-requests/{who['account']['id']}/approve", headers=h)
+    kim_c = asyncio.run(account_store.get_consultant_by_account(kim["account"]["id"]))
+    lee_c = asyncio.run(account_store.get_consultant_by_account(lee["account"]["id"]))
+    ana = _signup("ana@example.com", "Ana", wants_consultant=True, consultant_id=kim_c["id"]).json()
+    ana_id = ana["account"]["id"]
+    assert account_store._accounts[ana_id]["consultant_id"] == kim_c["id"]
+    asyncio.run(account_store.create_engagement(account_id=ana_id, consultant_id=kim_c["id"], kind="retainer",
+                                                amount_usd=200.0, platform_fee_percent=20, status="active",
+                                                billing_interval="month"))
+
+    url = f"/api/admin/clients/{ana_id}/reassign"
+    assert client.post(url, headers=_auth(kim["access_token"]), json={"consultant_id": lee_c["id"]}).status_code == 403
+    assert client.post(url, headers=h, json={"consultant_id": kim_c["id"]}).status_code == 400        # already theirs
+    assert client.post(url, headers=h, json={"consultant_id": "nope"}).status_code == 404
+    assert client.post(f"/api/admin/clients/{kim['account']['id']}/reassign", headers=h,
+                       json={"consultant_id": lee_c["id"]}).status_code == 400                       # a consultant
+    moved = client.post(url, headers=h, json={"consultant_id": lee_c["id"]}).json()
+    assert moved["from"] == "Kim Lee" and moved["to"] == "Lee Lee" and moved["client"] == "Ana Lee"
+    assert [e["amount_usd"] for e in moved["help_ended"]] == [200.0]                                  # refund to-do
+    assert account_store._accounts[ana_id]["consultant_id"] == lee_c["id"]
+    # Lee can open Ana's workspace now; Kim can't.
+    assert client.get("/api/accounts/services", headers=_auth(lee["access_token"], ana_id)).status_code == 200
+    assert client.get("/api/accounts/services", headers=_auth(kim["access_token"], ana_id)).status_code == 403

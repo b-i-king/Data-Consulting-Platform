@@ -30,6 +30,8 @@ import { Button, Card, ConfirmDialog, ErrorBox } from "@/components/wizard/ui";
 import AdminConsultantRequests from "./AdminConsultantRequests";
 import AdminHipaa from "./AdminHipaa";
 import AdminPartners from "./AdminPartners";
+import AdminReassign from "./AdminReassign";
+import AdminSalesSwitch from "./AdminSalesSwitch";
 import AdminConsultingPrices from "./AdminConsultingPrices";
 import AdminPrices from "./AdminPrices";
 import AdminSales from "./AdminSales";
@@ -94,6 +96,7 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
       {!data && !error && <p className="text-sm text-ink-muted">Loading…</p>}
 
       {data && <AdminConsultantRequests token={token} data={data} onData={setData} onChanged={onChanged} />}
+      {data && <AdminReassign token={token} team={data.team} onChanged={() => getAdminPanel(token).then(setData).catch(() => {})} />}
 
       {data && (
         <Card>
@@ -185,6 +188,7 @@ export default function AdminPanel({ token, onChanged }: { token: string; onChan
         </ConfirmDialog>
       )}
 
+      <AdminSalesSwitch token={token} />
       <AdminPartners token={token} />
       <AdminHipaa token={token} />
       <AdminPrices token={token} />

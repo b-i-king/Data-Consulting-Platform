@@ -40,3 +40,19 @@ def fresh_skill_previews():
     skill_access._previews.clear()
     yield
     skill_access._previews.clear()
+
+
+
+@pytest.fixture(autouse=True)
+def sales_open():
+    """
+    Purchases are OPEN in tests (api/services/sales.py defaults to closed for the beta),
+    so checkout tests test checkout; tests/test_sales_switch.py closes them on purpose.
+    """
+    from api.services import account_store, sales
+
+    account_store._settings["sales_open"] = True
+    sales.forget()
+    yield
+    account_store._settings.pop("sales_open", None)
+    sales.forget()

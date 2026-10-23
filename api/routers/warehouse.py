@@ -194,7 +194,11 @@ async def preview_load(
         round-trip check, counts, fingerprint, ready/problem) plus "storage":
         {"mode", "consented", "terms_version"} and "duplicates": {"records",
         "of", "record_ids", "sources"} — records already stored from ANOTHER
-        source (api/services/dedupe.py), which the load can skip.
+        source (api/services/dedupe.py), which the load can skip; and "changes" —
+        when a file with this name is already stored (the same spreadsheet with
+        rows or columns added): {"new_rows", "changed_rows", "unchanged_rows",
+        "rows_not_in_file", "new_columns", "removed_columns"}
+        (warehouse_store.changes_since_stored), else null.
 
     Raises:
         HTTPException: 403 without Data Engineering; 400/404 as in `_plan`.
@@ -211,7 +215,10 @@ async def preview_load(
     plan = await _plan(files, group_id, missing_strategy, column_actions, column_names, transforms,
                        choices, event_type, combine_spec, target)
     duplicates = await dedupe.find_duplicates(str(holder["id"]), plan.rows, plan.source_system, plan.source_name)
-    return {**plan.to_dict(), "storage": await _storage_status(holder), "replacing": target, "duplicates": duplicates}
+    # The same file uploaded again (rows or columns added): what's new since the stored copy.
+    changes = None if target else await warehouse_store.changes_since_stored(holder, plan)
+    return {**plan.to_dict(), "storage": await _storage_status(holder), "replacing": target, "duplicates": duplicates,
+            "changes": changes}
 
 
 @router.post("/load")

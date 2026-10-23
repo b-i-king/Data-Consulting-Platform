@@ -54,6 +54,7 @@ _invites: dict[str, dict] = {}           # email -> consultant_invites row
 _applications: dict[str, dict] = {}      # application id -> consultant_applications row
 _engagements: dict[str, dict] = {}       # engagement id -> consultant_engagements row
 _partners: dict[str, dict] = {}          # partner id -> partners row (home page carousel)
+_settings: dict[str, object] = {}        # app_settings key -> value (admin switches)
 
 
 DEFAULT_CAPACITY = 3   # clients a new consultant takes at once (dim.consultants.capacity)
@@ -3304,3 +3305,25 @@ async def delete_partner(partner_id: str) -> bool:
     except ValueError:
         return False
     return (await database.pool.execute("DELETE FROM dim.partners WHERE id = $1", pid)) != "DELETE 0"
+
+
+
+# ── Platform switches (dim.app_settings; today: "sales_open", api/services/sales.py) ──
+
+async def get_setting(key: str):
+    """A saved platform setting's value, or None if it was never set."""
+    if database.pool is None:
+        return _settings.get(key)
+    raw = await database.pool.fetchval("SELECT value FROM dim.app_settings WHERE key = $1", key)
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+async def set_setting(key: str, value, admin_id: str | None = None) -> None:
+    """Save a platform setting (insert or replace), noting the admin who changed it."""
+    if database.pool is None:
+        _settings[key] = value
+        return
+    await database.pool.execute(
+        """INSERT INTO dim.app_settings (key, value, updated_by) VALUES ($1, $2::jsonb, $3)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by""",
+        key, json.dumps(value), uuid.UUID(admin_id) if admin_id else None)

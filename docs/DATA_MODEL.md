@@ -252,6 +252,13 @@ smallest the source provides".
   (`modified_at` moves, `added_at` never does). Tested on PostgreSQL: reloading
   the sales sample wrote nothing; changing 3 amounts updated 3 lines (9 numbers);
   the same data under another file name was caught as duplicates.
+- **The same spreadsheet, uploaded again** (rows or columns added — many clients
+  keep one file and keep adding to it): the preview compares it with the copy
+  stored under that name, by record, and says what's new ("120 new rows, 3
+  changed, new column: store" — `warehouse_store.changes_since_stored`); one
+  click ("Update my stored data") adds the new rows and updates the changed
+  ones. Rows no longer in the file stay stored; "Update my most recent upload"
+  (Settings) replaces the file completely.
 - Every record keeps `source_name`, and every field its `source_field` (in
   `fact.fields`), so you can always answer "where did this number come from?".
 

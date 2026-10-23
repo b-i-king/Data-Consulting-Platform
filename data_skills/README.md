@@ -13,7 +13,7 @@ the way we clean, analyze, and deliver data **consistent and reproducible**,
 whether the work is done by the web app, by you, by Claude, or by a future
 consultant on the team.
 
-All 34 skills live in this folder (editable copies), so the project works the
+All 35 skills live in this folder (editable copies), so the project works the
 same on any machine. Each skill belongs to **exactly one** service category.
 The assignment lives in [`catalog.json`](catalog.json), and
 `tests/test_skills_catalog.py` fails if a skill is missing or listed twice, and
@@ -100,6 +100,7 @@ with a price and an **Add** button.
 | [`hypothesis-testing`](hypothesis-testing/README.md) | Rosehill | Test a specific claim against the data |
 | [`write-query`](write-query/README.md) | Anthropic | Turn a question into SQL |
 | [`validate-data`](validate-data/README.md) | Anthropic | QA an analysis before it goes to the client |
+| [`sports-gaming-analytics`](sports-gaming-analytics/README.md) | project | Sports & gaming: leaders by stat (teams / positions), per-36 and true shooting %, K/D and win rate, consistency, a player's season trend |
 
 ### 4. Data Visualization — *make it visible*
 | Skill | Source | Use it to… |

@@ -43,6 +43,20 @@ const CATEGORIES = [
   { id: "ai", name: "AI", body: "Ask Beacon questions about your data in plain English. Free questions every month; more with the AI add-on." },
 ];
 
+// "Why businesses choose us": how the platform differs from data-science tools
+// (software only) and data consulting firms (people only, quotes on request).
+const DIFFERENCES = [
+  { icon: "⚡", title: "Self-serve, in minutes",
+    body: "Start as a guest — no account, no sales call. Upload a file or connect your tools and get it cleaned, " +
+      "summarized and on a dashboard yourself. Most consulting firms start with a meeting and a quote." },
+  { icon: "🏷️", title: "Transparent pricing",
+    body: "Prices are published up front, and every step that costs money shows the amount before you agree. " +
+      "Monthly or yearly, cancel any time — no surprise invoices." },
+  { icon: "🤝", title: "Screened consultants, when you want one",
+    body: "Need a person? Every consultant applies, is reviewed by us and agrees to our terms before working " +
+      "with clients. Most services start with a free 30-minute call, and you pay them through the platform." },
+];
+
 export default function Home() {
   return (
     <div className="space-y-16">
@@ -103,6 +117,23 @@ export default function Home() {
               <div className="mb-2 font-mono text-sm text-brand-ink">0{i + 1}</div>
               <h3 className="font-semibold">{s.title}</h3>
               <p className="mt-1 text-sm text-ink-muted">{s.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* What sets the platform apart from data-science tools (do-it-yourself only) and
+          consulting firms (people only, prices on request): three reasons, in plain words. */}
+      <section id="why-us" aria-labelledby="why-us-title" className="scroll-mt-20 space-y-4">
+        <h2 id="why-us-title" className="text-xl font-semibold">
+          Why businesses choose us
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {DIFFERENCES.map((d) => (
+            <div key={d.title} className="rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-card)]">
+              <div aria-hidden className="mb-2 text-2xl">{d.icon}</div>
+              <h3 className="font-semibold">{d.title}</h3>
+              <p className="mt-1 text-sm text-ink-muted">{d.body}</p>
             </div>
           ))}
         </div>

@@ -40,7 +40,8 @@
         { "id": "standard-deviation", "label": "Spread & variability", "source": "rosehill" },
         { "id": "hypothesis-testing", "label": "Hypothesis testing", "source": "rosehill" },
         { "id": "write-query", "label": "SQL for your questions", "source": "anthropic-data" },
-        { "id": "validate-data", "label": "Analysis quality check", "source": "anthropic-data" }
+        { "id": "validate-data", "label": "Analysis quality check", "source": "anthropic-data" },
+        { "id": "sports-gaming-analytics", "label": "Sports & gaming analytics", "source": "project" }
       ]
     },
     {

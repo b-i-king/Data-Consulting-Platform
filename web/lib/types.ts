@@ -406,6 +406,8 @@ export interface AdminPerson {
   role: "admin" | "consultant" | "client";
   /** Tries the paid tools free (packages switch on with no charge, even with Stripe live). */
   is_tester: boolean;
+  /** A client's consultant (consultants row id), or null. */
+  consultant_id: string | null;
   /** Healthcare client: data access is audited. */
   is_healthcare: boolean;
   mfa_enabled: boolean;
@@ -743,6 +745,10 @@ export interface CleaningReport {
   columns_renamed: Record<string, string>;
   /** Rows removed because an ID was blank (listed on the Excel download's "rows_missing_id" sheet). */
   rows_missing_id_removed: number;
+  /** Step 0a: columns of pictures stored in the file, removed (names as in the file). */
+  image_columns_removed: string[];
+  /** Step 0a: pictures stored in text cells, blanked. */
+  image_cells_removed: number;
   /** Columns whose header was blank in the file, not yet named or removed. */
   unnamed_columns: string[];
   /** Groups of columns that had the same name (e.g. ["amount", "amount_2"]), not yet told apart. */
@@ -1449,6 +1455,8 @@ export interface LoadPlan {
   replacing?: string | null;
   /** Records already stored from ANOTHER source (same date, amount and reference) — api/services/dedupe.py. */
   duplicates?: { records: number; of: number; record_ids: string[]; sources: string[] };
+  /** The same file name is already stored (rows or columns added since): what's new. null = first upload. */
+  changes?: StoredChanges | null;
   ready: boolean;
   problem: string | null;
   storage: StorageStatus;
@@ -1841,4 +1849,17 @@ export interface PartnerReview {
   logo_url: string;
   logo_width: number;
   logo_height: number;
+}
+
+
+/** What changed since the stored copy of a file with the same name (warehouse_store.changes_since_stored). */
+export interface StoredChanges {
+  source: string;
+  new_rows: number;
+  changed_rows: number;
+  unchanged_rows: number;
+  /** Stored rows the new file no longer has — they stay stored (Settings → "Update my most recent upload" replaces). */
+  rows_not_in_file: number;
+  new_columns: string[];
+  removed_columns: string[];
 }

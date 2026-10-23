@@ -32,6 +32,7 @@ import { fmtDate, fmtUsd } from "@/lib/format";
 import type { BillingInterval, MyServices } from "@/lib/types";
 import { Card, ConfirmDialog, ErrorBox, TotalRow } from "@/components/wizard/ui";
 import PackageBuilder, { normalizePackage, packageTotal } from "./PackageBuilder";
+import { SalesClosedNote, useSalesStatus } from "./SalesStatus";
 
 export default function BillingPanel(props: {
   token: string;
@@ -51,6 +52,7 @@ export default function BillingPanel(props: {
     normalizePackage(plan.plans, [...(live?.plan_ids ?? []), ...(props.suggestTool ? [props.suggestTool] : [])]),
   );
   const [asking, setAsking] = useState(false);
+  const sales = useSalesStatus(props.token);   // purchases closed during the beta (admins / testers can still buy)
   const [canceling, setCanceling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -105,6 +107,7 @@ export default function BillingPanel(props: {
 
   return (
     <div className="space-y-6">
+      {!sales.canBuy && <SalesClosedNote message={sales.message} />}
       {!stripe && (
         <p role="status" className="rounded-2xl border border-warn/40 bg-warn/10 p-3 text-sm">
           {plan.billing.tester ? (
@@ -187,7 +190,7 @@ export default function BillingPanel(props: {
             value={picked}
             onChange={setPicked}
             actionLabel={live ? "Update package" : "Subscribe"}
-            actionDisabled={busy || unchanged}
+            actionDisabled={busy || unchanged || !sales.canBuy}
             onAction={() => setAsking(true)}
             // AI answers questions about STORED data, so it unlocks once data is loaded.
             locked={plan.ai_ready ? undefined : { ai: "Load your data first (Data Engineering → Load into database)" }}

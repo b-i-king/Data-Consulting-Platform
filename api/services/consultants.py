@@ -833,6 +833,64 @@ async def team() -> list[dict]:
     return sorted(rows, key=lambda c: (not c["active"], not c["is_default"], c["name"].lower()))
 
 
+async def reassign_client(client_id: str, consultant_id: str, admin: dict) -> dict:
+    """
+    An ADMIN moves one client to another consultant ("take over Ana's clients while she's out").
+
+    What moves: the client's consultant (accounts.consultant_id) — and with it
+    everything the consultant reaches through the client: their plan, stored
+    data, connections and files all belong to the CLIENT, so the new consultant
+    can open them at once and the old one can't (acting_context checks the
+    assignment on every request). How they help (consultant_plan) is kept.
+
+    Money: ongoing help paid to the OLD consultant ends now
+    (consulting_billing.end_for_client) — refund the unused time in Stripe
+    (the "help_ended" list); the client can start help with the new consultant
+    in Plan & billing. The admin may go over the new consultant's capacity
+    (it's reported as "over_capacity", not refused).
+
+    Args:
+        client_id: str, the client's account id (a plan holder; a team member moves with their owner).
+        consultant_id: str, the consultants row id to move them to.
+        admin: dict, the admin's accounts row.
+
+    Returns:
+        dict: {"client", "from", "to", "help_ended": [...], "over_capacity": bool}.
+
+    Raises:
+        HTTPException: 404 unknown client or consultant (or an inactive one); 400 a
+            consultant / admin account, a team member, or the same consultant.
+    """
+    client = await account_store.get_account(client_id)
+    if client is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That client wasn't found.")
+    if is_admin(client) or await active_consultant(client_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Only clients can be moved to a consultant.")
+    if await plan_holder_id(client) != client_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="That's a team member — move the team's owner instead (the whole team moves).")
+    new = await account_store.get_consultant(consultant_id)
+    if new is None or not new.get("active", True):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That consultant isn't available.")
+    old_id = client.get("consultant_id")
+    if old_id and str(old_id) == str(consultant_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That's already their consultant.")
+    old = await account_store.get_consultant(str(old_id)) if old_id else None
+
+    from api.services import consulting_billing   # imported here: it imports this file's neighbors
+    help_ended = await consulting_billing.end_for_client(client_id, "consultant_reassigned")
+    await account_store.set_consultant_for(client_id, str(consultant_id), client.get("consultant_plan"))
+    load = next((c for c in await directory() if c["id"] == str(consultant_id)), None)
+
+    async def name(row):
+        acc = await account_store.get_account(str(row["account_id"])) if row else None
+        return f"{acc['first_name']} {acc['last_name']}" if acc else None
+
+    return {"client": client.get("company_name") or f"{client['first_name']} {client['last_name']}",
+            "from": await name(old), "to": await name(new), "help_ended": help_ended,
+            "over_capacity": bool(load and load["clients"] > load["capacity"])}
+
+
 async def deactivate(consultant_id: str, admin: dict, reason: str | None = None) -> dict:
     """
     Switch a consultant off and move their clients to someone with room.

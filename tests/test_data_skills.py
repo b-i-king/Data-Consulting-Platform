@@ -7,6 +7,8 @@ scripts/make_sample_data.py (fixed random seed, so results are stable).
 
 from pathlib import Path
 
+import re
+
 import pandas as pd
 import pytest
 
@@ -83,6 +85,7 @@ CASES = [
     ("predictive-modeling", lambda: _load("sales"), {"target": "amount", "exclude": "order_id,unit_price,quantity", "max_rows": 3000}),
     ("reorder-planning", lambda: _load("sales"), {"on_hand": '{"Sourdough Loaf": 10}', "lead_time_days": 3}),
     ("segmentation", lambda: _load("sales"), {"max_k": 4}),
+    ("sports-gaming-analytics", lambda: _box_scores(), {"teams": "BOS"}),
     ("multivariate-analysis", lambda: _load("sales"), {}),
     ("er-diagram", lambda: {"sales.csv": _load("sales"), "customers.csv": _load("customers")}, {}),
     ("data-dictionary-creator", lambda: _load("customers"), {}),
@@ -126,10 +129,10 @@ def test_skill_runs_and_returns_a_result(skill, build, params):
 
 
 def test_describe_lists_category_and_params():
-    """Check describe() reports a skill's category and options, and that 34 skills are listed."""
+    """Check describe() reports a skill's category and options, and that 35 skills are listed."""
     d = describe("build-dashboard")
     assert d["category"] == "data_visualization" and "range" in d["params"]
-    assert len(list_skills()) == 34
+    assert len(list_skills()) == 35
 
 
 def test_unknown_option_and_file_writing_are_refused(sales):
@@ -443,6 +446,50 @@ def test_segmentation_groups_customers_and_names_each_group():
     assert rows.data["k"] == 3 and rows.data["group_by"] is None and "action" not in rows.tables["segments"][0]
     with pytest.raises(SkillInputError):
         seg.run(_load("sales"), k=1)
+
+
+def _box_scores() -> pd.DataFrame:
+    """A small Basketball-Reference-style per-game table (fictional players), 3 seasons x 5 games."""
+    rows = []
+    players = [("Jay Tate", "BOS", "SF", 27), ("Jalen Brown", "BOS", "SG", 23), ("Luka D", "DAL", "PG", 30),
+               ("Al Horf", "BOS", "C", 10)]
+    for season in (2023, 2024, 2025):
+        for p, team, pos, base in players:
+            for g in range(5):
+                swing = (g - 2) * (3 if p == "Luka D" else 1)          # Luka swings more game to game
+                rows.append({"Player": p, "Tm": team, "Pos": pos, "Year": season, "MP": 34.0, "FGA": 20, "FTA": 6,
+                             "PTS": base + swing + (season - 2023), "TRB": 6 + g % 3, "AST": 5 + g % 2})
+    return pd.DataFrame(rows)
+
+
+def test_sports_and_gaming_analytics_leaders_efficiency_and_trend():
+    """Leaders for chosen teams, per-36 and true shooting %, consistency, the top scorer's season trend; gaming K/D."""
+    from data_skills.registry import load_skill
+    skill = load_skill("sports-gaming-analytics")
+    res = skill.run(_box_scores(), teams="BOS")
+    pts = [r for r in res.tables["leaders"] if r["stat"] == "Points"]
+    assert [r["player"] for r in pts] == ["Jay Tate", "Jalen Brown", "Al Horf"]          # Luka (DAL) filtered out
+    assert pts[0]["average"] == 28.0 and res.data["domain"] == "sports"
+    tate = next(r for r in res.tables["efficiency"] if r["player"] == "Jay Tate")
+    assert tate["points_per_36"] == round(28 / 34 * 36, 1)
+    assert tate["true_shooting_pct"] == round(28 / (2 * (20 + 0.44 * 6)) * 100, 1)
+    assert [t["season"] for t in res.tables["trend"]] == ["2023", "2024", "2025"] and res.data["trend_player"] == "Jay Tate"
+    assert res.tables["trend"][0]["points"] == 27.0 and len(res.charts) == 2
+    assert {c["player"]: c["steadiness"] for c in res.tables["consistency"]}["Jay Tate"] == "steady"
+    guards = skill.run(_box_scores(), positions="PG")
+    assert {r["player"] for r in guards.tables["leaders"]} == {"Luka D"}
+    # Gaming: columns called kills / deaths are read, but results say eliminations / respawns.
+    gaming = pd.DataFrame({"username": ["ace", "bo"] * 4, "kills": [10, 5] * 4, "deaths": [4, 5] * 4,
+                           "wins": [1, 0] * 4, "playtime": [20, 25] * 4})
+    g = skill.run(gaming)
+    assert g.data["domain"] == "gaming" and set(g.data["stats"]) >= {"Eliminations", "Respawns"}
+    ace = next(r for r in g.tables["efficiency"] if r["player"] == "ace")
+    assert ace["eliminations_per_respawn"] == 2.5 and ace["win_rate_pct"] == 100.0
+    assert ace["eliminations_per_minute"] == 0.5
+    shown = " ".join([g.summary, *g.findings, *(r["stat"] for r in g.tables["leaders"]), *g.tables["efficiency"][0]])
+    assert not re.search(r"\b(kill|kills|death|deaths|k/d)\b", shown.lower())
+    with pytest.raises(SkillInputError):
+        skill.run(pd.DataFrame({"store": ["A", "B"], "amount": [1, 2]}))
 
 
 def test_reorder_planning_says_when_to_buy_and_how_much():

@@ -168,3 +168,19 @@ def test_premium_uses_gemini_flash(monkeypatch):
     h = _h(_signup("ana@example.com")["access_token"])
     assert _ask(h).json()["answered"]
     assert models == ["gemini-2.5-flash"]
+
+
+def test_sample_questions_by_industry_use_the_tables_columns():
+    """Beacon's sample questions: the client's industry by default, any other on request, with the table's columns."""
+    from api.services import prompt_library
+
+    sports = prompt_library.questions_for("sports", [{"name": "player", "type": "text"}, {"name": "team", "type": "text"},
+                                                     {"name": "pts", "type": "numeric"}])
+    assert sports[0] == {"question": "top 5 player by pts", "why": "Top scorers", "ready": True}
+    assert any(q["question"] == "total pts by team" for q in sports)
+    retail = prompt_library.questions_for("44-45", [{"name": "amount", "type": "numeric"}, {"name": "store", "type": "text"}])
+    assert {"question": "total amount by store", "why": "Which store earns most", "ready": True} in retail
+    assert any(not q["ready"] for q in retail)                       # no product column: a stand-in, edit first
+    keys = [i["key"] for i in prompt_library.industries()]
+    assert "sports" in keys and "gaming" in keys and "44-45" in keys
+    assert prompt_library.questions_for(None, [])[0]["why"] == "Biggest contributors"   # general list

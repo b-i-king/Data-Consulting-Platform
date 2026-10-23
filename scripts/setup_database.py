@@ -51,7 +51,7 @@ TABLES = {
             "storage_consents", "load_runs", "data_connections",
             "dashboard_tabs", "question_log", "api_usage", "ai_usage", "plan_prices", "account_deletions",
             "seasonal_sales", "sessions", "audit_log", "consultant_invites", "consultant_applications",
-            "consultant_engagements", "consulting_prices", "partners"],
+            "consultant_engagements", "consulting_prices", "partners", "app_settings"],
     # account_data is a VIEW over records + fields (it still answers SELECT count(*)).
     "fact": ["records", "fields", "account_data", "field_map", "entities", "entity_sources"],
 }

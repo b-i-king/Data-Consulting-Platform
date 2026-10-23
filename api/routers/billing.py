@@ -2,6 +2,7 @@
 Billing endpoints (Stripe). The logic lives in api/services/billing.py.
 
     GET  /api/billing/plans              the tools and the bundle (monthly + annual prices)
+    GET  /api/billing/sales              are purchases open? (and may I buy anyway: admin / tester)
     POST /api/billing/price              total for a "build your own" selection
     POST /api/billing/checkout           subscribe to (or change) a package -> Stripe Checkout URL
                                          (AI only once the account has stored data)
@@ -22,9 +23,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-from api.core.security import get_acting_context
+from api.core.security import get_acting_context, get_optional_acting_context
 from api.models.accounts import CheckoutIn, ConsultingCheckoutIn, PriceIn
-from api.services import billing, consulting_billing, entitlements, offers, pricing
+from api.services import billing, consulting_billing, entitlements, offers, pricing, sales
 from api.services.pricing import subscription_catalog
 
 router = APIRouter(prefix="/billing")
@@ -75,6 +76,19 @@ async def plans():
         -> 200 {"plans": [{"id": "all_tools", ...}, {"id": "data_cleaning", ...}], "stripe": false}
     """
     return {"plans": subscription_catalog(), "stripe": billing.stripe_enabled(), "sale": await offers.current_sale()}
+
+
+@router.get("/sales")
+async def sales_status(ctx: Annotated[dict | None, Depends(get_optional_acting_context)]):
+    """
+    GET /api/billing/sales — can customers buy yet? (api/services/sales.py)
+
+    Returns:
+        dict: {"open": bool, "can_buy": bool (open, or an admin / tester), "message": str
+        (shown instead of the checkout buttons while closed)}.
+    """
+    return {"open": await sales.is_open(), "can_buy": await sales.can_buy(ctx["account"] if ctx else None),
+            "message": sales.SALES_CLOSED}
 
 
 @router.post("/price")

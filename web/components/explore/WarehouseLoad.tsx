@@ -566,6 +566,22 @@ export default function WarehouseLoad(props: {
 
           {!result && !declined && (
             <div className="space-y-3 border-t border-line pt-4">
+              {plan.changes && (
+                // The same spreadsheet again (rows or columns added): say what's new; loading updates it.
+                <div role="status" className="space-y-1 rounded-xl border border-brand/40 bg-brand-soft p-3 text-sm">
+                  <p>
+                    <strong>An updated version of {plan.changes.source}.</strong> Since you last stored it:{" "}
+                    {fmtInt(plan.changes.new_rows)} new row{plan.changes.new_rows === 1 ? "" : "s"},{" "}
+                    {fmtInt(plan.changes.changed_rows)} changed, {fmtInt(plan.changes.unchanged_rows)} the same
+                    {plan.changes.new_columns.length > 0 && <>; new column{plan.changes.new_columns.length === 1 ? "" : "s"}: {plan.changes.new_columns.join(", ")}</>}.
+                  </p>
+                  <p className="text-ink-muted">
+                    Loading adds the new rows and updates the changed ones; nothing is stored twice.
+                    {plan.changes.rows_not_in_file > 0 &&
+                      ` ${fmtInt(plan.changes.rows_not_in_file)} stored row(s) aren't in this file and stay stored — to replace the file completely, use Settings → "Update my most recent upload".`}
+                  </p>
+                </div>
+              )}
               {(plan.duplicates?.records ?? 0) > 0 && plan.duplicates && (
                 <div role="status" className="space-y-2 rounded-xl border border-warn/40 bg-warn/10 p-3 text-sm">
                   <p>
@@ -599,7 +615,7 @@ export default function WarehouseLoad(props: {
                   disabled={busy || plan.storage.mode === "unavailable" || (needsConsent && !consent)}
                   onClick={accept}
                 >
-                  {busy ? "Working…" : "Accept and load"}
+                  {busy ? "Working…" : plan.changes ? "Update my stored data" : "Accept and load"}
                 </Button>
                 <Button variant="secondary" disabled={busy} onClick={() => setDeclined(true)}>
                   Don&apos;t load

@@ -369,3 +369,21 @@ def test_client_names_must_be_usable_and_unique():
         clean_dataframe(df, column_names={"b": "A"})
     with pytest.raises(ValueError, match="can't be used"):
         clean_dataframe(df, column_names={"b": "  $$ "})
+
+
+def test_pictures_stored_in_cells_are_removed_first():
+    """Step 0a: a column of pictures goes, a stray picture is blanked, ordinary text is untouched, links are kept."""
+    import pandas as pd
+    from api.services.cleaning import clean_dataframe
+
+    img = "data:image/png;base64,iVBORw0KGgo" + "A" * 300
+    jpeg = "/9j/4AAQSkZJRg" + "B" * 300
+    df = pd.DataFrame({"Item": ["Cake", "Pie", "Bun", "Tart"], "Photo": [img, jpeg, img, None],
+                       "Notes": ["ok", img, "fine", "x" * 400], "Photo URL": ["https://cdn.example.com/cake.png"] * 4,
+                       "Amount": [1, 2, 3, 4]})
+    out, rep = clean_dataframe(df)
+    assert rep.image_columns_removed == ["Photo"] and "photo" not in out.columns
+    assert rep.image_cells_removed == 1 and out["notes"].isna().sum() == 1
+    assert out["notes"].iloc[3] == "x" * 400                          # long ordinary text stays
+    assert "photo_url" in out.columns                                  # links are the recommended way, kept
+    assert any("photo_url" in n and "link" in n for n in rep.notes)

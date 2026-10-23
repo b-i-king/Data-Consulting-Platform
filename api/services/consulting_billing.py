@@ -64,7 +64,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store, billing, entitlements, pricing, stripe_catalog
+from api.services import account_store, billing, entitlements, pricing, sales, stripe_catalog
 
 LIVE = ("active", "trialing", "past_due")   # ongoing help that is still running
 NO_CONSULTANT = ("Choose a consultant first (\"I'd like a consultant to do this for me\" in Settings -> "
@@ -300,6 +300,7 @@ async def start_checkout(account: dict, kind: str, services: list[str] | None, i
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=billing.ADMIN_FREE)
     if not accept_terms:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=TERMS_NEEDED)
+    await sales.require_open(account)          # 403 while purchases are closed (beta); testers pass
     hours, picked = None, []
     if kind == "retainer":
         if interval not in pricing.INTERVALS:
@@ -427,6 +428,26 @@ async def end_for_consultant(consultant_id: str, reason: str) -> list[dict]:
             ended.append({"client": client.get("company_name") or f"{client.get('first_name', '')} "
                                                                 f"{client.get('last_name', '')}".strip(),
                           "email": client.get("email"), "amount_usd": e["amount_usd"],
+                          "billing_interval": e.get("billing_interval")})
+    return ended
+
+
+async def end_for_client(account_id: str, reason: str) -> list[dict]:
+    """
+    One client's ongoing help with their consultant ends NOW (an admin moved them to another consultant).
+
+    Like end_for_consultant, but for one client: the admin refunds the unused
+    time in the Stripe dashboard; the client can start ongoing help with their
+    new consultant in Plan & billing.
+
+    Returns:
+        list[dict]: the ended help, {"engagement_id", "amount_usd", "billing_interval"} — the refund to-do.
+    """
+    ended = []
+    for e in await account_store.list_engagements(account_id):
+        if e["kind"] == "retainer" and e["status"] in LIVE:
+            await _end_now(e, reason)
+            ended.append({"engagement_id": e["id"], "amount_usd": e["amount_usd"],
                           "billing_interval": e.get("billing_interval")})
     return ended
 
