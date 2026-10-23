@@ -26,6 +26,7 @@ WHERE VALUES COME FROM (in priority order)
 3. The defaults written below.
 """
 
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -99,6 +100,19 @@ class Settings(BaseSettings):
     # window (DOWNLOAD_WINDOW_HOURS). Stops anyone splitting work into dozens of
     # tiny downloads a day; normal use is a handful. 0 = no limit.
     daily_download_limit: int = Field(default=20, alias="DAILY_DOWNLOAD_LIMIT")
+    # Can customers buy plans and consultant help yet? Only used until an admin
+    # flips the switch in Administration (saved in dim.app_settings, which then
+    # wins): api/services/sales.py. Default: closed (beta).
+    sales_open: bool = Field(default=False, alias="SALES_OPEN")
+    # The API's documentation pages (/docs, /redoc, /openapi.json): a map of every
+    # endpoint. Hidden on the live server (Render sets RENDER=true) so strangers
+    # don't get the map; shown on your computer. API_DOCS=true / false overrides.
+    api_docs: bool | None = Field(default=None, alias="API_DOCS")
+
+    @property
+    def show_api_docs(self) -> bool:
+        """True on your computer, False on Render — unless API_DOCS says otherwise."""
+        return self.api_docs if self.api_docs is not None else not os.environ.get("RENDER")
     download_window_hours: int = Field(default=24, alias="DOWNLOAD_WINDOW_HOURS")
 
     # ── Consultant hand-off ───────────────────────────────────────────────────
@@ -245,6 +259,19 @@ class Settings(BaseSettings):
                              alias="WAVE_SCOPES")
     wave_max_connections: int = Field(default=9, alias="WAVE_MAX_CONNECTIONS")
     wave_daily_call_limit: int = Field(default=500, alias="WAVE_DAILY_CALL_LIMIT")
+    # Google Sheets ("Connect Google Sheets", read-only): an OAuth client from
+    # Google Cloud Console -> APIs & Services -> Credentials (type: Web application),
+    # with the redirect URI below and the Google Sheets API enabled (docs/CONNECTORS.md).
+    google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
+    # Salesforce ("Connect Salesforce", read-only queries): a Connected App's
+    # consumer key and secret (api/services/warehouses.py, docs/CONNECTORS.md).
+    salesforce_client_id: str = Field(default="", alias="SALESFORCE_CLIENT_ID")
+    salesforce_client_secret: str = Field(default="", alias="SALESFORCE_CLIENT_SECRET")
+    # BigQuery: the most bytes one summary may scan in the CLIENT's project (they
+    # pay per byte). Over it, BigQuery refuses the query and nothing is billed.
+    # 10 GB is about $0.06 at on-demand prices.
+    bigquery_max_bytes: int = Field(default=10 * 1024 ** 3, alias="BIGQUERY_MAX_BYTES")
+    google_client_secret: str = Field(default="", alias="GOOGLE_CLIENT_SECRET")
     supabase_oauth_client_id: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_ID")
     supabase_oauth_client_secret: str = Field(default="", alias="SUPABASE_OAUTH_CLIENT_SECRET")
     # This API's public address, for the redirect URI. Render sets

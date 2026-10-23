@@ -69,6 +69,7 @@ import {
   getCloudTableFile,
   getCloudTables,
   getLiveDatasetFile,
+  getSheetTabFile,
   getConsultantSettings,
   getIntakeOptions,
   getMe,
@@ -478,6 +479,35 @@ export default function Workspace() {
       await clean([got.file], "cloud");
     } catch (e) {
       setError(e instanceof Error ? e.message : "We couldn't read that table.");
+      setBusy(false);
+    }
+  }
+
+  // A file read live from a source — a warehouse table, or a summary that ran IN the
+  // source (Snowflake, BigQuery, Salesforce, their database) — opened like cloud data.
+  async function openFile(file: File, from: string, note: string | null) {
+    setAccountTab(null);
+    setSection(CLEANING);
+    setCloudFrom(from);
+    setCloudNote(note);
+    await clean([file], "cloud");
+  }
+
+  // A tab of a connected Google Sheet, read live (never stored) — opened like cloud data,
+  // so opening it again always brings the latest rows.
+  async function openSheet(link: string, tab: string) {
+    if (!session) return;
+    setAccountTab(null);
+    setSection(CLEANING);
+    setBusy(true);
+    setError(null);
+    try {
+      const got = await getSheetTabFile(session.token, link, tab);
+      setCloudNote(got.truncated ? `the first ${fmtInt(got.rows)} rows (the tab has more)` : null);
+      setCloudFrom("Live from Google Sheets");
+      await clean([got.file], "cloud");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We couldn't read that sheet.");
       setBusy(false);
     }
   }
@@ -1038,7 +1068,7 @@ export default function Workspace() {
           // Owners and developers connect data; a view-only member just looks (teams.py).
           <IntegrationsPanel key={`integrations-${planAccountId ?? "me"}`} token={session.token} canChange={!!plan?.can_edit}
             isAdmin={!!session.account.is_admin}
-            onOpenTable={openCloud} onOpenLive={openLive} notice={integrationNotice} />
+            onOpenTable={openCloud} onOpenLive={openLive} onOpenSheet={openSheet} onOpenFile={openFile} notice={integrationNotice} />
         )}
         {accountTab === "consultant" && isConsultant && <ConsultantSetup token={session.token} onSetupNeeded={setSetupNeeded} />}
         {accountTab === "admin" && session.account.is_admin && <AdminPanel token={session.token} />}

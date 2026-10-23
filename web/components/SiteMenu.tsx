@@ -15,6 +15,7 @@ import { SIGN_IN, workspacePath } from "@/lib/routes";
 
 const SECTIONS = [
   { href: "/#how", label: "How it works" },
+  { href: "/#why-us", label: "Why us" },
   { href: "/#services", label: "Services" },
   { href: "/#trusted-by", label: "Trusted by" },
   { href: "/#faq", label: "FAQ" },

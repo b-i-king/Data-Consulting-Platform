@@ -32,6 +32,10 @@ MARKER = "## Run it (platform implementation)"
 ALWAYS_INCLUDED = "data_cleaning"   # the service every client gets
 
 
+
+# Skills whose example runs on another sample than the bakery's sales (samples/).
+SAMPLE_FOR = {"sports-gaming-analytics": "samples/basketball_per_game.csv"}
+
 def _default(p: dict) -> str:
     """
     Format a skill option's default value for the README options table.
@@ -90,7 +94,7 @@ def run_section(skill_id: str) -> str:
     info = describe(skill_id)
     params = {k: v for k, v in info["params"].items()}
     many = info["input"] == "tables"
-    files = "samples/sales.csv samples/customers.csv" if many else "samples/sales.csv"
+    files = "samples/sales.csv samples/customers.csv" if many else SAMPLE_FOR.get(skill_id, "samples/sales.csv")
     example = f"python -m data_skills run {skill_id} {files}" + (" --param KEY=VALUE" if params else "")
     unlock = ("always included" if info["category"] == ALWAYS_INCLUDED
               else f"unlocked when the client chooses **{info['category_name']}**")

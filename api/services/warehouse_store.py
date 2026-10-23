@@ -314,6 +314,72 @@ def _load_in_memory(aid: str, plan: LoadPlan) -> dict:
             "rows_already_stored": len(decision["unchanged"])}
 
 
+def _comparable(rec: dict) -> tuple:
+    """A record line's content in a form that compares fairly: numbers rounded, details as text, links left out."""
+    metrics = {k: (None if v is None else round(float(v), 6)) for k, v in (rec.get("metrics") or {}).items()}
+    attrs = {k: (None if v is None else str(v)) for k, v in (rec.get("attributes") or {}).items()
+             if not str(k).endswith("_link")}
+    return tuple(sorted(metrics.items())), tuple(sorted(attrs.items()))
+
+
+def _columns_of(records: list[dict], fields: list[dict]) -> set[str]:
+    """The client's column names behind some records: the numbers' source columns and the details' names."""
+    cols = {str(f.get("source_field") or f.get("field_name")) for f in fields}
+    for r in records:
+        cols.update(str(k) for k in (r.get("attributes") or {}) if not str(k).endswith("_link"))
+    return cols
+
+
+async def changes_since_stored(holder: dict, plan: LoadPlan) -> dict | None:
+    """
+    "What's new" when a file with the same name as a stored one is uploaded again.
+
+    Clients often keep ONE spreadsheet and add rows (or columns) to it over time.
+    When they upload it again, this compares it with what's stored under that
+    name, by record (its ID and line), so the preview can say "120 new rows,
+    3 changed, 1 new column" and the load simply updates the stored copy:
+    new rows are added, changed rows updated, unchanged rows skipped (the
+    load's own upsert does exactly that).
+
+    Args:
+        holder: dict, the plan holder's accounts row.
+        plan: LoadPlan, the preview's plan (unified rows of the new upload).
+
+    Returns:
+        dict | None: None when nothing is stored under this name; else {"source",
+        "new_rows", "changed_rows", "unchanged_rows", "rows_not_in_file",
+        "new_columns": [...], "removed_columns": [...]}. Rows not in the new file
+        stay stored (use "Update my most recent upload" in Settings to replace
+        the file completely).
+
+    Example:
+        >>> (await changes_since_stored(holder, plan))["new_rows"]
+        120
+    """
+    aid = str(holder["id"])
+    stored = (await _stored_rows(aid, plan.source_name)).get((plan.source_system, plan.source_name))
+    if stored is None or stored.empty or plan.rows.empty:
+        return None
+    links = await entities.lookup(aid)
+    stored = stored.assign(attributes=stored["attributes"].map(lambda a: entities.expand(a, links)))
+    old_records, old_fields, _ = _pack(stored)
+    new_records, new_fields, _ = _pack(plan.rows)
+    old = {(r["record_id"], r["line_number"]): _comparable(r) for r in old_records}
+    new = {(r["record_id"], r["line_number"]): _comparable(r) for r in new_records}
+    added = [k for k in new if k not in old]
+    changed = [k for k in new if k in old and new[k] != old[k]]
+    old_cols, new_cols = _columns_of(old_records, old_fields), _columns_of(new_records, new_fields)
+    # Stored under shared names ("location_name"); shown with the client's own ("store").
+    new_names = {c["field_name"]: c["column"] for c in plan.column_plan if c.get("field_name")}
+    old_plan = await account_store.latest_column_plan(aid, plan.source_system, plan.source_name) or []
+    old_names = {c["field_name"]: c["column"] for c in old_plan if c.get("field_name")}
+    return {"source": plan.source_name, "new_rows": len(added), "changed_rows": len(changed),
+            "unchanged_rows": len(new) - len(added) - len(changed),
+            "rows_not_in_file": len([k for k in old if k not in new]),
+            "new_columns": sorted(new_names.get(c, c) for c in new_cols - old_cols),
+            "removed_columns": sorted(old_names.get(c, c) for c in old_cols - new_cols)}
+
+
 async def has_data(holder: dict) -> bool:
     """
     Tell whether anything is stored for this client (the AI tool needs stored data).

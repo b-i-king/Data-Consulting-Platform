@@ -104,6 +104,58 @@ BigQuery connector was waiting for authorization and several others couldn't
 connect, so they're worth checking in your Claude connector settings if you plan
 to use them for client work.
 
+## Warehouses and Salesforce: summarize where the data lives
+
+Medium and large companies keep data in a warehouse or CRM. We never copy it:
+we list its tables and either **summarize IN the source** — only the small
+answer comes back — or open a capped sample. Everything is read-only
+(`api/services/warehouses.py`, `api/services/pushdown.py`).
+
+**Summarize** (Settings → Integrations → a table → *Summarize*): total /
+average / count / smallest / largest of a number column, by up to two columns,
+optionally per day / week / month / quarter / year. The request is a fixed
+shape checked against the table's REAL columns (from its catalog); the query is
+written for that source with every name quoted, so nothing typed ever runs as
+code. The exact query is shown with the result.
+
+| Source | How it connects | What the client sets up | Cost notes |
+|---|---|---|---|
+| PostgreSQL / Supabase | the existing card (connection string or "Sign in with Supabase") — now with *Summarize* | a read-only database user | runs in their database |
+| AWS Redshift | its PostgreSQL-compatible endpoint, in the PostgreSQL card (`postgresql://user:pass@cluster…redshift.amazonaws.com:5439/db`) | a read-only user | runs in their cluster |
+| Snowflake | SQL API, key-pair sign-in (a short-lived token we sign) | a read-only user with an RSA public key; a small warehouse; give us account, user, private key, warehouse, database | they pay warehouse time; summaries are short |
+| Google BigQuery | REST API with a service account | a service account with only **BigQuery Data Viewer** + **BigQuery Job User**; paste its key file | they pay per byte scanned: every summary has a cap (`BIGQUERY_MAX_BYTES`, default 10 GB ≈ $0.06) — over it BigQuery refuses and bills nothing; *Open* uses the free table preview |
+| Salesforce | "Connect Salesforce" (OAuth) + aggregate SOQL | a Connected App on our side (`SALESFORCE_CLIENT_ID/SECRET`, callback = our OAuth callback, scopes `api`, `refresh_token`) | within their org's API limits |
+
+AWS **Athena** (queries over files in S3) isn't connected yet: it needs AWS's
+own request signing; Redshift covers AWS warehouses for now.
+
+## Google Sheets (live, read-only)
+
+Many clients keep one Google Sheet they add to every day. **Settings →
+Integrations → Connect Google Sheets** signs in with their Google account
+(OAuth, `api/services/oauth.py` provider `google_sheets`) with the READ-ONLY
+permission `spreadsheets.readonly`. They paste a sheet's link, see its tabs, and
+open one in the workspace (`api/services/google_sheets.py`): it comes back as CSV
+and goes through cleaning like an upload. **Nothing is stored** — opening it
+again reads the latest rows. Up to 20,000 rows and 200 columns per tab. Free
+with any account (Google's API quota is per user, not shared like the
+accounting tools').
+
+Setup (one time, free):
+1. Google Cloud Console → create a project → **APIs & Services → Library** →
+   enable **Google Sheets API**.
+2. **OAuth consent screen**: External; app name, support email, your privacy
+   policy and terms pages; add the scope
+   `https://www.googleapis.com/auth/spreadsheets.readonly`.
+3. **Credentials → Create OAuth client ID** → Web application → Authorized
+   redirect URI: `https://<your-api>.onrender.com/api/connections/oauth/callback`.
+4. On Render set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+5. Until Google **verifies** the app (a free review for this "sensitive"
+   permission: privacy policy, domain, a short demo video — a few days to weeks),
+   only the **test users** you list on the consent screen (up to 100) can
+   connect, and they see an "unverified app" notice. Submit for verification
+   before opening it to everyone.
+
 ## Business tools come with a paid plan
 
 QuickBooks, Xero and Wave give the platform ONE free API allowance shared by

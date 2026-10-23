@@ -1164,3 +1164,100 @@ export async function removePartner(token: string, partnerId: string): Promise<v
   });
   await raiseForStatus(res);
 }
+
+
+// ── Purchases open or closed (the beta switch; api/services/sales.py) ────────
+
+/** Can customers buy yet? `can_buy` is also true for admins and testers (sign-in optional). */
+export async function getSalesStatus(token?: string): Promise<{ open: boolean; can_buy: boolean; message: string }> {
+  const res = await apiFetch(`${API_URL}/api/billing/sales`, { headers: token ? authHeaders(token) : {} });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Admins: open or close purchases for customers (takes effect at once). */
+export const setSalesOpen = (token: string, open: boolean) => postJson<{ open: boolean }>("/api/admin/sales", { open }, token);
+
+
+/** Admins: move a client to another consultant (ongoing help with the old one ends now — refund in Stripe). */
+export const reassignClient = (token: string, clientId: string, consultantId: string) =>
+  postJson<{ client: string; from: string | null; to: string; over_capacity: boolean;
+    help_ended: { engagement_id: string; amount_usd: number; billing_interval: string | null }[] }>(
+    `/api/admin/clients/${encodeURIComponent(clientId)}/reassign`, { consultant_id: consultantId }, token);
+
+
+/** Beacon's sample questions by industry, written with this table's columns (industry omitted = the client's own). */
+export async function getSamplePrompts(token: string, columns: { name: string; type: string }[], industry?: string) {
+  const res = await apiFetch(`${API_URL}/api/ai/prompts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify(industry === undefined ? { columns } : { columns, industry }),
+  });
+  await raiseForStatus(res);
+  return res.json() as Promise<{ industry: string | null; industries: { key: string; label: string }[];
+    questions: { question: string; why: string; ready: boolean }[] }>;
+}
+
+
+// ── Google Sheets (read-only, live; api/services/google_sheets.py) ────────────
+
+/** A connected Google account's sheet: its title and tabs (the link is the sheet's address). */
+export async function getSheetTabs(token: string, link: string): Promise<{ id: string; title: string;
+  tabs: { title: string; rows: number; columns: number }[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/google_sheets/tabs?link=${encodeURIComponent(link)}`, {
+    headers: authHeaders(token),
+  });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** One tab of a Google Sheet as a CSV File — live, never stored — opened like any file. */
+export const getSheetTabFile = (token: string, link: string, tab: string) =>
+  liveCsv(token, `/api/connections/google_sheets/tab?link=${encodeURIComponent(link)}&tab=${encodeURIComponent(tab)}`,
+    `${tab}.csv`);
+
+
+// ── Warehouses and Salesforce: summarize where the data lives (warehouses.py, pushdown.py) ──
+
+type WarehouseConnected = { connectors: DataConnection[]; tables: { name: string; rows: number | null }[] };
+
+/** Snowflake: a read-only user with a key pair (checked, then saved encrypted). */
+export const connectSnowflake = (token: string, form: Record<string, string>) =>
+  postJson<WarehouseConnected>("/api/connections/snowflake", form, token);
+
+/** BigQuery: a service account key file (Data Viewer + Job User). */
+export const connectBigQuery = (token: string, serviceAccountJson: string, location: string) =>
+  postJson<WarehouseConnected>("/api/connections/bigquery", { service_account_json: serviceAccountJson, location }, token);
+
+/** The tables (Salesforce: objects) of a connected source. */
+export async function getWarehouseTables(token: string, connector: string): Promise<{ tables: { name: string; label?: string; rows: number | null }[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/warehouse/tables`, { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** A table's columns and their kinds (number / date / text). connector "supabase" = the PostgreSQL database. */
+export async function getWarehouseColumns(token: string, connector: string, table: string): Promise<{ columns: { name: string; kind: string }[] }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/warehouse/columns?table=${encodeURIComponent(table)}`,
+    { headers: authHeaders(token) });
+  await raiseForStatus(res);
+  return res.json();
+}
+
+/** Summarize IN the source; only the answer comes back (a small CSV File), with the exact query that ran. */
+export async function summarizeWarehouse(token: string, connector: string, spec: {
+  table: string; agg: string; metric: string | null; group_by: string[]; date_column: string | null; period: string | null;
+}): Promise<{ file: File; rows: number; query: string }> {
+  const res = await apiFetch(`${API_URL}/api/connections/${encodeURIComponent(connector)}/warehouse/summarize`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(token) }, body: JSON.stringify(spec),
+  });
+  await raiseForStatus(res);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "summary.csv";
+  return { file: new File([await res.blob()], name, { type: "text/csv" }), rows: Number(res.headers.get("X-Rows") ?? 0),
+    query: decodeURIComponent(res.headers.get("X-Query") ?? "") };
+}
+
+/** Open a warehouse table, capped (Snowflake / BigQuery 20,000 rows; Salesforce 2,000), as a CSV File. */
+export const getWarehouseTableFile = (token: string, connector: string, table: string) =>
+  liveCsv(token, `/api/connections/${encodeURIComponent(connector)}/warehouse/table?table=${encodeURIComponent(table)}`,
+    `${table.split(".").pop()}.csv`);

@@ -17,6 +17,30 @@ and prices live in `pricing.py` and Stripe (no plans table). Prices: [PRICING.md
 Card details are typed on **Stripe's own page** (Checkout), so they never touch
 our server. The webhook is the only thing that turns a plan on or off.
 
+## Purchases open or closed (the beta switch)
+
+During the beta, purchases are **closed**: Stripe can be fully set up, but
+customers can't start a checkout for tools, bundles or consultant help
+(`api/services/sales.py`; both `billing.start_checkout` and
+`consulting_billing.start_checkout` refuse with 403). They see a "Paid plans
+open soon — we're in beta" note instead of the buttons. **Admins and testers can
+still check out**, to try the whole flow. Free things keep working.
+
+Flip it in **Administration → Purchases** (saved in `dim.app_settings`, key
+`sales_open`; takes effect at once, no redeploy). Until it has ever been set,
+the `SALES_OPEN` environment variable decides (default: closed). This also stops
+the test-mode gap: with no Stripe key, checkout would otherwise switch plans on
+for free.
+
+## Moving a client to another consultant
+
+**Administration → Move a client to another consultant** (`consultants.reassign_client`):
+the client's plan, stored data and connections belong to the client, so the new
+consultant can open them at once and the old one can't. Ongoing help paid to
+the old consultant ends **now** (`consulting_billing.end_for_client`) — refund
+the unused time in the Stripe dashboard (the screen lists the amounts). The
+client can start ongoing help with the new consultant in Plan & billing.
+
 ## Admins, consultants and deleted accounts
 
 - **Admins** (`ADMIN_EMAILS`) never pay: every tool and every download is free,

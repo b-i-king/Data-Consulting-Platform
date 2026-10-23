@@ -31,6 +31,7 @@ Run these steps in order. Each maps to a function or block in `cleaning.py`.
 
 | # | Step | pandas | Why |
 |---|---|---|---|
+| 0a | Remove pictures stored in cells (first) | object / string columns: values that are bytes, or text starting like base64 images (`data:image/`, `iVBORw0KGgo` PNG, `/9j/` JPEG, …) — 50%+ of a column's filled cells → drop the column, else blank those cells | Pictures can't be analyzed and swell the file; recommend a link column (`photo_url`) to cloud storage instead (`image_columns_removed`, `image_cells_removed`) |
 | 0 | Clean column names | `clean_column_names(df.columns)`: lowercase, non-letters → `_`, split camelCase, unique; then the client's own names (`column_names`) | `Order Date` → `order_date`, `CustomerID` → `customer_id`; easy to use in Excel, SQL and Python (`columns_renamed`). Flags blank headers (`unnamed_column_4`) and repeated ones (`amount`, `amount_2`) as `name_problem` until the client renames or removes them |
 | 0b | Header steps (client) | "Use first row as headers" `df.columns = df.iloc[0]`; "Remove top rows" `df.iloc[n:]` | Title rows in exports — `transforms` (see `api/services/transforms.py`) |
 | 1 | Tidy text | `s.str.strip()`; `""` → `NaN` | `" Acme "` and `"Acme"` are the same; blank text is really missing |

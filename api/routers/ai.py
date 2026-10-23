@@ -4,6 +4,7 @@ Beacon, the AI assistant ("Ask your data", with a monthly allowance).
     POST /api/ai/ask     one question about the open table (the upload is sent
                          again, like every skill run — nothing is stored)
     GET  /api/ai/usage   this month's allowance: tier, used, limit, reset date
+    POST /api/ai/prompts sample questions by industry, filled with the open table's columns
 
 Free for every client (AI_FREE_MONTHLY questions a month), premium with the AI
 package (AI_PREMIUM_MONTHLY), no limit for admins; a consultant uses the
@@ -17,10 +18,10 @@ from __future__ import annotations
 import time
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from api.core.security import get_acting_context
-from api.services import ai_assistant, audit, xero_guard
+from api.services import ai_assistant, audit, entitlements, prompt_library, xero_guard
 from api.services.pipeline import load_uploads, parse_column_actions, parse_column_names, parse_transforms
 from api.services.skills_runner import prepare_input
 from data_skills._core import SkillInputError
@@ -43,6 +44,28 @@ async def ai_usage(ctx: Annotated[dict, Depends(get_acting_context)], simulate: 
         GET /api/ai/usage  ->  {"tier": "free", "used": 3, "limit": 20, "left": 17, "reset_date": "2026-11-01", ...}
     """
     return await ai_assistant.usage(ctx, simulate)
+
+
+@router.post("/prompts")
+async def sample_prompts(ctx: Annotated[dict, Depends(get_acting_context)],
+                         columns: Annotated[list[dict], Body(embed=True)],
+                         industry: Annotated[str | None, Body(embed=True)] = None):
+    """
+    POST /api/ai/prompts {"columns": [{"name", "type"}], "industry": "sports"} — Beacon's sample questions.
+
+    `industry` left out = the client's own (their NAICS sector from sign-up, when the
+    library has it); "" = the general list. Rules: api/services/prompt_library.py.
+
+    Returns:
+        dict: {"industry": key or null, "industries": [{"key", "label"}],
+        "questions": [{"question", "why", "ready"}]}.
+    """
+    if industry is None:
+        sector = (await entitlements.plan_holder(ctx["account"])).get("naics_sector")
+        industry = sector if sector in prompt_library.LIBRARY else None
+    cols = [{"name": str(c.get("name", "")), "type": str(c.get("type", ""))} for c in columns[:300] if c.get("name")]
+    return {"industry": industry or None, "industries": prompt_library.industries(),
+            "questions": prompt_library.questions_for(industry or None, cols)}
 
 
 @router.post("/ask")

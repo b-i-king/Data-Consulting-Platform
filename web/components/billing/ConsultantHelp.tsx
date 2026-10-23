@@ -26,6 +26,7 @@ import { categoryEmoji } from "@/lib/categories";
 import { fmtDate, fmtUsd } from "@/lib/format";
 import type { ConsultingCatalog, ConsultingOverview } from "@/lib/types";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
+import { SalesClosedNote, useSalesStatus } from "./SalesStatus";
 
 /** Hours a week for the services picked (same rule as pricing.help_hours). */
 function helpHours(c: ConsultingCatalog, picked: string[]): number {
@@ -41,6 +42,7 @@ function helpPrice(c: ConsultingCatalog, hours: number, interval: "month" | "yea
 }
 
 export default function ConsultantHelp({ token, acting }: { token: string; acting?: boolean }) {
+  const sales = useSalesStatus(token);
   const [data, setData] = useState<ConsultingOverview | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [interval, setBilling] = useState<"month" | "year">("month");
@@ -100,12 +102,13 @@ export default function ConsultantHelp({ token, acting }: { token: string; actin
   const hours = helpHours(catalog, picked);
   const price = helpPrice(catalog, hours, interval);
   const lastSetup = data.engagements.find((e) => e.kind === "setup" && e.status === "paid");
-  const canBuy = data.can_buy && !acting;
+  const canBuy = data.can_buy && !acting && sales.canBuy;   // purchases closed during the beta
   const names = Object.fromEntries(data.services.map((s) => [s.id, s.name]));
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   return (
     <Card className="space-y-4">
+      {!sales.canBuy && <SalesClosedNote message={sales.message} />}
       <div>
         <h2 className="font-semibold">Your consultant{data.consultant ? `: ${data.consultant.name}` : ""}</h2>
         <p className="mt-1 text-sm text-ink-muted">

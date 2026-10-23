@@ -56,7 +56,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 
 from api.core.config import get_settings
-from api.services import account_store, offers, pricing, stripe_catalog
+from api.services import account_store, offers, pricing, sales, stripe_catalog
 
 log = logging.getLogger(__name__)
 
@@ -280,6 +280,7 @@ async def start_checkout(account: dict, plan_ids: list[str], interval: str) -> d
     """
     if account.get("is_admin") or account["email"].lower() in get_settings().admin_email_list:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ADMIN_FREE)
+    await sales.require_open(account)          # 403 while purchases are closed (beta); testers pass
     picked = _selection(plan_ids, interval)
     if "ai" in picked and not await ai_ready(account):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=AI_NEEDS_DATA)
