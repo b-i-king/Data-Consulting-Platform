@@ -25,7 +25,7 @@ from fastapi import HTTPException
 
 from api.services import account_store, business_tools, entitlements, oauth
 
-BUSINESS_TOOLS = ("quickbooks", "xero", "wave")
+BUSINESS_TOOLS = ("quickbooks", "xero", "wave", "square")
 
 
 def paid_only_message(name: str) -> str:

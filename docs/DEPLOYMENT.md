@@ -101,6 +101,7 @@ the create page):
 |---|---|
 | `PYTHON_VERSION` | `3.12.7` (Render's default Python may be newer than the libraries support) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | optional: "Connect Google Sheets" (read-only). Setup steps in [CONNECTORS.md](CONNECTORS.md#google-sheets-live-read-only) |
+| `SQUARE_CLIENT_ID`, `SQUARE_CLIENT_SECRET`, `SQUARE_ENVIRONMENT` | optional: "Connect Square" (`sandbox` until set to `production`; [CONNECTORS.md](CONNECTORS.md#square-point-of-sale)) |
 | `SALESFORCE_CLIENT_ID`, `SALESFORCE_CLIENT_SECRET` | optional: "Connect Salesforce" (a Connected App; [CONNECTORS.md](CONNECTORS.md#warehouses-and-salesforce-summarize-where-the-data-lives)) |
 | `BIGQUERY_MAX_BYTES` | optional: the most bytes one BigQuery summary may scan in a client's project (default 10 GB) |
 | `SALES_OPEN` | leave unset during the beta (purchases closed); after that, flip it in Administration → Purchases instead (that switch wins) |

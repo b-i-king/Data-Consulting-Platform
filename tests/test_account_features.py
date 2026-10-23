@@ -225,13 +225,15 @@ def test_connect_a_supabase_database_read_only(monkeypatch):
     listed = client.get("/api/connections", headers=h).json()
     kinds = {c["connector"]: c["kind"] for c in listed["connectors"]}
     assert kinds == {"quickbooks": "business_tool", "xero": "business_tool", "wave": "business_tool",
+                     "square": "business_tool",
                      "supabase": "cloud_storage", "google_sheets": "cloud_storage", "snowflake": "cloud_storage",
                      "bigquery": "cloud_storage", "salesforce": "cloud_storage"}
     assert listed["kinds"]["cloud_storage"] == "Cloud storage"
     # The roadmap is listed per section, and none of it can be set up yet.
     planned = {(p["kind"], p["name"]): p["when"] for p in listed["coming_soon"]}
     assert planned[("cloud_storage", "Amazon Athena (S3)")] == "soon" and ("cloud_storage", "Snowflake") not in planned
-    assert planned[("business_tool", "Square")] == "soon" and planned[("business_tool", "Gusto")] == "later"
+    assert planned[("business_tool", "Shopify")] == "soon" and planned[("business_tool", "Gusto")] == "later"
+    assert ("business_tool", "Square") not in planned                         # a real connection now
     assert {p["when"] for p in listed["coming_soon"]} == {"soon", "later"}
     assert client.put("/api/connections/snowflake/refresh", headers=h, json={"refresh_frequency": "daily"}).status_code in (400, 403, 404)
 

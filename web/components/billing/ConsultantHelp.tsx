@@ -22,11 +22,12 @@
 
 import { useEffect, useState } from "react";
 import { cancelConsultingHelp, getConsulting, startConsultingCheckout } from "@/lib/api";
-import { categoryEmoji } from "@/lib/categories";
+import { categoryColor } from "@/lib/categories";
 import { fmtDate, fmtUsd } from "@/lib/format";
 import type { ConsultingCatalog, ConsultingOverview } from "@/lib/types";
 import { Button, Card, ErrorBox } from "@/components/wizard/ui";
 import { SalesClosedNote, useSalesStatus } from "./SalesStatus";
+import { CategoryIcon } from "@/components/ui/Icon";
 
 /** Hours a week for the services picked (same rule as pricing.help_hours). */
 function helpHours(c: ConsultingCatalog, picked: string[]): number {
@@ -143,7 +144,7 @@ export default function ConsultantHelp({ token, acting }: { token: string; actin
         {retainer ? (
           <div className="mt-1 space-y-2">
             <p>
-              {retainer.services.map((s) => `${categoryEmoji(s)} ${names[s] ?? s}`).join(" · ")}
+              {retainer.services.map((s) => names[s] ?? s).join(" · ")}
             </p>
             <p>
               About <span className="font-mono">{retainer.hours_per_week}</span> hours a week ·{" "}
@@ -180,7 +181,7 @@ export default function ConsultantHelp({ token, acting }: { token: string; actin
               {data.services.map((s) => (
                 <label key={s.id} className="flex items-center gap-2">
                   <input type="checkbox" checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                  <span>{categoryEmoji(s.id)} {s.name}</span>
+                  <span className="inline-flex items-center gap-1.5"><span style={{ color: categoryColor(s.id) }}><CategoryIcon serviceId={s.id} className="h-4 w-4" /></span> {s.name}</span>
                 </label>
               ))}
             </fieldset>

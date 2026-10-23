@@ -75,7 +75,7 @@ DATA_LOCATIONS = [
             {"id": "wave", "label": "Wave", "available": False, "connector": "wave"},
             {"id": "gusto", "label": "Gusto", "available": False},
             {"id": "shopify", "label": "Shopify", "available": False},
-            {"id": "square", "label": "Square", "available": False},
+            {"id": "square", "label": "Square", "available": False, "connector": "square"},
             {"id": "stripe", "label": "Stripe", "available": False},
             {"id": "salesforce", "label": "Salesforce", "available": False},
             {"id": "hubspot", "label": "HubSpot", "available": False},

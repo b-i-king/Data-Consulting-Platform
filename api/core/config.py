@@ -259,6 +259,15 @@ class Settings(BaseSettings):
                              alias="WAVE_SCOPES")
     wave_max_connections: int = Field(default=9, alias="WAVE_MAX_CONNECTIONS")
     wave_daily_call_limit: int = Field(default=500, alias="WAVE_DAILY_CALL_LIMIT")
+    # Square (developer.squareup.com -> your application -> OAuth): the Application ID
+    # and secret. "sandbox" uses Square's test sellers; switch to "production" with the
+    # production credentials. Square doesn't share an app-wide quota, so the caps are
+    # our own fair-use pace per seller.
+    square_client_id: str = Field(default="", alias="SQUARE_CLIENT_ID")
+    square_client_secret: str = Field(default="", alias="SQUARE_CLIENT_SECRET")
+    square_environment: str = Field(default="sandbox", alias="SQUARE_ENVIRONMENT")
+    square_max_connections: int = Field(default=1000, alias="SQUARE_MAX_CONNECTIONS")
+    square_daily_call_limit: int = Field(default=2000, alias="SQUARE_DAILY_CALL_LIMIT")
     # Google Sheets ("Connect Google Sheets", read-only): an OAuth client from
     # Google Cloud Console -> APIs & Services -> Credentials (type: Web application),
     # with the redirect URI below and the Google Sheets API enabled (docs/CONNECTORS.md).

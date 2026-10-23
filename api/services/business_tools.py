@@ -1,5 +1,5 @@
 """
-Business tools, read LIVE: QuickBooks Online, Xero and Wave — never stored.
+Business tools, read LIVE: QuickBooks Online, Xero, Wave and Square — never stored.
 
 WHY THIS EXISTS
 ---------------
@@ -81,6 +81,13 @@ DATASETS: dict[str, list[dict]] = {
         {"id": "Payment", "name": "Customer payments"},
         {"id": "Purchase", "name": "Expenses (checks, card and cash purchases)"},
         {"id": "Bill", "name": "Bills from vendors"},
+    ],
+    "square": [
+        {"id": "orders", "name": "Orders (one row per item sold)"},
+        {"id": "payments", "name": "Payments"},
+        {"id": "catalog", "name": "Items and prices"},
+        {"id": "inventory", "name": "Stock on hand"},
+        {"id": "customers", "name": "Customers"},
     ],
     "wave": [
         {"id": "invoices", "name": "Invoices (one row per item)"},
@@ -165,6 +172,7 @@ LIMITS: dict[str, dict] = {
     "xero": {"name": "Xero", "day_share": 0.9, "minute": 55},
     "quickbooks": {"name": "QuickBooks", "day_share": 1.0, "minute": 450},
     "wave": {"name": "Wave", "day_share": 1.0, "minute": 50},       # Wave: ~60 a minute per connection
+    "square": {"name": "Square", "day_share": 1.0, "minute": 100},  # no published quota: our own fair pace
 }
 MONTH_SHARE = 0.9              # use at most 90% of an app-wide monthly allowance
 MINUTE_MAX_WAIT_S = 10         # wait at most this long for the minute window, else refuse
@@ -181,7 +189,7 @@ def daily_budget(provider: str) -> int | None:
     """
     s = get_settings()
     limit = {"xero": s.xero_daily_call_limit, "quickbooks": s.quickbooks_daily_call_limit,
-             "wave": s.wave_daily_call_limit}.get(provider)
+             "wave": s.wave_daily_call_limit, "square": s.square_daily_call_limit}.get(provider)
     if provider not in LIMITS or not limit:
         return None
     return max(1, int(limit * LIMITS[provider]["day_share"]))
@@ -278,7 +286,7 @@ async def meter_for(connector: str, row: dict, creds: dict) -> CallMeter:
     """
     from api.services import account_store
 
-    company = {"xero": "tenant_id", "wave": "business_id"}.get(connector, "realm_id")
+    company = {"xero": "tenant_id", "wave": "business_id", "square": "merchant_id"}.get(connector, "realm_id")
     company = creds["extra"][company]
     month = datetime.now(timezone.utc).date().replace(day=1)
     return CallMeter(connector, company, row.get("api_calls_day"), row.get("api_calls_count") or 0,
@@ -787,6 +795,234 @@ def wave_invoice_frame(invoices: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+
+# ############################################################################
+# Square (point of sale: orders, payments, items, customers, inventory)
+# ############################################################################
+# Square's REST API (developer.squareup.com), read-only scopes. Money comes in
+# the currency's SMALLEST unit (cents), so amounts are divided by 100. Square
+# doesn't publish a shared app-wide quota like QuickBooks / Xero, but every
+# call still goes through the CallMeter (SQUARE_DAILY_CALL_LIMIT per seller, a
+# per-minute pace) so one busy seller can't flood it.
+
+SQUARE_VERSION = "2025-10-16"     # the API version we're written against (sent with every call)
+SQUARE_PAGE = 500                 # orders per search page (Square's largest)
+
+
+def square_base() -> str:
+    """Square's API address: the sandbox (test sellers) unless SQUARE_ENVIRONMENT=production."""
+    prod = get_settings().square_environment.strip().lower() == "production"
+    return "https://connect.squareup.com" if prod else "https://connect.squareupsandbox.com"
+
+
+async def _square(token: str, method: str, path: str, body: dict | None = None, params: dict | None = None,
+                  meter: CallMeter | None = None) -> dict:
+    """One Square API call (GET or POST), metered, with friendly errors."""
+    if meter:
+        await meter.before()
+    async with oauth.http_client() as http:
+        res = await http.request(method, f"{square_base()}{path}", json=body, params=params,
+                                 headers={"Authorization": f"Bearer {token}", "Square-Version": SQUARE_VERSION,
+                                          "Accept": "application/json"})
+    if meter:
+        meter.after(res.headers)
+    if res.status_code == 401:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="The Square connection was removed or expired. Please connect again.")
+    if res.status_code == 429:
+        if meter:
+            raise meter.too_many(res.headers)
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="Square asked us to slow down. Try again in a minute.")
+    if res.status_code >= 400:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Square answered with an error ({res.status_code}).")
+    return res.json()
+
+
+def _cents(money) -> float:
+    """Square money ({"amount": 1250, "currency": "USD"}) -> 12.50."""
+    return round(_num((money or {}).get("amount")) / 100, 2) if isinstance(money, dict) else 0.0
+
+
+async def square_merchant(token: str) -> dict:
+    """The connected seller: {"name", "merchant_id", "currency"} (shown as the connection's name)."""
+    m = (await _square(token, "GET", "/v2/merchants/me")).get("merchant", {})
+    return {"name": m.get("business_name") or "Square seller", "merchant_id": m.get("id"),
+            "currency": m.get("currency") or "USD"}
+
+
+async def _square_locations(token: str, meter: CallMeter | None) -> list[str]:
+    locs = (await _square(token, "GET", "/v2/locations", meter=meter)).get("locations", [])
+    return [loc["id"] for loc in locs if loc.get("status", "ACTIVE") == "ACTIVE"][:10]   # search takes up to 10
+
+
+async def square_orders(token: str, start: date | None = None, end: date | None = None, limit: int = LIVE_MAX_ROWS,
+                        meter: CallMeter | None = None) -> tuple[list[dict], bool]:
+    """Completed orders (newest period first in Square; we sort by date), with their line items. (orders, more?)"""
+    query: dict = {"filter": {"state_filter": {"states": ["COMPLETED"]}},
+                   "sort": {"sort_field": "CREATED_AT", "sort_order": "ASC"}}
+    if start or end:
+        rng = {}
+        if start:
+            rng["start_at"] = f"{start.isoformat()}T00:00:00Z"
+        if end:
+            rng["end_at"] = f"{end.isoformat()}T23:59:59Z"
+        query["filter"]["date_time_filter"] = {"created_at": rng}
+    body = {"location_ids": await _square_locations(token, meter), "query": query, "limit": SQUARE_PAGE}
+    orders: list[dict] = []
+    while True:
+        page = await _square(token, "POST", "/v2/orders/search", body, meter=meter)
+        orders += page.get("orders", [])
+        cursor = page.get("cursor")
+        if not cursor or len(orders) >= limit:
+            return orders[:limit], bool(cursor) or len(orders) > limit
+        body["cursor"] = cursor
+
+
+async def _square_list(token: str, path: str, key: str, params: dict | None = None, limit: int = LIVE_MAX_ROWS,
+                       meter: CallMeter | None = None) -> tuple[list[dict], bool]:
+    """A cursor-paged GET list (payments, customers, catalog)."""
+    items: list[dict] = []
+    params = dict(params or {})
+    while True:
+        page = await _square(token, "GET", path, params=params, meter=meter)
+        items += page.get(key, [])
+        cursor = page.get("cursor")
+        if not cursor or len(items) >= limit:
+            return items[:limit], bool(cursor) or len(items) > limit
+        params["cursor"] = cursor
+
+
+async def _square_customer_names(token: str, ids: list[str], meter: CallMeter | None) -> dict[str, str]:
+    """Names for some customer ids (one bulk call)."""
+    if not ids:
+        return {}
+    body = await _square(token, "POST", "/v2/customers/bulk-retrieve", {"customer_ids": ids[:100]}, meter=meter)
+    out = {}
+    for cid, r in (body.get("responses") or {}).items():
+        c = r.get("customer") or {}
+        out[cid] = " ".join(p for p in (c.get("given_name"), c.get("family_name")) if p) or c.get("company_name") or cid
+    return out
+
+
+def square_summarize(orders: list[dict], names: dict[str, str]) -> dict:
+    """
+    The quick look from completed Square orders (pure: no API calls).
+
+    income = order totals before tax, by month; Square sales are paid on the
+    spot, so nothing is "owed to you"; Square's API doesn't share expenses.
+    """
+    monthly: dict[str, float] = defaultdict(float)
+    customers: Counter = Counter()
+    currencies: Counter = Counter()
+    for o in orders:
+        amount = _cents(o.get("total_money")) - _cents(o.get("total_tax_money"))
+        monthly[str(o.get("created_at", ""))[:7]] += amount
+        if o.get("customer_id"):
+            customers[names.get(o["customer_id"], o["customer_id"])] += amount
+        currencies[(o.get("total_money") or {}).get("currency") or "USD"] += 1
+    months = [{"month": m, "income": round(v, 2), "expenses": None, "net": None} for m, v in sorted(monthly.items()) if m]
+    return {"totals": {"income": round(sum(monthly.values()), 2), "expenses": None, "net_income": None,
+                       "owed_to_you": 0.0, "you_owe": None},
+            "monthly": months,
+            "top_customers": [{"name": n, "amount": round(a, 2)} for n, a in customers.most_common(TOP_CUSTOMERS)],
+            "currency": currencies.most_common(1)[0][0] if currencies else "USD"}
+
+
+async def square_quick_look(token: str, start: date, end: date, meter: CallMeter | None = None) -> dict:
+    """The quick look from Square orders completed in the period (nothing stored)."""
+    orders, _ = await square_orders(token, start, end, meter=meter)
+    top_ids = [cid for cid, _ in Counter(o["customer_id"] for o in orders if o.get("customer_id")).most_common(TOP_CUSTOMERS * 3)]
+    names = await _square_customer_names(token, top_ids, meter)
+    return {**square_summarize(orders, names),
+            "basis": "Added up from your completed Square orders in this period (before tax). Square's API doesn't "
+                     "share expenses, so those aren't shown — upload an export of them to analyze costs.",
+            "estimate": True}
+
+
+def square_order_frame(orders: list[dict]) -> pd.DataFrame:
+    """Square orders as a table: one row per LINE ITEM (product + quantity: ready for reorder planning)."""
+    rows = []
+    for o in orders:
+        head = {"order_id": o.get("id"), "created_at": o.get("created_at"), "location_id": o.get("location_id"),
+                "customer_id": o.get("customer_id"), "order_total": _cents(o.get("total_money")),
+                "order_tax": _cents(o.get("total_tax_money")), "currency": (o.get("total_money") or {}).get("currency")}
+        for n, li in enumerate(o.get("line_items") or [{}], start=1):
+            rows.append({**head, "line": n, "product": li.get("name"), "variation": li.get("variation_name"),
+                         "quantity": _num(li.get("quantity")), "unit_price": _cents(li.get("base_price_money")),
+                         "gross_sales": _cents(li.get("gross_sales_money")), "discount": _cents(li.get("total_discount_money")),
+                         "line_amount": _cents(li.get("total_money"))})
+    return pd.DataFrame(rows)
+
+
+def square_catalog_frame(objects: list[dict]) -> pd.DataFrame:
+    """Catalog items as a table: one row per item VARIATION (size, flavor…), with its price and SKU."""
+    rows = []
+    for obj in objects:
+        item = obj.get("item_data") or {}
+        for var in item.get("variations") or [{}]:
+            vd = var.get("item_variation_data") or {}
+            rows.append({"item_id": obj.get("id"), "product": item.get("name"), "variation_id": var.get("id"),
+                         "variation": vd.get("name"), "sku": vd.get("sku"), "price": _cents(vd.get("price_money"))})
+    return pd.DataFrame(rows)
+
+
+async def square_inventory_frame(token: str, meter: CallMeter | None) -> tuple[pd.DataFrame, bool]:
+    """Stock on hand per item variation and location (with the product names from the catalog)."""
+    catalog, _ = await _square_list(token, "/v2/catalog/list", "objects", {"types": "ITEM"}, meter=meter)
+    names = {r["variation_id"]: (r["product"], r["variation"], r["sku"]) for r in square_catalog_frame(catalog).to_dict("records")}
+    counts: list[dict] = []
+    body: dict = {"states": ["IN_STOCK"], "limit": 1000}
+    while True:
+        page = await _square(token, "POST", "/v2/inventory/counts/batch-retrieve", body, meter=meter)
+        counts += page.get("counts", [])
+        if not page.get("cursor") or len(counts) >= LIVE_MAX_ROWS:
+            break
+        body["cursor"] = page["cursor"]
+    rows = [{"variation_id": c.get("catalog_object_id"), "product": names.get(c.get("catalog_object_id"), (None,))[0],
+             "variation": names.get(c.get("catalog_object_id"), (None, None))[1],
+             "sku": names.get(c.get("catalog_object_id"), (None, None, None))[2], "location_id": c.get("location_id"),
+             "on_hand": _num(c.get("quantity")), "as_of": c.get("calculated_at")} for c in counts]
+    return pd.DataFrame(rows), len(counts) >= LIVE_MAX_ROWS
+
+
+async def square_has_rows(token: str, dataset: str, meter: CallMeter | None) -> bool:
+    """One cheap call: does this record type have anything?"""
+    if dataset == "orders":
+        body = {"location_ids": await _square_locations(token, meter), "limit": 1,
+                "query": {"filter": {"state_filter": {"states": ["COMPLETED"]}}}}
+        return bool((await _square(token, "POST", "/v2/orders/search", body, meter=meter)).get("orders"))
+    if dataset == "inventory":
+        page = await _square(token, "POST", "/v2/inventory/counts/batch-retrieve", {"limit": 1}, meter=meter)
+        return bool(page.get("counts"))
+    path, key, params = {"payments": ("/v2/payments", "payments", {"limit": 1}),
+                         "customers": ("/v2/customers", "customers", {"limit": 1}),
+                         "catalog": ("/v2/catalog/list", "objects", {"types": "ITEM"})}[dataset]
+    return bool((await _square(token, "GET", path, params=params, meter=meter)).get(key))
+
+
+async def square_dataset_frame(token: str, dataset: str, meter: CallMeter | None) -> tuple[pd.DataFrame, bool]:
+    """One Square record type as a table (orders one row per line item; the rest flattened)."""
+    if dataset == "orders":
+        orders, more = await square_orders(token, meter=meter)
+        return square_order_frame(orders), more
+    if dataset == "inventory":
+        return await square_inventory_frame(token, meter)
+    if dataset == "catalog":
+        objs, more = await _square_list(token, "/v2/catalog/list", "objects", {"types": "ITEM"}, meter=meter)
+        return square_catalog_frame(objs), more
+    if dataset == "payments":
+        items, more = await _square_list(token, "/v2/payments", "payments", {"limit": 100}, meter=meter)
+        rows = [{"payment_id": p.get("id"), "created_at": p.get("created_at"), "status": p.get("status"),
+                 "amount": _cents(p.get("amount_money")), "tip": _cents(p.get("tip_money")),
+                 "refunded": _cents(p.get("refunded_money")), "processing_fee": sum(_cents(f.get("amount_money")) for f in p.get("processing_fee") or []),
+                 "source": p.get("source_type"), "order_id": p.get("order_id"), "customer_id": p.get("customer_id"),
+                 "location_id": p.get("location_id")} for p in items]
+        return pd.DataFrame(rows), more
+    items, more = await _square_list(token, "/v2/customers", "customers", {"limit": 100}, meter=meter)
+    rows = [{"customer_id": c.get("id"), "first_name": c.get("given_name"), "last_name": c.get("family_name"),
+             "company": c.get("company_name"), "email": c.get("email_address"), "phone": c.get("phone_number"),
+             "created_at": c.get("created_at")} for c in items]
+    return pd.DataFrame(rows), more
+
 # ############################################################################
 # One front door for the router
 # ############################################################################
@@ -840,6 +1076,8 @@ async def quick_look(provider: str, company: str, token: str, extra: dict,
         body = await xero_quick_look(token, extra["tenant_id"], start, end, meter)
     elif provider == "wave":
         body = await wave_quick_look(token, extra["business_id"], start, end, meter)
+    elif provider == "square":
+        body = await square_quick_look(token, start, end, meter)
     else:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No quick look for that integration.")
     return {"source": oauth.PROVIDERS[provider]["name"], "company": company, "start": start.isoformat(),
@@ -860,6 +1098,8 @@ async def list_datasets(provider: str, token: str, extra: dict, meter: CallMeter
         if provider == "quickbooks":
             count = (await qb_query(token, extra["realm_id"], f"SELECT COUNT(*) FROM {d['id']}", meter)).get("totalCount", 0)
             has = int(count or 0) > 0
+        elif provider == "square":
+            has = await square_has_rows(token, d["id"], meter)
         elif provider == "wave":
             field, _ = _WAVE_LISTS[d["id"]]
             data = await _wave(token, f"query($businessId: ID!) {{ business(id: $businessId) {{ {field}(page: 1, "
@@ -891,6 +1131,8 @@ async def read_dataset_csv(provider: str, token: str, extra: dict, dataset_id: s
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That record type isn't available.")
     if provider == "quickbooks":
         df, more = await qb_dataset_frame(token, extra["realm_id"], dataset_id, meter=meter)
+    elif provider == "square":
+        df, more = await square_dataset_frame(token, dataset_id, meter)
     elif provider == "wave":
         items, more = await wave_pages(token, extra["business_id"], dataset_id, meter=meter)
         df = wave_invoice_frame(items) if dataset_id == "invoices" else pd.json_normalize(items, sep=".")

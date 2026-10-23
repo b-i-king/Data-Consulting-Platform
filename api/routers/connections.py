@@ -469,7 +469,7 @@ def _max_connections(provider: str) -> int:
     """How many companies may connect a tool (Xero Starter: 5; QuickBooks: 15 keeps the free month safe)."""
     s = get_settings()
     return {"xero": s.xero_max_connections, "quickbooks": s.quickbooks_max_connections,
-            "wave": s.wave_max_connections}.get(provider, 10 ** 6)
+            "wave": s.wave_max_connections, "square": s.square_max_connections}.get(provider, 10 ** 6)
 
 
 async def _require_paid(ctx: dict, connector: str) -> None:
@@ -574,7 +574,7 @@ async def _live(ctx: dict, connector: str) -> tuple[dict, dict, business_tools.C
     meter). Any team member may read. The meter keeps the company under the
     tool's daily, monthly and per-minute limits; save it with _save_meter.
     """
-    if connector not in ("quickbooks", "xero", "wave"):
+    if connector not in integration_slots.BUSINESS_TOOLS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown integration.")
     await _require_paid(ctx, connector)   # a plan that ended stops using the shared allowance at once
     holder = await entitlements.plan_holder_id(ctx["account"])

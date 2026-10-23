@@ -59,6 +59,11 @@ CONNECTORS: dict[str, dict] = {
                       "(for history and trends) comes with Data Engineering."},
     # Xero's card also shows a highlighted note that AI and machine learning are off for Xero data
     # (Xero's terms; web/components/workspace/IntegrationsPanel.tsx, api/services/xero_guard.py).
+    "square": {"name": "Square", "kind": "business_tool", "available": False, "stores_data": False,
+               "sign_in": True, "live": True,
+               "about": "Sales by month and top customers — live from your Square orders, nothing stored. Open your "
+                        "orders (one row per item sold), items, stock on hand, payments and customers. Comes with any "
+                        "paid plan (on the free plan, upload an export)."},
     "wave": {"name": "Wave", "kind": "business_tool", "available": False, "stores_data": True,
              "sign_in": True, "live": True,
              "about": "Sales, what customers owe you, top customers — live from Wave invoices, nothing stored "
@@ -110,7 +115,6 @@ COMING_SOON: list[dict] = [
     {"name": "Microsoft Fabric / Azure Synapse", "kind": "cloud_storage", "when": "later"},
     {"name": "Amazon S3 (files)", "kind": "cloud_storage", "when": "later"},
     {"name": "Google Drive (files)", "kind": "cloud_storage", "when": "later"},
-    {"name": "Square", "kind": "business_tool", "when": "soon"},
     {"name": "Shopify", "kind": "business_tool", "when": "soon"},
     {"name": "Stripe", "kind": "business_tool", "when": "soon"},
     {"name": "Gusto", "kind": "business_tool", "when": "later"},

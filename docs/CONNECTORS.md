@@ -104,6 +104,26 @@ BigQuery connector was waiting for authorization and several others couldn't
 connect, so they're worth checking in your Claude connector settings if you plan
 to use them for client work.
 
+## Square (point of sale)
+
+"Connect Square" (OAuth, read-only scopes) works like the other business tools:
+read live, nothing stored, and it comes with any paid plan
+(`api/services/business_tools.py`, Square section). The **quick look** adds up
+completed orders by month (before tax) with the top customers; Square sales are
+paid on the spot, and its API doesn't share expenses. Records to open:
+**orders** (one row per item sold — product and quantity, ready for
+just-in-time purchasing), **stock on hand**, items and prices, payments and
+customers. Money comes in cents and is shown in dollars.
+
+Square's API is free and has no app-wide quota; our own pace is
+`SQUARE_DAILY_CALL_LIMIT` calls per seller a day and 100 a minute.
+
+Setup: developer.squareup.com → create an application → **OAuth** → add the
+redirect URL `https://<your-api>.onrender.com/api/connections/oauth/callback`;
+set `SQUARE_CLIENT_ID` (Application ID) and `SQUARE_CLIENT_SECRET`
+(Application secret) on Render. It uses Square's **sandbox** (test sellers)
+until `SQUARE_ENVIRONMENT=production` with the production credentials.
+
 ## Warehouses and Salesforce: summarize where the data lives
 
 Medium and large companies keep data in a warehouse or CRM. We never copy it:

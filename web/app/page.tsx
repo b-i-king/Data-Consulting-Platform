@@ -14,6 +14,7 @@ import FaqSection from "@/components/FaqSection";
 import PartnerCarousel from "@/components/home/PartnerCarousel";
 import { GET_STARTED, SIGN_IN, SIGN_UP } from "@/lib/routes";
 import { FALLBACK_BOOKING_URL } from "@/lib/format";
+import Icon from "@/components/ui/Icon";
 
 // The first-visit guide for this page (components/ui/Tour.tsx).
 const HOME_TOUR: TourStep[] = [
@@ -44,16 +45,16 @@ const CATEGORIES = [
   { id: "ai", name: "AI", body: "Ask Beacon questions about your data in plain English. Free questions every month; more with the AI add-on." },
 ];
 
-// "Why businesses choose us": how the platform differs from data-science tools
+// "Why choose us": how the platform differs from data-science tools
 // (software only) and data consulting firms (people only, quotes on request).
 const DIFFERENCES = [
-  { icon: "⚡", title: "Self-serve, in minutes",
+  { icon: "bolt", title: "Self-serve, in minutes",
     body: "Start as a guest — no account, no sales call. Upload a file or connect your tools and get it cleaned, " +
       "summarized and on a dashboard yourself. Most consulting firms start with a meeting and a quote." },
-  { icon: "🏷️", title: "Transparent pricing",
+  { icon: "tag", title: "Transparent pricing",
     body: "Prices are published up front, and every step that costs money shows the amount before you agree. " +
       "Monthly or yearly, cancel any time — no surprise invoices." },
-  { icon: "🤝", title: "Screened consultants, when you want one",
+  { icon: "users", title: "Screened consultants, when you want one",
     body: "Need a person? Every consultant applies, is reviewed by us and agrees to our terms before working " +
       "with clients. Most services start with a free 30-minute call, and you pay them through the platform." },
 ];
@@ -127,12 +128,14 @@ export default function Home() {
           consulting firms (people only, prices on request): three reasons, in plain words. */}
       <section id="why-us" aria-labelledby="why-us-title" className="scroll-mt-20 space-y-4">
         <h2 id="why-us-title" className="text-xl font-semibold">
-          Why businesses choose us
+          Why choose us
         </h2>
         <div className="grid gap-4 sm:grid-cols-3">
           {DIFFERENCES.map((d) => (
             <div key={d.title} className="rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-card)]">
-              <div aria-hidden className="mb-2 text-2xl">{d.icon}</div>
+              <div className="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-brand-soft text-brand-ink">
+                <Icon name={d.icon} className="h-5 w-5" />
+              </div>
               <h3 className="font-semibold">{d.title}</h3>
               <p className="mt-1 text-sm text-ink-muted">{d.body}</p>
             </div>

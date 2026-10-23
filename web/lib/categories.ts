@@ -14,16 +14,16 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export const categoryColor = (serviceId: string) => CATEGORY_COLORS[serviceId] ?? "var(--color-brand)";
 
-// Service category → emoji, shown next to each service in the workspace's left
-// pane (and in skill menus) so each part of the product is easy to spot.
-const CATEGORY_EMOJI: Record<string, string> = {
-  data_visualization: "📊",
-  data_cleaning: "🧹",
-  data_strategy_discovery: "🧭",
-  data_exploration_analysis: "🔍",
-  data_engineering: "🏗️",
-  data_science_ml: "🔮",
-  ai: "🤖",
+// Service category → icon (components/ui/Icon.tsx), shown next to each service
+// in the workspace's left pane so each part of the product is easy to spot. Line
+// icons in the theme's colors, not emoji (emoji look different on every device
+// and never match the theme).
+export const CATEGORY_ICON: Record<string, string> = {
+  data_visualization: "chart",
+  data_cleaning: "sparkles",
+  data_strategy_discovery: "compass",
+  data_exploration_analysis: "search",
+  data_engineering: "database",
+  data_science_ml: "trend",
+  ai: "beacon",
 };
-
-export const categoryEmoji = (serviceId: string) => CATEGORY_EMOJI[serviceId] ?? "•";

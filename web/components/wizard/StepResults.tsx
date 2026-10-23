@@ -26,6 +26,7 @@ import ColumnNames from "./ColumnNames";
 import DataQuality from "./DataQuality";
 import TransformSteps from "./TransformSteps";
 import ExplorePanel from "@/components/explore/ExplorePanel";
+import Icon from "@/components/ui/Icon";
 
 export default function StepResults(props: {
   analysis: AnalyzeResponse;
@@ -86,8 +87,8 @@ export default function StepResults(props: {
           </div>
           {categorization.relationships.map((r) => (
             <p key={`${r.left_group}-${r.right_group}`} className="text-sm">
-              {/* 🔗 exact shared ID · ≈ fuzzy match on names / emails / phones */}
-              <span aria-hidden>{r.method === "fuzzy" ? "≈" : "🔗"}</span> {r.description}
+              {/* link icon = an exact shared ID · ≈ = a fuzzy match on names / emails / phones */}
+              {r.method === "fuzzy" ? <span aria-hidden>≈</span> : <Icon name="link" className="h-4 w-4 align-[-3px]" />} {r.description}
             </p>
           ))}
           <p className="text-xs text-ink-muted">
