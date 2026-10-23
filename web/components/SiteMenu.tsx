@@ -17,6 +17,7 @@ const SECTIONS = [
   { href: "/#how", label: "How it works" },
   { href: "/#why-us", label: "Why us" },
   { href: "/#services", label: "Services" },
+  { href: "/#enterprise", label: "Enterprise" },
   { href: "/#trusted-by", label: "Trusted by" },
   { href: "/#faq", label: "FAQ" },
 ];
